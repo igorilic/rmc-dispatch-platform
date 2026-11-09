@@ -23,6 +23,9 @@ test: ## fmt, clippy, unit/property/integration tests
 
 audit: ## Check dependencies against the RustSec advisory DB (needs cargo-audit)
 	cargo audit
+	@# .cargo/audit.toml ignores a SQLite advisory because SQLite is never compiled; keep it that way.
+	@test -z "$$(cargo tree --workspace --target all -e normal,build -i libsqlite3-sys 2>/dev/null)" \
+		|| { echo "libsqlite3-sys is now compiled: drop the ignore in .cargo/audit.toml"; exit 1; }
 
 # Compile-time-checked queries (sqlx) read .sqlx/ offline; this refreshes it from the compose Postgres.
 DATABASE_URL ?= postgres://pourline:pourline@localhost:5432/pourline

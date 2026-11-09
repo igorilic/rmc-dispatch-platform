@@ -1,0 +1,6 @@
+[advisories]
+# RUSTSEC-2026-0459 (libsqlite3-sys 0.37, a C SQLite CVE): listed in Cargo.lock only because sqlx's
+# macros name the SQLite driver as optional. With just the `postgres` feature it is never compiled,
+# and `make audit` fails if it ever is. sqlx 0.9.0 caps libsqlite3-sys below 0.38, so there is no
+# fixed version to move to. Remove this once sqlx allows >= 0.39.
+ignore = ["RUSTSEC-2026-0459"]
