@@ -96,16 +96,20 @@ async fn receive(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Some((mapping, token)) = hooks.integrations.get(&integration) else {
-        return (StatusCode::NOT_FOUND, "unknown webhook integration").into_response();
-    };
+    // An unknown integration gets the same 401 as a wrong token, after the same comparison, so
+    // neither the status nor the timing reveals which integration names exist.
+    // ponytail: compared against a placeholder no header can carry (NUL isn't allowed in one).
+    const NO_SUCH_TOKEN: &str = "\0";
+    let known = hooks.integrations.get(&integration);
+    let expected = known.map_or(NO_SUCH_TOKEN, |(_, token)| token.as_str());
     let presented = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
-    if !presented.is_some_and(|p| same(p.as_bytes(), token.as_bytes())) {
+    let authorised = presented.is_some_and(|p| same(p.as_bytes(), expected.as_bytes()));
+    let Some((mapping, _)) = known.filter(|_| authorised) else {
         return (StatusCode::UNAUTHORIZED, "missing or wrong bearer token").into_response();
-    }
+    };
     let Ok(_permit) = hooks.in_flight.try_acquire() else {
         return busy(2);
     };

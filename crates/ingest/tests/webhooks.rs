@@ -71,7 +71,8 @@ async fn post(
     (
         status,
         retry_after,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        serde_json::from_slice(&bytes)
+            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned())),
     )
 }
 
@@ -158,17 +159,19 @@ async fn only_known_webhook_integrations_with_their_own_token_get_in() {
         post(&app, "bauwerk-ag", other, order()).await.0,
         StatusCode::UNAUTHORIZED
     );
-    assert_eq!(
-        post(&app, "nobody", Some("dev-token-nobody"), order())
-            .await
-            .0,
-        StatusCode::NOT_FOUND
-    );
-    let sftp_only = Some("dev-token-rheinbau-gmbh");
-    assert_eq!(
-        post(&app, "rheinbau-gmbh", sftp_only, order()).await.0,
-        StatusCode::NOT_FOUND
-    );
+    // Unknown and SFTP-only integrations look exactly like a wrong token, so a caller without a
+    // token can't find out which integration names exist.
+    let wrong_token = post(&app, "bauwerk-ag", Some("wrong"), order()).await;
+    let unknown = post(&app, "nobody", Some("dev-token-nobody"), order()).await;
+    let sftp_only = post(
+        &app,
+        "rheinbau-gmbh",
+        Some("dev-token-rheinbau-gmbh"),
+        order(),
+    )
+    .await;
+    assert_eq!(unknown, wrong_token);
+    assert_eq!(sftp_only, wrong_token);
 
     let huge = vec![b' '; 2 << 20];
     let token = Some("dev-token-bauwerk-ag");
