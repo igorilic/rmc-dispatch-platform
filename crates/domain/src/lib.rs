@@ -17,28 +17,29 @@ use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
 #[serde(transparent)]
 pub struct PlantId(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
 #[serde(transparent)]
 pub struct TruckId(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
 #[serde(transparent)]
 pub struct SiteId(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
 #[serde(transparent)]
 pub struct CustomerId(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
 #[serde(transparent)]
 pub struct OrderId(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
 #[serde(transparent)]
 pub struct MixCode(pub String);
 
@@ -176,7 +177,7 @@ pub struct MixDesign {
 
 /// Confirmation states, then fulfilment states. Partial and returned states are deliberately not
 /// modelled (no `partially_shipped`, `returned`, `halted`, `partially_returned`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OrderStatus {
     /// Dispatch centre confirmed, customer has not.
@@ -195,7 +196,7 @@ pub enum OrderStatus {
     Cancelled,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Order {
     pub id: OrderId,
     pub customer: CustomerId,
@@ -210,14 +211,14 @@ pub struct Order {
 }
 
 /// Closed time interval `[start, end]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct TimeWindow {
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
 }
 
 /// A planned truck trip for an order. Identified by `(order, sequence)`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Load {
     pub order: OrderId,
     /// 1-based position of this load within its order.

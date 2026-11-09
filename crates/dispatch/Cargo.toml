@@ -6,7 +6,9 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 async-nats.workspace = true
+axum.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 domain.workspace = true
@@ -17,12 +19,16 @@ sqlx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
+utoipa.workspace = true
+utoipa-swagger-ui.workspace = true
 
 [dev-dependencies]
 ingest = { path = "../ingest" }
 proptest.workspace = true
 rand.workspace = true
 testcontainers.workspace = true
+tower.workspace = true
 
 [lints]
 workspace = true

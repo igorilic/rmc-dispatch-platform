@@ -28,6 +28,7 @@ use domain::{
     TimeWindow, Truck, TruckStatus,
 };
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::travel::TravelTimeProvider;
 
@@ -66,7 +67,7 @@ impl World {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Plan {
     /// When the plan was made; trucks start from their home plants at this moment.
     pub created_at: DateTime<Utc>,
@@ -77,14 +78,14 @@ pub struct Plan {
     pub metrics: Metrics,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Unplanned {
     pub order: OrderId,
     pub reason: String,
 }
 
 /// The soft objectives of SPEC §4, measured on a plan.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Metrics {
     pub planned_orders: usize,
     pub unplanned_orders: usize,
