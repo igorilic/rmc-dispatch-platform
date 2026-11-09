@@ -1,4 +1,8 @@
 # Optional overrides live in .env (copy .env.example); compose falls back to its defaults.
+
+# Integration tests start containers via testcontainers, which needs the Docker socket of the
+# current context (colima, Docker Desktop, or /var/run/docker.sock on CI).
+export DOCKER_HOST ?= $(shell docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)
 COMPOSE := docker compose -f deploy/compose/compose.yaml $(if $(wildcard .env),--env-file .env)
 
 .PHONY: up down logs test audit

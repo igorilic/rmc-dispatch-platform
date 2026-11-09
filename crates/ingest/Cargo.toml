@@ -6,6 +6,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+async-nats.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 csv.workspace = true
@@ -16,9 +17,12 @@ serde-saphyr.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+testcontainers.workspace = true
 
 [lints]
 workspace = true
