@@ -3,36 +3,15 @@
 // Integration tests are test code; SPEC §15 allows unwrap there.
 #![allow(clippy::unwrap_used)]
 
-use std::path::{Path, PathBuf};
+mod common;
+
 use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
+use common::{customers, nats, sample};
 use domain::{Channel, Event, EventEnvelope, EventSource, Location, Seed, TruckId};
 use ingest::mapping::{Delivery, Mapping};
 use ingest::nats::{Bus, DLQ, EVENTS, Published};
-use testcontainers::core::{IntoContainerPort, WaitFor};
-use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, GenericImage, ImageExt};
-
-async fn nats() -> (ContainerAsync<GenericImage>, String) {
-    let container = GenericImage::new("nats", "2.15.2-alpine")
-        .with_exposed_port(4222.tcp())
-        .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
-        .with_cmd(["--jetstream"])
-        .start()
-        .await
-        .unwrap();
-    let port = container.get_host_port_ipv4(4222).await.unwrap();
-    (container, format!("nats://127.0.0.1:{port}"))
-}
-
-fn customers() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../customers")
-}
-
-fn sample(integration: &str, file: &str) -> Vec<u8> {
-    std::fs::read(customers().join(integration).join("samples").join(file)).unwrap()
-}
 
 fn delivery<'a>(mapping: &Mapping, body: &'a [u8]) -> Delivery<'a> {
     let received_at = Utc.with_ymd_and_hms(2026, 11, 9, 9, 20, 0).unwrap();

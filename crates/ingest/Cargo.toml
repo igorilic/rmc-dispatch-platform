@@ -6,12 +6,17 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 async-nats.workspace = true
+axum.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 csv.workspace = true
 domain.workspace = true
 quick-xml.workspace = true
+rumqttc.workspace = true
+russh.workspace = true
+russh-sftp.workspace = true
 serde.workspace = true
 serde-saphyr.workspace = true
 serde_json.workspace = true
@@ -19,10 +24,12 @@ sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
 testcontainers.workspace = true
+tower.workspace = true
 
 [lints]
 workspace = true

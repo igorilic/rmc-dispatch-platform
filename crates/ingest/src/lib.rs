@@ -2,6 +2,8 @@
 
 pub mod mapping;
 pub mod nats;
+pub mod sources;
+pub mod telematics;
 mod validate;
 
 pub use validate::report;
