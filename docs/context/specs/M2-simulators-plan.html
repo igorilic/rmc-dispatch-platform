@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Milestone 2 plan</title>
+<link rel="stylesheet" href="../../.design/styles.css">
+<style>
+/* Diagram styles: Spotlight tokens only (zinc greys, one teal accent). */
+.dg{display:block;width:100%;height:auto}
+.dg text{font-family:var(--font-sans);font-size:12px;fill:var(--text-body)}
+.dg .t{fill:var(--text-strong);font-weight:600;font-size:13px}
+.dg .s{fill:var(--text-muted);font-size:11px}
+.dg .m{font-family:var(--font-mono);font-size:11px;fill:var(--text-strong)}
+.dg .bl{font-size:10.5px;fill:var(--text-strong)}
+.dg .c{text-anchor:middle}
+.dg .end{text-anchor:end}
+.dg .it{font-style:italic}
+.dg .halo{paint-order:stroke;stroke:var(--surface-column);stroke-width:3px;stroke-linejoin:round}
+.dg .b-done{fill:var(--surface-solid);stroke:var(--zinc-500);stroke-width:1}
+.dg .b-now{fill:color-mix(in oklab,var(--accent) 14%,var(--surface-column));stroke:var(--accent);stroke-width:1.5}
+.dg .b-later{fill:none;stroke:var(--zinc-500);stroke-width:1;stroke-dasharray:4 3}
+.dg .g-now{fill:none;stroke:var(--accent);stroke-width:1}
+.dg .e-now{fill:none;stroke:var(--accent);stroke-width:1.5}
+.dg .e-later{fill:none;stroke:var(--zinc-500);stroke-width:1.5;stroke-dasharray:4 3}
+.dg .e-thin{fill:none;stroke:var(--zinc-500);stroke-width:1}
+.dg .river{fill:none;stroke:var(--zinc-700);stroke-width:4;stroke-linecap:round;stroke-linejoin:round}
+.dg .site{fill:var(--zinc-300);stroke:var(--surface-column);stroke-width:2}
+.dg .plant{fill:var(--accent);stroke:var(--surface-column);stroke-width:2}
+.dg .seg1{fill:var(--zinc-700)}
+.dg .seg2{fill:var(--zinc-600)}
+.dg .tick{fill:none;stroke:var(--zinc-400);stroke-width:1.5}
+.dg .axis{fill:none;stroke:var(--zinc-600);stroke-width:1}
+.dg .guide{fill:none;stroke:var(--zinc-700);stroke-width:1;stroke-dasharray:2 3}
+.dg .shade{fill:var(--zinc-800)}
+.dg .ev{fill:var(--zinc-300);stroke:var(--surface-column);stroke-width:2}
+.dg .evn{font-size:9.5px;font-weight:700;fill:var(--zinc-900);text-anchor:middle}
+.dg .msg{fill:var(--surface-solid);stroke:var(--zinc-500);stroke-width:1}
+.dg .msg-odd{fill:var(--surface-solid);stroke:var(--accent);stroke-width:1.5}
+.dg .lim{fill:none;stroke:var(--accent);stroke-width:1.5}
+.ah{fill:var(--zinc-400)}
+.ah-now{fill:var(--accent)}
+.ah-later{fill:var(--zinc-500)}
+.sp-prose figure{margin-left:0;margin-right:0}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+<defs>
+<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0 1 L9 5 L0 9 z"/></marker>
+<marker id="ah-now" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-now" d="M0 1 L9 5 L0 9 z"/></marker>
+<marker id="ah-later" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-later" d="M0 1 L9 5 L0 9 z"/></marker>
+</defs>
+</svg>
+<div class="sp-layout__bg"><div><div></div></div></div>
+<div class="sp-layout__fg">
+<main class="sp-layout__main">
+<div class="sp-container-outer sp-article"><div class="sp-container-outer__in">
+<div class="sp-container-inner"><div class="sp-container-inner__in">
+<div class="sp-article__col">
+<article>
+<header class="sp-article__header">
+<h1 class="sp-h1">Milestone 2 plan: simulators</h1>
+<time class="sp-article__date" datetime="2026-11-09"><span class="sp-bar"></span><span style="margin-left:.75rem">November 9, 2026</span></time>
+</header>
+<div class="sp-prose" style="margin-top:2rem">
+
+<p>Milestone 2 builds a fake world that behaves enough like the real one to drive every later milestone. That means 25 trucks reporting over a patchy cellular link, three batching plants issuing batch tickets, and three contractors sending orders in three very different ways. Nothing reads these signals yet; ingest arrives in milestone 3. For now, everything has to be visible in the logs and on the brokers.</p>
+
+<p><strong>Done when:</strong></p>
+<ul>
+<li><code>make up</code> builds and starts a <code>simulators</code> container. <code>make logs</code> shows truck telematics, plant tickets, and all three customers’ orders.</li>
+<li><code>mosquitto_sub -t 'trucks/#' -v</code> shows live telematics, including the deliberate duplicates and reordering.</li>
+<li>CSV drops from <code>rheinbau-gmbh</code> land on the SFTP server.</li>
+<li><code>make test</code> and <code>make audit</code> pass, CI is green, and the README explains how to watch the simulators.</li>
+</ul>
+
+<h2 id="where">Where the simulators sit</h2>
+
+<figure>
+<svg class="dg" viewBox="0 0 680 440" role="img" aria-labelledby="f1t f1d">
+<title id="f1t">Pourline architecture by milestone</title>
+<desc id="f1d">The simulators process, built in milestone 2, publishes truck telematics and plant tickets to Mosquitto. It posts bauwerk-ag and neckar-infra orders over HTTP to ingest, and uploads rheinbau-gmbh CSV files to the SFTP server. Ingest, milestone 3, turns everything into canonical events on NATS JetStream. Dispatch, milestones 4 and 5, consumes those events and stores plans in Postgres. The plant-agent, milestone 7, forwards plant tickets to NATS. The operator, milestone 8, manages ingest deployments.</desc>
+<rect class="b-done" x="10" y="8" width="16" height="12" rx="3"/><text class="s" x="32" y="18">running since M1</text>
+<rect class="b-now" x="140" y="8" width="16" height="12" rx="3"/><text class="s" x="162" y="18">built in M2</text>
+<rect class="b-later" x="250" y="8" width="16" height="12" rx="3"/><text class="s" x="272" y="18">later milestone</text>
+
+<rect class="g-now" x="10" y="44" width="160" height="300" rx="12"/>
+<text class="t" x="22" y="66">simulators</text>
+<g><title>25 trucks drive plant to site and back, publishing GPS, drum and status over MQTT</title>
+<rect class="b-now" x="22" y="80" width="136" height="42" rx="8"/><text class="t c" x="90" y="98">Truck fleet</text><text class="s c" x="90" y="113">GPS · drum · status</text></g>
+<g><title>Three batching plants share their loading bays with the trucks and issue batch tickets</title>
+<rect class="b-now" x="22" y="130" width="136" height="42" rx="8"/><text class="t c" x="90" y="148">Fake plants</text><text class="s c" x="90" y="163">batch tickets</text></g>
+<g><title>bauwerk-ag posts JSON, sending each update as a full replacement</title>
+<rect class="b-now" x="22" y="190" width="136" height="42" rx="8"/><text class="t c" x="90" y="208">bauwerk-ag</text><text class="s c" x="90" y="223">JSON webhook</text></g>
+<g><title>neckar-infra posts XML with schema v1 and v2 live side by side</title>
+<rect class="b-now" x="22" y="240" width="136" height="42" rx="8"/><text class="t c" x="90" y="258">neckar-infra</text><text class="s c" x="90" y="273">XML v1 + v2 webhook</text></g>
+<g><title>rheinbau-gmbh uploads a semicolon CSV with decimal commas every few minutes</title>
+<rect class="b-now" x="22" y="290" width="136" height="42" rx="8"/><text class="t c" x="90" y="308">rheinbau-gmbh</text><text class="s c" x="90" y="323">CSV over SFTP</text></g>
+
+<rect class="b-done" x="200" y="107" width="130" height="42" rx="8"/><text class="t c" x="265" y="125">Mosquitto</text><text class="s c" x="265" y="140">MQTT broker</text>
+<rect class="b-done" x="200" y="290" width="130" height="42" rx="8"/><text class="t c" x="265" y="308">SFTP server</text><text class="s c" x="265" y="323">file drop</text>
+<rect class="b-later" x="200" y="380" width="130" height="42" rx="8"/><text class="t c" x="265" y="398">plant-agent</text><text class="s c" x="265" y="413">M7 · edge outbox</text>
+
+<rect class="b-later" x="360" y="50" width="100" height="40" rx="8"/><text class="t c" x="410" y="67">operator</text><text class="s c" x="410" y="82">M8 · CRD</text>
+<rect class="b-later" x="360" y="107" width="100" height="225" rx="8"/><text class="t c" x="410" y="212">ingest</text><text class="s c" x="410" y="228">M3 · mappings</text>
+
+<rect class="b-done" x="490" y="50" width="180" height="40" rx="8"/><text class="t c" x="580" y="67">Postgres</text><text class="s c" x="580" y="82">orders, plans</text>
+<rect class="b-later" x="490" y="120" width="180" height="50" rx="8"/><text class="t c" x="580" y="141">dispatch</text><text class="s c" x="580" y="157">M4–M5 · plans, re-dispatch</text>
+<rect class="b-done" x="490" y="230" width="180" height="40" rx="8"/><text class="t c" x="580" y="247">NATS JetStream</text><text class="s c" x="580" y="262">canonical events</text>
+<rect class="b-done" x="490" y="310" width="180" height="60" rx="8"/><text class="t c" x="580" y="331">Observability</text><text class="s c" x="580" y="347">Prometheus · Grafana · Jaeger</text><text class="s c" x="580" y="362">wired up in M6</text>
+
+<path class="e-now" d="M158 101 H178 V122 H199" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M158 151 H178 V136 H199" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M158 211 H359" marker-end="url(#ah-now)"/><text class="s c halo" x="265" y="205">HTTP POST</text>
+<path class="e-now" d="M158 261 H359" marker-end="url(#ah-now)"/><text class="s c halo" x="265" y="255">HTTP POST</text>
+<path class="e-now" d="M158 311 H199" marker-end="url(#ah-now)"/>
+<path class="e-later" d="M330 128 H359" marker-end="url(#ah-later)"/>
+<path class="e-later" d="M330 311 H359" marker-end="url(#ah-later)"/>
+<path class="e-later" d="M410 90 V106" marker-end="url(#ah-later)"/>
+<path class="e-later" d="M460 250 H489" marker-end="url(#ah-later)"/>
+<path class="e-later" d="M580 230 V171" marker-end="url(#ah-later)"/>
+<path class="e-later" d="M580 120 V91" marker-end="url(#ah-later)"/>
+<path class="e-later" d="M90 344 V401 H199" marker-end="url(#ah-later)"/><text class="s" x="96" y="376">tickets</text>
+<path class="e-later" d="M330 401 H475 V262 H489" marker-end="url(#ah-later)"/>
+</svg>
+<figcaption>Figure 1. Where the simulators sit. In milestone 2, nothing receives the HTTP posts yet, so the simulators log the payloads instead. Ingest takes them over in milestone 3. Hover a simulator for what it does.</figcaption>
+</figure>
+
+<h2 id="world">The simulated world</h2>
+
+<p>The world lives in one seed file, <code>deploy/seed/rhine-neckar.json</code>, which is compiled into the binary. It holds 3 plants, 25 trucks, 40 sites and 4 mix designs, all as the <code>domain</code> crate’s own types. Dispatch reuses the same file in milestone 4, so both sides agree on IDs and coordinates.</p>
+
+<figure>
+<svg class="dg" viewBox="0 0 680 540" role="img" aria-labelledby="f2t f2d">
+<title id="f2t">Map of the simulated Rhine-Neckar world</title>
+<desc id="f2d">Schematic map of the Rhine and Neckar rivers, with batching plants in Mannheim, Weinheim and Walldorf. Forty construction sites cluster around Heidelberg, Mannheim, Ludwigshafen, Speyer, Schwetzingen, Hockenheim, Walldorf, Wiesloch, Leimen, Neckargemünd, Sinsheim, Ladenburg and Viernheim. bauwerk-ag sites are circles, rheinbau-gmbh sites are squares and neckar-infra sites are diamonds.</desc>
+<path class="river" d="M58 20 L80 105 L78 155 L88 210 L97 280 L94 340 L78 400 L60 530"/>
+<path class="river" d="M520 270 L410 297 L315 265 L258 239 L225 180 L154 137 L80 122"/>
+<text class="s it halo" x="104" y="262">Rhine</text>
+<text class="s it halo" x="352" y="298">Neckar</text>
+
+<g><title>bauwerk-ag · Weinheim</title><circle class="site" cx="276" cy="62" r="4.5"/></g>
+<g><title>bauwerk-ag · Weinheim</title><circle class="site" cx="292" cy="82" r="4.5"/></g>
+<g><title>bauwerk-ag · Viernheim</title><circle class="site" cx="195" cy="70" r="4.5"/></g>
+<g><title>bauwerk-ag · Viernheim</title><circle class="site" cx="208" cy="86" r="4.5"/></g>
+<g><title>bauwerk-ag · Mannheim</title><circle class="site" cx="104" cy="145" r="4.5"/></g>
+<g><title>bauwerk-ag · Mannheim</title><circle class="site" cx="110" cy="168" r="4.5"/></g>
+<g><title>bauwerk-ag · Heidelberg</title><circle class="site" cx="298" cy="276" r="4.5"/></g>
+<g><title>bauwerk-ag · Heidelberg</title><circle class="site" cx="282" cy="294" r="4.5"/></g>
+<g><title>bauwerk-ag · Heidelberg</title><circle class="site" cx="304" cy="300" r="4.5"/></g>
+<g><title>bauwerk-ag · Leimen</title><circle class="site" cx="300" cy="352" r="4.5"/></g>
+<g><title>bauwerk-ag · Leimen</title><circle class="site" cx="314" cy="366" r="4.5"/></g>
+<g><title>bauwerk-ag · Walldorf</title><circle class="site" cx="248" cy="408" r="4.5"/></g>
+<g><title>bauwerk-ag · Wiesloch</title><circle class="site" cx="322" cy="430" r="4.5"/></g>
+<g><title>bauwerk-ag · Wiesloch</title><circle class="site" cx="306" cy="446" r="4.5"/></g>
+
+<g><title>rheinbau-gmbh · Mannheim</title><rect class="site" x="79.5" y="133.5" width="9" height="9"/></g>
+<g><title>rheinbau-gmbh · Mannheim</title><rect class="site" x="95.5" y="175.5" width="9" height="9"/></g>
+<g><title>rheinbau-gmbh · Mannheim</title><rect class="site" x="113.5" y="135.5" width="9" height="9"/></g>
+<g><title>rheinbau-gmbh · Ludwigshafen</title><rect class="site" x="47.5" y="155.5" width="9" height="9"/></g>
+<g><title>rheinbau-gmbh · Ludwigshafen</title><rect class="site" x="57.5" y="177.5" width="9" height="9"/></g>
+<g><title>rheinbau-gmbh · Speyer</title><rect class="site" x="55.5" y="390.5" width="9" height="9"/></g>
+<g><title>rheinbau-gmbh · Speyer</title><rect class="site" x="67.5" y="407.5" width="9" height="9"/></g>
+<g><title>rheinbau-gmbh · Schwetzingen</title><rect class="site" x="179.5" y="295.5" width="9" height="9"/></g>
+<g><title>rheinbau-gmbh · Schwetzingen</title><rect class="site" x="195.5" y="311.5" width="9" height="9"/></g>
+<g><title>rheinbau-gmbh · Hockenheim</title><rect class="site" x="157.5" y="391.5" width="9" height="9"/></g>
+<g><title>rheinbau-gmbh · Hockenheim</title><rect class="site" x="173.5" y="405.5" width="9" height="9"/></g>
+<g><title>rheinbau-gmbh · Eppelheim</title><rect class="site" x="241.5" y="267.5" width="9" height="9"/></g>
+<g><title>rheinbau-gmbh · Ladenburg</title><rect class="site" x="215.5" y="181.5" width="9" height="9"/></g>
+
+<g><title>neckar-infra · Heidelberg</title><path class="site" d="M292 256 L298 262 L292 268 L286 262 Z"/></g>
+<g><title>neckar-infra · Heidelberg</title><path class="site" d="M310 252 L316 258 L310 264 L304 258 Z"/></g>
+<g><title>neckar-infra · Heidelberg</title><path class="site" d="M270 284 L276 290 L270 296 L264 290 Z"/></g>
+<g><title>neckar-infra · Neckargemünd</title><path class="site" d="M400 284 L406 290 L400 296 L394 290 Z"/></g>
+<g><title>neckar-infra · Neckargemünd</title><path class="site" d="M416 300 L422 306 L416 312 L410 306 Z"/></g>
+<g><title>neckar-infra · Bammental</title><path class="site" d="M392 340 L398 346 L392 352 L386 346 Z"/></g>
+<g><title>neckar-infra · Ladenburg</title><path class="site" d="M234 160 L240 166 L234 172 L228 166 Z"/></g>
+<g><title>neckar-infra · Eppelheim</title><path class="site" d="M256 260 L262 266 L256 272 L250 266 Z"/></g>
+<g><title>neckar-infra · Leimen</title><path class="site" d="M296 366 L302 372 L296 378 L290 372 Z"/></g>
+<g><title>neckar-infra · Wiesloch</title><path class="site" d="M332 440 L338 446 L332 452 L326 446 Z"/></g>
+<g><title>neckar-infra · Sinsheim</title><path class="site" d="M480 482 L486 488 L480 494 L474 488 Z"/></g>
+<g><title>neckar-infra · Sinsheim</title><path class="site" d="M496 498 L502 504 L496 510 L490 504 Z"/></g>
+<g><title>neckar-infra · Sinsheim</title><path class="site" d="M472 504 L478 510 L472 516 L466 510 Z"/></g>
+
+<g><title>plant-mannheim · 3 loading bays · 150 m³/h · 05:00–20:00</title><circle class="plant" cx="93" cy="155" r="8"/></g>
+<g><title>plant-weinheim · 2 loading bays · 100 m³/h · 06:00–18:00</title><circle class="plant" cx="282" cy="71" r="8"/></g>
+<g><title>plant-walldorf · 2 loading bays · 120 m³/h · 05:00–20:00</title><circle class="plant" cx="261" cy="419" r="8"/></g>
+<text class="t halo" x="122" y="128">Mannheim plant</text>
+<text class="t halo" x="298" y="68">Weinheim plant</text>
+<text class="t end halo" x="250" y="437">Walldorf plant</text>
+
+<text class="s halo" x="36" y="200">Ludwigshafen</text>
+<text class="s halo" x="50" y="432">Speyer</text>
+<text class="s halo" x="172" y="332">Schwetzingen</text>
+<text class="s halo" x="148" y="386">Hockenheim</text>
+<text class="s halo" x="318" y="246">Heidelberg</text>
+<text class="s halo" x="426" y="293">Neckargemünd</text>
+<text class="s halo" x="322" y="378">Leimen</text>
+<text class="s halo" x="342" y="456">Wiesloch</text>
+<text class="s halo" x="508" y="500">Sinsheim</text>
+<text class="s halo" x="244" y="194">Ladenburg</text>
+<text class="s halo" x="216" y="100">Viernheim</text>
+
+<circle class="plant" cx="556" cy="34" r="8"/><text class="s" x="572" y="38">plant (3)</text>
+<circle class="site" cx="556" cy="58" r="4.5"/><text class="s" x="572" y="62">bauwerk-ag (14)</text>
+<rect class="site" x="551.5" y="77.5" width="9" height="9"/><text class="s" x="572" y="86">rheinbau-gmbh (13)</text>
+<path class="site" d="M556 100 L562 106 L556 112 L550 106 Z"/><text class="s" x="572" y="110">neckar-infra (13)</text>
+
+<path class="axis" d="M30 515 V521 H161 V515"/><text class="s c" x="96" y="534">10 km</text>
+</svg>
+<figcaption>Figure 2. The seeded world. Plant positions are real town coordinates, and the sites are fictional ones placed near real towns. Marker shape shows the customer. Hover a marker for details.</figcaption>
+</figure>
+
+<table>
+<thead><tr><th>Plant</th><th>Loading bays</th><th>Batching rate</th><th>Hours (local)</th><th>Home trucks</th></tr></thead>
+<tbody>
+<tr><td><code>plant-mannheim</code></td><td>3</td><td>150 m³/h</td><td>05:00–20:00</td><td>10</td></tr>
+<tr><td><code>plant-weinheim</code></td><td>2</td><td>100 m³/h</td><td>06:00–18:00</td><td>7</td></tr>
+<tr><td><code>plant-walldorf</code></td><td>2</td><td>120 m³/h</td><td>05:00–20:00</td><td>8</td></tr>
+</tbody>
+</table>
+
+<p><strong>Fleet:</strong> 25 trucks: 3 × 7 m³, 8 × 8 m³, 8 × 9 m³, 4 × 10 m³, 1 × 12 m³ and 1 × 15 m³ (the special semi-trailer mixer).</p>
+
+<table>
+<thead><tr><th>Mix design</th><th>Typical use</th><th>Max minutes from batching</th></tr></thead>
+<tbody>
+<tr><td><code>C20/25-X0</code></td><td>blinding, simple foundations</td><td>90</td></tr>
+<tr><td><code>C25/30-XC2</code></td><td>foundations, ground slabs</td><td>90</td></tr>
+<tr><td><code>C30/37-XC4</code></td><td>walls, exposed elements</td><td>90</td></tr>
+<tr><td><code>C30/37-XC4-VZ</code></td><td>long hauls, with retarder</td><td>150</td></tr>
+</tbody>
+</table>
+
+<p>Each site has an ID of our own and the customer’s own reference for it, for example <code>BW-HD-03</code>. Customers only ever send their own reference. Ingest resolves it in milestone 3.</p>
+
+<h2 id="inside">Inside the simulators process</h2>
+
+<figure>
+<svg class="dg" viewBox="0 0 680 310" role="img" aria-labelledby="f3t f3d">
+<title id="f3t">Tasks inside the simulators process</title>
+<desc id="f3d">The seed world feeds 25 truck tasks, 3 plant tasks and an order generator. Trucks ask plants for a loading bay and plants tell trucks when they are loaded. Truck and plant messages pass through a flaky link before reaching Mosquitto. The order generator feeds three customer adapters: bauwerk-ag JSON and neckar-infra XML go out as HTTP posts, which are logged until ingest exists, and rheinbau-gmbh CSV goes to SFTP.</desc>
+<rect class="b-now" x="10" y="113" width="120" height="60" rx="8"/><text class="t c" x="70" y="136">Seed world</text><text class="s c" x="70" y="151">plants · trucks</text><text class="s c" x="70" y="165">sites · mixes</text>
+
+<rect class="b-now" x="165" y="30" width="165" height="46" rx="8"/><text class="t c" x="247" y="50">Truck tasks × 25</text><text class="s c" x="247" y="66">trip state machine</text>
+<rect class="b-now" x="165" y="120" width="165" height="46" rx="8"/><text class="t c" x="247" y="140">Plant tasks × 3</text><text class="s c" x="247" y="156">loading bays = semaphore</text>
+<rect class="b-now" x="165" y="215" width="165" height="46" rx="8"/><text class="t c" x="247" y="235">Order generator</text><text class="s c" x="247" y="251">new · update · cancel</text>
+
+<path class="e-now" d="M130 143 H146 V53 H164" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M130 143 H164" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M130 143 H146 V238 H164" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M215 76 V119" marker-end="url(#ah-now)"/><text class="s end" x="210" y="102">bay?</text>
+<path class="e-now" d="M280 120 V77" marker-end="url(#ah-now)"/><text class="s" x="285" y="102">loaded</text>
+
+<rect class="b-now" x="365" y="40" width="130" height="110" rx="8"/><text class="t c" x="430" y="70">Flaky link</text><text class="s c" x="430" y="90">duplicates</text><text class="s c" x="430" y="106">reordering</text><text class="s c" x="430" y="122">dead zones</text>
+<path class="e-now" d="M330 53 H364" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M330 143 H364" marker-end="url(#ah-now)"/>
+
+<rect class="b-now" x="365" y="180" width="130" height="32" rx="8"/><text class="t c" x="430" y="201">bauwerk-ag JSON</text>
+<rect class="b-now" x="365" y="222" width="130" height="32" rx="8"/><text class="t c" x="430" y="243">neckar-infra XML</text>
+<rect class="b-now" x="365" y="264" width="130" height="32" rx="8"/><text class="t c" x="430" y="285">rheinbau CSV</text>
+<path class="e-now" d="M330 238 H346 V196 H364" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M330 238 H364" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M330 238 H346 V280 H364" marker-end="url(#ah-now)"/>
+
+<rect class="b-done" x="530" y="60" width="140" height="70" rx="8"/><text class="t c" x="600" y="84">Mosquitto</text><text class="s c" x="600" y="102">trucks/{id}/…</text><text class="s c" x="600" y="118">plants/{id}/tickets</text>
+<rect class="b-later" x="530" y="180" width="140" height="74" rx="8"/><text class="t c" x="600" y="203">HTTP POST</text><text class="s c" x="600" y="221">to ingest from M3,</text><text class="s c" x="600" y="237">logged until then</text>
+<rect class="b-done" x="530" y="264" width="140" height="32" rx="8"/><text class="t c" x="600" y="285">SFTP upload</text>
+<path class="e-now" d="M495 95 H529" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M495 196 H529" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M495 238 H529" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M495 280 H529" marker-end="url(#ah-now)"/>
+</svg>
+<figcaption>Figure 3. Inside the simulators process: one binary, one container, with each simulator running as tokio tasks. Trucks and plants share loading bays in-process, so a truck queues when every bay is busy. Every MQTT message passes through the flaky link.</figcaption>
+</figure>
+
+<table>
+<thead><tr><th>MQTT topic</th><th>Payload</th><th>Cadence</th></tr></thead>
+<tbody>
+<tr><td><code>trucks/{id}/gps</code></td><td><code>vehicle, seq, ts_ms, lat, lon, speed_kmh</code></td><td>every 10 s moving, 60 s parked</td></tr>
+<tr><td><code>trucks/{id}/drum</code></td><td><code>vehicle, seq, ts_ms, rotation, rpm</code></td><td>on change, plus every 30 s</td></tr>
+<tr><td><code>trucks/{id}/status</code></td><td><code>vehicle, seq, ts_ms, status</code></td><td>on change</td></tr>
+<tr><td><code>plants/{id}/tickets</code></td><td><code>plant, ticket_no, vehicle, ts_ms, event, mix, volume_m3</code></td><td>per batching event</td></tr>
+</tbody>
+</table>
+
+<p>The payloads deliberately use a telematics vendor’s vocabulary (<code>vehicle</code>, epoch-millisecond <code>ts_ms</code>) rather than our domain names, so that ingest has real mapping to do. <code>seq</code> is a per-truck counter, so ingest can drop duplicates and restore order. All messages use QoS 1, which already allows redelivery.</p>
+
+<h2 id="trip">One truck trip</h2>
+
+<figure>
+<svg class="dg" viewBox="0 0 680 244" role="img" aria-labelledby="f4t f4d">
+<title id="f4t">Timeline of one truck trip</title>
+<desc id="f4d">A 9 cubic metre load of C30/37-XC4 from Walldorf to Heidelberg. The plant bay is busy from minute 0 to 9: batching at 0, loading at 3, loaded at 9. The truck leaves at minute 12, drives 25 minutes, arrives at 37, waits until 45, discharges until 63, returns until 88, then is available. The drum charges at the plant, mixes while driving, discharges on site and idles on the way back. GPS reports densely while moving and sparsely while parked. Unloading ends at 63 minutes, inside the 90 minute mix limit.</desc>
+<rect class="ev" x="11" y="18" width="11" height="11" rx="2"/><text class="s" x="28" y="27">plant ticket</text>
+<circle class="ev" cx="16.5" cy="40" r="5.5"/><text class="s" x="28" y="44">truck status</text>
+
+<path class="guide" d="M130 48 V186 M146.2 48 V186 M178.6 48 V186 M194.8 48 V186 M329.8 48 V186 M373 48 V186 M470.2 48 V186"/>
+
+<text class="t" x="10" y="72">Plant bay</text>
+<rect class="seg2" x="131" y="58" width="46.6" height="20" rx="4"/><text class="bl c" x="154.3" y="72">bay 2</text>
+
+<text class="t" x="10" y="104">Truck status</text>
+<g><title>loading: at the plant, minutes 0–12</title><rect class="seg1" x="131" y="90" width="62.8" height="20" rx="4"/><text class="bl c" x="162.4" y="104">loading</text></g>
+<g><title>en_route: minutes 12–37</title><rect class="seg2" x="195.8" y="90" width="133" height="20" rx="4"/><text class="bl c" x="262.3" y="104">en_route</text></g>
+<g><title>on_site: waiting for the pump, minutes 37–45</title><rect class="seg1" x="330.8" y="90" width="41.2" height="20" rx="4"/><text class="bl c" x="351.4" y="104">on_site</text></g>
+<g><title>discharging: 9 m³ at 30 m³/h, minutes 45–63</title><rect class="seg2" x="374" y="90" width="95.2" height="20" rx="4"/><text class="bl c" x="421.6" y="104">discharging</text></g>
+<g><title>returning: minutes 63–88</title><rect class="seg1" x="471.2" y="90" width="133" height="20" rx="4"/><text class="bl c" x="537.7" y="104">returning</text></g>
+<g><title>available: back at the plant from minute 88</title><rect class="seg2" x="606.2" y="90" width="52" height="20" rx="4"/><text class="bl c" x="632.2" y="104">available</text></g>
+
+<text class="t" x="10" y="136">Drum</text>
+<rect class="seg1" x="131" y="122" width="46.6" height="20" rx="4"/><text class="bl c" x="154.3" y="136">charging</text>
+<rect class="seg2" x="179.6" y="122" width="192.4" height="20" rx="4"/><text class="bl c" x="275.8" y="136">mixing</text>
+<rect class="seg1" x="374" y="122" width="95.2" height="20" rx="4"/><text class="bl c" x="421.6" y="136">discharging</text>
+<rect class="seg2" x="471.2" y="122" width="187" height="20" rx="4"/><text class="bl c" x="564.7" y="136">idle</text>
+
+<text class="t" x="10" y="168">GPS</text>
+<path class="tick" d="M130 156 V172 M162.4 156 V172 M194.8 156 V172 M200.2 156 V172 M205.6 156 V172 M211 156 V172 M216.4 156 V172 M221.8 156 V172 M227.2 156 V172 M232.6 156 V172 M238 156 V172 M243.4 156 V172 M248.8 156 V172 M254.2 156 V172 M259.6 156 V172 M265 156 V172 M270.4 156 V172 M275.8 156 V172 M281.2 156 V172 M286.6 156 V172 M292 156 V172 M297.4 156 V172 M302.8 156 V172 M308.2 156 V172 M313.6 156 V172 M319 156 V172 M324.4 156 V172 M329.8 156 V172 M362.2 156 V172 M394.6 156 V172 M427 156 V172 M459.4 156 V172 M470.2 156 V172 M475.6 156 V172 M481 156 V172 M486.4 156 V172 M491.8 156 V172 M497.2 156 V172 M502.6 156 V172 M508 156 V172 M513.4 156 V172 M518.8 156 V172 M524.2 156 V172 M529.6 156 V172 M535 156 V172 M540.4 156 V172 M545.8 156 V172 M551.2 156 V172 M556.6 156 V172 M562 156 V172 M567.4 156 V172 M572.8 156 V172 M578.2 156 V172 M583.6 156 V172 M589 156 V172 M594.4 156 V172 M599.8 156 V172 M605.2 156 V172 M637.6 156 V172"/>
+
+<g><title>1 · batching · minute 0 · plant ticket</title><rect class="ev" x="123.5" y="33.5" width="13" height="13" rx="2"/><text class="evn" x="130" y="43.5">1</text></g>
+<g><title>2 · loading · minute 3 · plant ticket</title><rect class="ev" x="139.7" y="33.5" width="13" height="13" rx="2"/><text class="evn" x="146.2" y="43.5">2</text></g>
+<g><title>3 · loaded · minute 9 · plant ticket</title><rect class="ev" x="172.1" y="33.5" width="13" height="13" rx="2"/><text class="evn" x="178.6" y="43.5">3</text></g>
+<g><title>4 · left_plant · minute 12 · truck status en_route</title><circle class="ev" cx="194.8" cy="40" r="7"/><text class="evn" x="194.8" y="43.5">4</text></g>
+<g><title>5 · arrived_at_customer · minute 37 · truck status on_site</title><circle class="ev" cx="329.8" cy="40" r="7"/><text class="evn" x="329.8" y="43.5">5</text></g>
+<g><title>6 · unloading · minute 45 · truck status discharging</title><circle class="ev" cx="373" cy="40" r="7"/><text class="evn" x="373" y="43.5">6</text></g>
+<g><title>7 · unloaded · minute 63 · truck status returning</title><circle class="ev" cx="470.2" cy="40" r="7"/><text class="evn" x="470.2" y="43.5">7</text></g>
+
+<path class="axis" d="M130 186 H659"/>
+<path class="axis" d="M130 186 V190 M211 186 V190 M292 186 V190 M373 186 V190 M454 186 V190 M535 186 V190 M616 186 V190"/>
+<text class="s c" x="130" y="202">0</text><text class="s c" x="211" y="202">15</text><text class="s c" x="292" y="202">30</text><text class="s c" x="373" y="202">45</text><text class="s c" x="454" y="202">60</text><text class="s c" x="535" y="202">75</text><text class="s c" x="616" y="202">90 min</text>
+
+<path class="lim" d="M130 211 V221 M130 216 H616 M616 211 V221"/>
+<circle cx="470.2" cy="216" r="4" style="fill:var(--accent)"/>
+<text class="s c" x="373" y="236">mix limit: unloading must end within 90 min of batching (here at 63 min)</text>
+</svg>
+<figcaption>Figure 4. One trip: 9 m³ of <code>C30/37-XC4</code> from Walldorf to a site in Heidelberg, 25 minutes each way, discharged at 30 m³/h. The numbered markers are the delivery events in the table below: squares come from the plant, circles from the truck. Tick density shows the GPS rate.</figcaption>
+</figure>
+
+<table>
+<thead><tr><th>#</th><th>Delivery event</th><th>Emitted by</th><th>Signal the simulator sends</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>batching</code></td><td>plant</td><td>ticket <code>event: batching</code></td></tr>
+<tr><td>2</td><td><code>loading</code></td><td>plant</td><td>ticket <code>event: loading</code></td></tr>
+<tr><td>3</td><td><code>loaded</code></td><td>plant</td><td>ticket <code>event: loaded</code></td></tr>
+<tr><td>4</td><td><code>left_plant</code></td><td>truck</td><td>status → <code>en_route</code></td></tr>
+<tr><td>5</td><td><code>arrived_at_customer</code></td><td>truck</td><td>status → <code>on_site</code></td></tr>
+<tr><td>6</td><td><code>unloading</code></td><td>truck</td><td>status → <code>discharging</code></td></tr>
+<tr><td>7</td><td><code>unloaded</code></td><td>truck</td><td>status → <code>returning</code></td></tr>
+</tbody>
+</table>
+
+<p>The simulators only emit raw signals. Turning them into delivery events is ingest’s job in milestone 3, and tying a truck to a load is dispatch’s job, via the plan, in milestone 5. Until a plan exists, trucks pick a random site of the right customer for each trip. Travel uses the same model dispatch will use (haversine distance × road factor ÷ average speed), plus ±10 % noise, so real trips never match the plan exactly.</p>
+
+<h2 id="flaky">A flaky cellular link, on purpose</h2>
+
+<figure>
+<svg class="dg" viewBox="0 0 680 200" role="img" aria-labelledby="f5t f5d">
+<title id="f5t">Messages sent versus received over the flaky link</title>
+<desc id="f5d">A truck sends messages 1 to 14 in order. The broker receives 1, 2, 3, then 3 again as a duplicate, then 4, 6, then 5 late, then 7 and 8. Messages 9 to 11 are sent inside a dead zone and are buffered. They arrive in a burst together with 12, followed by 13 and 14.</desc>
+<text class="s" x="30" y="26">sent by the truck, in order</text>
+<rect class="shade" x="376" y="32" width="120" height="36" rx="6"/><text class="s c" x="436" y="26">dead zone, buffered</text>
+<g class="m c">
+<rect class="msg" x="30" y="40" width="20" height="22" rx="4"/><text class="m c" x="40" y="55">1</text>
+<rect class="msg" x="74" y="40" width="20" height="22" rx="4"/><text class="m c" x="84" y="55">2</text>
+<rect class="msg" x="118" y="40" width="20" height="22" rx="4"/><text class="m c" x="128" y="55">3</text>
+<rect class="msg" x="162" y="40" width="20" height="22" rx="4"/><text class="m c" x="172" y="55">4</text>
+<rect class="msg" x="206" y="40" width="20" height="22" rx="4"/><text class="m c" x="216" y="55">5</text>
+<rect class="msg" x="250" y="40" width="20" height="22" rx="4"/><text class="m c" x="260" y="55">6</text>
+<rect class="msg" x="294" y="40" width="20" height="22" rx="4"/><text class="m c" x="304" y="55">7</text>
+<rect class="msg" x="338" y="40" width="20" height="22" rx="4"/><text class="m c" x="348" y="55">8</text>
+<rect class="msg" x="382" y="40" width="20" height="22" rx="4"/><text class="m c" x="392" y="55">9</text>
+<rect class="msg" x="426" y="40" width="20" height="22" rx="4"/><text class="m c" x="436" y="55">10</text>
+<rect class="msg" x="470" y="40" width="20" height="22" rx="4"/><text class="m c" x="480" y="55">11</text>
+<rect class="msg" x="514" y="40" width="20" height="22" rx="4"/><text class="m c" x="524" y="55">12</text>
+<rect class="msg" x="558" y="40" width="20" height="22" rx="4"/><text class="m c" x="568" y="55">13</text>
+<rect class="msg" x="602" y="40" width="20" height="22" rx="4"/><text class="m c" x="612" y="55">14</text>
+</g>
+<path class="e-thin" d="M40 62 L40 130 M84 62 L84 130 M128 62 L128 130 M172 62 L172 130 M260 62 L260 130 M304 62 L304 130 M348 62 L348 130 M568 62 L612 130 M612 62 L634 130"/>
+<path class="e-now" d="M128 62 L150 130 M216 62 L282 130 M392 62 L524 130 M436 62 L546 130 M480 62 L568 130 M524 62 L590 130"/>
+<rect class="msg" x="30" y="130" width="20" height="22" rx="4"/><text class="m c" x="40" y="145">1</text>
+<rect class="msg" x="74" y="130" width="20" height="22" rx="4"/><text class="m c" x="84" y="145">2</text>
+<rect class="msg" x="118" y="130" width="20" height="22" rx="4"/><text class="m c" x="128" y="145">3</text>
+<rect class="msg-odd" x="140" y="130" width="20" height="22" rx="4"/><text class="m c" x="150" y="145">3</text>
+<rect class="msg" x="162" y="130" width="20" height="22" rx="4"/><text class="m c" x="172" y="145">4</text>
+<rect class="msg" x="250" y="130" width="20" height="22" rx="4"/><text class="m c" x="260" y="145">6</text>
+<rect class="msg-odd" x="272" y="130" width="20" height="22" rx="4"/><text class="m c" x="282" y="145">5</text>
+<rect class="msg" x="294" y="130" width="20" height="22" rx="4"/><text class="m c" x="304" y="145">7</text>
+<rect class="msg" x="338" y="130" width="20" height="22" rx="4"/><text class="m c" x="348" y="145">8</text>
+<rect class="msg-odd" x="514" y="130" width="20" height="22" rx="4"/><text class="m c" x="524" y="145">9</text>
+<rect class="msg-odd" x="536" y="130" width="20" height="22" rx="4"/><text class="m c" x="546" y="145">10</text>
+<rect class="msg-odd" x="558" y="130" width="20" height="22" rx="4"/><text class="m c" x="568" y="145">11</text>
+<rect class="msg-odd" x="580" y="130" width="20" height="22" rx="4"/><text class="m c" x="590" y="145">12</text>
+<rect class="msg" x="602" y="130" width="20" height="22" rx="4"/><text class="m c" x="612" y="145">13</text>
+<rect class="msg" x="624" y="130" width="20" height="22" rx="4"/><text class="m c" x="634" y="145">14</text>
+<text class="s" x="30" y="170">received by the broker</text>
+<text class="s c" x="150" y="190">duplicate</text>
+<text class="s c" x="282" y="190">late, after 6</text>
+<text class="s c" x="579" y="190">burst after the dead zone</text>
+</svg>
+<figcaption>Figure 5. What the flaky link does to one truck’s messages. Every message arrives at least once. Some arrive twice, some swap places, and a dead zone ends in a late burst. Ingest uses <code>seq</code> and <code>ts_ms</code> to put them back in order.</figcaption>
+</figure>
+
+<table>
+<thead><tr><th>Setting</th><th>Default</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>TELEMATICS_DUPLICATE_RATE</code></td><td>0.03</td><td>Fraction of messages sent twice.</td></tr>
+<tr><td><code>TELEMATICS_REORDER_RATE</code></td><td>0.03</td><td>Fraction of messages held back behind the next one.</td></tr>
+<tr><td><code>DEAD_ZONE_TRIP_SHARE</code></td><td>0.2</td><td>Fraction of trips that include a 30–120 s dead zone, buffered and then flushed in a burst.</td></tr>
+<tr><td><code>SIM_SEED</code></td><td>42</td><td>Same seed, same random choices. Wall-clock timing still varies.</td></tr>
+</tbody>
+</table>
+
+<h2 id="customers">Three customers, three integration styles</h2>
+
+<p>One order generator feeds all three customers. Each one regularly creates a new order: a site from its own list, a mix, 8–150 m³ (mostly 10–60), a start time 2–26 hours ahead within plant hours, 20–60 m³/h, and a 15–30 minute maximum gap. Later ticks change the volume of an open order (15 %) or cancel one (5 %). The customers differ only in how they deliver.</p>
+
+<h3 id="bauwerk">bauwerk-ag: JSON webhook, full replacements</h3>
+<p>Every change is posted as the whole document again, with the same <code>jobId</code> and a newer <code>updatedAt</code>. 5 % of posts are sent twice, the way a real client does when it retries after a timeout.</p>
+<pre><code>{
+  "jobId": "BW-2026-0042",
+  "updatedAt": "2026-11-09T10:15:02+01:00",
+  "deliverTo": { "siteRef": "BW-HD-03" },
+  "product": "C30/37-XC4",
+  "qty": { "value": 42.5, "unit": "m3" },
+  "pourStart": "2026-11-10T07:00:00+01:00",
+  "pumpRate": 30,
+  "maxIntervalMinutes": 20,
+  "state": "CONFIRMED"
+}</code></pre>
+
+<h3 id="rheinbau">rheinbau-gmbh: CSV over SFTP</h3>
+<p>Every 5 minutes, a full snapshot of all open orders is uploaded, so the same order arrives again and again. That makes idempotency matter from the very first drop. Files are written as <code>.part</code> and then renamed, so a reader never sees half a file. The CSV is semicolon-separated, uses decimal commas, and has German local times with no offset.</p>
+<pre><code>Auftragsnr;Baustelle;Sorte;Menge;Liefertermin;Leistung;MaxPause;Status
+RB-7781;RB-SCHW-02;C25/30-XC2;42,5;10.11.2026 07:00;30,0;20;bestätigt
+RB-7782;RB-MA-01;C30/37-XC4;120,0;10.11.2026 06:30;45,0;15;bestätigt
+RB-7779;RB-SP-01;C20/25-X0;18,0;10.11.2026 13:00;20,0;30;storniert</code></pre>
+
+<h3 id="neckar">neckar-infra: XML webhook, v1 and v2 side by side</h3>
+<p>Half of the sites still run the v1 system and the other half have moved to v2, so both versions arrive all the time. v2 switches to attributes, UTC timestamps and litres, and adds a revision counter.</p>
+<pre><code>&lt;Order version="1"&gt;
+  &lt;OrderNo&gt;NI-88213&lt;/OrderNo&gt;
+  &lt;SiteCode&gt;NI-HD-07&lt;/SiteCode&gt;
+  &lt;Product&gt;C30/37-XC4&lt;/Product&gt;
+  &lt;Quantity&gt;42.5&lt;/Quantity&gt;
+  &lt;Start&gt;2026-11-10T07:00:00+01:00&lt;/Start&gt;
+  &lt;PourRate&gt;30&lt;/PourRate&gt;
+  &lt;MaxGap&gt;20&lt;/MaxGap&gt;
+  &lt;Status&gt;confirmed&lt;/Status&gt;
+&lt;/Order&gt;
+
+&lt;Order version="2"&gt;
+  &lt;Header orderNo="NI-88214" revision="2" status="confirmed"/&gt;
+  &lt;Delivery site="NI-NG-02" start="2026-11-10T06:00:00Z" maxGapMin="20"/&gt;
+  &lt;Material code="C30/37-XC4" quantityLitres="42500" rateLitresPerHour="30000"/&gt;
+&lt;/Order&gt;</code></pre>
+
+<p>These samples become golden test fixtures under <code>customers/&lt;name&gt;/samples/</code>. That is where SPEC §10 puts them, and where <code>ingest-cli validate</code> will read them in milestone 3.</p>
+
+<h2 id="layout">Code layout</h2>
+<pre><code>crates/simulators/src/
+├── main.rs        env config, tracing, spawns every task
+├── world.rs       loads the seed file
+├── fleet.rs       truck trip state machine and movement
+├── plant.rs       loading bays (semaphore) and batch tickets
+├── link.rs        flaky MQTT link: duplicates, reordering, dead zones
+├── orders.rs      order generator shared by the customers
+└── customers.rs   bauwerk JSON, neckar XML v1/v2, rheinbau CSV + SFTP
+deploy/seed/rhine-neckar.json
+customers/{bauwerk-ag,rheinbau-gmbh,neckar-infra}/samples/
+Dockerfile         one multi-stage file for every binary (ARG BIN)</code></pre>
+
+<h2 id="config">Configuration</h2>
+<table>
+<thead><tr><th>Variable</th><th>Default</th></tr></thead>
+<tbody>
+<tr><td><code>MQTT_URL</code></td><td><code>mqtt://localhost:1883</code> (compose sets <code>mosquitto</code>)</td></tr>
+<tr><td><code>SFTP_HOST</code>, <code>SFTP_PORT</code></td><td><code>localhost</code>, <code>2222</code> (compose sets <code>sftp</code>)</td></tr>
+<tr><td><code>SFTP_USER</code>, <code>SFTP_PASSWORD</code></td><td><code>pourline</code>, <code>pourline</code> (local only)</td></tr>
+<tr><td><code>BAUWERK_WEBHOOK_URL</code></td><td>unset, so payloads are logged</td></tr>
+<tr><td><code>NECKAR_WEBHOOK_URL</code></td><td>unset, so payloads are logged</td></tr>
+<tr><td><code>ORDER_INTERVAL_SECS</code></td><td><code>180</code>, ±50 % per customer</td></tr>
+<tr><td><code>RHEINBAU_DROP_INTERVAL_SECS</code></td><td><code>300</code></td></tr>
+<tr><td><code>RUST_LOG</code></td><td><code>info</code></td></tr>
+</tbody>
+</table>
+<p>The flaky-link settings are listed above. All of them go into <code>.env.example</code>.</p>
+
+<h2 id="steps">Steps</h2>
+
+<h3 id="step-1">Step 1</h3>
+<p><strong>Seed world and crate skeleton.</strong> Write the seed file and the <code>simulators</code> crate with env config and tracing. Tests: the seed parses into <code>domain</code> types, IDs are unique, every truck’s home plant exists, and every site belongs to one of the three customers.</p>
+
+<h3 id="step-2">Step 2</h3>
+<p><strong>Truck fleet.</strong> Write the trip state machine, movement along haversine distance, and the gps/drum/status payloads. Tests use tokio’s paused clock, so no test waits in real time: a truck reaches its destination at the expected time, the statuses run in lifecycle order, and the payloads match their JSON shape.</p>
+
+<h3 id="step-3">Step 3</h3>
+<p><strong>Flaky link.</strong> Add duplicates, reordering and dead zones. A seeded test over 10,000 messages checks that nothing is lost, that the duplicate and reorder rates stay close to their settings, that only neighbouring messages swap places, and that every dead-zone message arrives after the zone ends.</p>
+
+<h3 id="step-4">Step 4</h3>
+<p><strong>Fake plants.</strong> Loading bays are a semaphore, and the plants issue batch tickets. Tests: with 2 bays and 5 trucks arriving together, no more than 2 batches ever run at once, and ticket numbers are unique and sequential per plant.</p>
+
+<h3 id="step-5">Step 5</h3>
+<p><strong>Customers.</strong> Build the order generator and the three adapters: a <code>reqwest</code> POST or a log line for the webhooks, and a <code>russh-sftp</code> upload for the CSV. Tests: golden files for JSON, CSV, XML v1 and XML v2. The CSV must use decimal commas and Europe/Berlin local time. A bauwerk update must keep its <code>jobId</code> and move <code>updatedAt</code> forward.</p>
+
+<h3 id="step-6">Step 6</h3>
+<p><strong>Image, compose and docs.</strong> One multi-stage <code>Dockerfile</code>: a pinned <code>rust:1.99.1</code> builder and a distroless, non-root runtime. Add the <code>simulators</code> service, which waits for healthy infra. SFTP gets a healthcheck now that something depends on it. Add a <code>make logs</code> target. The README gets a “Watching the simulators” section, and new variables go into <code>.env.example</code> (you copy it into place, because the sandbox can’t write it). Verify with <code>make test</code> and <code>make audit</code>, plus your <code>make up</code>, then commit.</p>
+
+<h2 id="decisions">Decisions I need from you</h2>
+<p>The spec leaves these open. I’ll use the default unless you say otherwise.</p>
+<table>
+<thead><tr><th>#</th><th>Question</th><th>My default</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>What is the “fake plant”, given that SPEC §6 also has the plant-agent simulate batch tickets in M7?</td><td>The fake plant is the plant’s batch computer. It publishes tickets on <code>plants/{id}/tickets</code>. In M7, the plant-agent reads those and forwards them with store-and-forward, instead of inventing tickets itself.</td></tr>
+<tr><td>2</td><td>Who decides where trucks go before dispatch exists?</td><td>Trucks run autonomous trips to random sites. Telematics carry no order references; dispatch links trucks to loads through the plan. In M5 the trucks switch to following the plan.</td></tr>
+<tr><td>3</td><td>Should simulated time run faster than real time?</td><td>No. Real time only, so timestamps stay truthful for ingest and dispatch.</td></tr>
+<tr><td>4</td><td>Where do webhooks go before ingest exists?</td><td>Nowhere. The payload is logged until <code>*_WEBHOOK_URL</code> is set, which happens in M3.</td></tr>
+<tr><td>5</td><td>Do customers send our site IDs?</td><td>No. They send their own references (<code>BW-HD-03</code>), and the seed maps them to our IDs.</td></tr>
+<tr><td>6</td><td>One container or one per simulator?</td><td>One <code>simulators</code> binary and container, with each simulator running as tokio tasks.</td></tr>
+</tbody>
+</table>
+
+<h2 id="later">Heads-up for later milestones</h2>
+<ul>
+<li><strong>YAML in M3:</strong> SPEC §11 lists <code>serde_yaml</code>, but it is deprecated. Its fork <code>serde_yml</code> is flagged as unsound (RUSTSEC-2025-0068). For the mapping configs, I’ll propose <code>serde-saphyr</code> 2.1.1, which is maintained and was released this week.</li>
+<li><strong>Docs format in M9:</strong> SPEC §10 asks for <code>docs/architecture.md</code> in Markdown, which conflicts with your rule that docs are HTML. We can decide when we get there.</li>
+<li><strong>rumqttc:</strong> the spec’s MQTT client, version 0.25.1, was last released in November 2025. It is still clean in RustSec, and <code>make audit</code> keeps watching it.</li>
+</ul>
+
+<h2 id="deps">New dependencies</h2>
+<p>These are all the latest stable releases, checked today against RustSec. For example, <code>tokio</code> 1.54.1 fixes the 1.54.0 interval race (RUSTSEC-2026-0384), and <code>quick-xml</code> 0.42 is past both of this year’s advisories.</p>
+<table>
+<thead><tr><th>Crate</th><th>Version</th><th>For</th></tr></thead>
+<tbody>
+<tr><td><code>tokio</code></td><td>1.54.1</td><td>runtime, timers, semaphore</td></tr>
+<tr><td><code>rumqttc</code></td><td>0.25.1</td><td>MQTT</td></tr>
+<tr><td><code>reqwest</code></td><td>0.13.5</td><td>webhook posts (rustls)</td></tr>
+<tr><td><code>quick-xml</code></td><td>0.42.0</td><td>neckar-infra XML</td></tr>
+<tr><td><code>csv</code></td><td>1.4.0</td><td>rheinbau-gmbh CSV</td></tr>
+<tr><td><code>russh</code> + <code>russh-sftp</code></td><td>0.65.1 + 3.0.1</td><td>SFTP upload (pure Rust)</td></tr>
+<tr><td><code>chrono-tz</code></td><td>0.10.4</td><td>Europe/Berlin local times</td></tr>
+<tr><td><code>rand</code></td><td>0.10.3</td><td>seeded randomness</td></tr>
+<tr><td><code>tracing</code> + <code>tracing-subscriber</code></td><td>0.1.44 + 0.3.23</td><td>logs</td></tr>
+</tbody>
+</table>
+<p>Haversine is ten lines of code, so it doesn’t get a crate.</p>
+
+</div>
+</article>
+</div></div></div></div></div>
+</main>
+</div>
+</body>
+</html>

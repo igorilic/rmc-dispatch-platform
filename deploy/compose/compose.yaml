@@ -1,4 +1,4 @@
-# Local infrastructure (SPEC §9). Services and simulators join in later milestones.
+# Local stack (SPEC §9): infrastructure plus the simulators. The other services arrive in later milestones.
 # Images are pinned to exact versions; Dependabot proposes bumps.
 # Host ports bind to 127.0.0.1 only: the dev credentials below never leave this machine.
 name: pourline
@@ -42,6 +42,25 @@ services:
       PASSWORD_ACCESS: "true"
       TZ: Europe/Berlin
     ports: ["127.0.0.1:2222:2222"]
+    healthcheck:
+      # ponytail: the image has no netcat, so look for the listening socket (0x08AE = 2222).
+      test: ["CMD-SHELL", "grep -q ':08AE ' /proc/net/tcp /proc/net/tcp6"]
+      interval: 2s
+      retries: 30
+
+  simulators:
+    build:
+      context: ../..
+      args: { BIN: simulators }
+    env_file: [{ path: ../../.env, required: false }]
+    environment:
+      MQTT_URL: mqtt://mosquitto:1883
+      SFTP_HOST: sftp
+      SFTP_PORT: "2222"
+    depends_on:
+      mosquitto: { condition: service_healthy }
+      sftp: { condition: service_healthy }
+    restart: unless-stopped
 
   prometheus:
     image: prom/prometheus:v3.16.0

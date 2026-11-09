@@ -26,3 +26,13 @@ jobs:
         with:
           tool: cargo-audit
       - run: make audit
+
+  # Prove every service image still builds.
+  image:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        bin: [simulators]
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build --build-arg BIN=${{ matrix.bin }} -t pourline/${{ matrix.bin }}:ci .

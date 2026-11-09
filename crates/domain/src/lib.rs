@@ -43,6 +43,18 @@ pub struct Location {
     pub lon: f64,
 }
 
+impl Location {
+    /// Great-circle (haversine) distance in km. Roads are longer; callers apply a road factor.
+    pub fn distance_km(self, other: Location) -> f64 {
+        const EARTH_RADIUS_KM: f64 = 6371.0;
+        let (lat1, lat2) = (self.lat.to_radians(), other.lat.to_radians());
+        let dlat = lat2 - lat1;
+        let dlon = (other.lon - self.lon).to_radians();
+        let a = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
+        2.0 * EARTH_RADIUS_KM * a.sqrt().asin()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlantStatus {
@@ -263,6 +275,22 @@ mod tests {
             serde_json::to_value(PlantStatus::Offline).unwrap(),
             "offline"
         );
+    }
+
+    #[test]
+    fn distance_is_great_circle_km() {
+        let mannheim = Location {
+            lat: 49.4875,
+            lon: 8.466,
+        };
+        let heidelberg = Location {
+            lat: 49.3988,
+            lon: 8.6724,
+        };
+        // Reference value computed independently (haversine, R = 6371 km).
+        assert!((mannheim.distance_km(heidelberg) - 17.8874).abs() < 0.001);
+        assert!((heidelberg.distance_km(mannheim) - 17.8874).abs() < 0.001);
+        assert_eq!(mannheim.distance_km(mannheim), 0.0);
     }
 
     #[test]

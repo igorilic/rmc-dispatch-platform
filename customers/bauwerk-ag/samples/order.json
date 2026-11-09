@@ -1,0 +1,11 @@
+{
+  "jobId": "BW-2026-0042",
+  "updatedAt": "2026-11-09T10:15:02+01:00",
+  "deliverTo": { "siteRef": "BW-HD-03" },
+  "product": "C30/37-XC4",
+  "qty": { "value": 42.5, "unit": "m3" },
+  "pourStart": "2026-11-10T07:00:00+01:00",
+  "pumpRate": 30,
+  "maxIntervalMinutes": 20,
+  "state": "CONFIRMED"
+}

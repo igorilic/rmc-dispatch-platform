@@ -1,0 +1,643 @@
+{
+  "plants": [
+    {
+      "id": "plant-mannheim",
+      "location": {
+        "lat": 49.4875,
+        "lon": 8.466
+      },
+      "loading_bays": 3,
+      "batching_rate_m3_per_h": 150.0,
+      "operating_hours": {
+        "open": "05:00:00",
+        "close": "20:00:00"
+      },
+      "status": "online"
+    },
+    {
+      "id": "plant-weinheim",
+      "location": {
+        "lat": 49.545,
+        "lon": 8.665
+      },
+      "loading_bays": 2,
+      "batching_rate_m3_per_h": 100.0,
+      "operating_hours": {
+        "open": "06:00:00",
+        "close": "18:00:00"
+      },
+      "status": "online"
+    },
+    {
+      "id": "plant-walldorf",
+      "location": {
+        "lat": 49.3064,
+        "lon": 8.6428
+      },
+      "loading_bays": 2,
+      "batching_rate_m3_per_h": 120.0,
+      "operating_hours": {
+        "open": "05:00:00",
+        "close": "20:00:00"
+      },
+      "status": "online"
+    }
+  ],
+  "trucks": [
+    {
+      "id": "truck-01",
+      "home_plant": "plant-mannheim",
+      "drum_capacity_m3": 8.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-02",
+      "home_plant": "plant-mannheim",
+      "drum_capacity_m3": 9.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-03",
+      "home_plant": "plant-mannheim",
+      "drum_capacity_m3": 7.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-04",
+      "home_plant": "plant-mannheim",
+      "drum_capacity_m3": 10.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-05",
+      "home_plant": "plant-mannheim",
+      "drum_capacity_m3": 8.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-06",
+      "home_plant": "plant-mannheim",
+      "drum_capacity_m3": 9.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-07",
+      "home_plant": "plant-mannheim",
+      "drum_capacity_m3": 8.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-08",
+      "home_plant": "plant-mannheim",
+      "drum_capacity_m3": 9.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-09",
+      "home_plant": "plant-mannheim",
+      "drum_capacity_m3": 12.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-10",
+      "home_plant": "plant-mannheim",
+      "drum_capacity_m3": 10.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-11",
+      "home_plant": "plant-weinheim",
+      "drum_capacity_m3": 8.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-12",
+      "home_plant": "plant-weinheim",
+      "drum_capacity_m3": 9.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-13",
+      "home_plant": "plant-weinheim",
+      "drum_capacity_m3": 7.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-14",
+      "home_plant": "plant-weinheim",
+      "drum_capacity_m3": 9.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-15",
+      "home_plant": "plant-weinheim",
+      "drum_capacity_m3": 10.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-16",
+      "home_plant": "plant-weinheim",
+      "drum_capacity_m3": 8.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-17",
+      "home_plant": "plant-weinheim",
+      "drum_capacity_m3": 15.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-18",
+      "home_plant": "plant-walldorf",
+      "drum_capacity_m3": 9.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-19",
+      "home_plant": "plant-walldorf",
+      "drum_capacity_m3": 8.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-20",
+      "home_plant": "plant-walldorf",
+      "drum_capacity_m3": 7.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-21",
+      "home_plant": "plant-walldorf",
+      "drum_capacity_m3": 9.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-22",
+      "home_plant": "plant-walldorf",
+      "drum_capacity_m3": 10.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-23",
+      "home_plant": "plant-walldorf",
+      "drum_capacity_m3": 8.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-24",
+      "home_plant": "plant-walldorf",
+      "drum_capacity_m3": 9.0,
+      "status": "available",
+      "last_position": null
+    },
+    {
+      "id": "truck-25",
+      "home_plant": "plant-walldorf",
+      "drum_capacity_m3": 8.0,
+      "status": "available",
+      "last_position": null
+    }
+  ],
+  "sites": [
+    {
+      "id": "site-wh-01",
+      "customer": "bauwerk-ag",
+      "location": {
+        "lat": 49.5512,
+        "lon": 8.6589
+      },
+      "access_notes": "Gate 1, pump on the north side",
+      "customer_ref": "BW-WH-01"
+    },
+    {
+      "id": "site-wh-02",
+      "customer": "bauwerk-ag",
+      "location": {
+        "lat": 49.5375,
+        "lon": 8.6758
+      },
+      "access_notes": "Access via the construction road, max 32 t",
+      "customer_ref": "BW-WH-02"
+    },
+    {
+      "id": "site-vh-01",
+      "customer": "bauwerk-ag",
+      "location": {
+        "lat": 49.5457,
+        "lon": 8.5737
+      },
+      "access_notes": "Narrow street, approach from the east",
+      "customer_ref": "BW-VH-01"
+    },
+    {
+      "id": "site-vh-02",
+      "customer": "bauwerk-ag",
+      "location": {
+        "lat": 49.5348,
+        "lon": 8.5874
+      },
+      "access_notes": "No deliveries after 20:00 (noise limit)",
+      "customer_ref": "BW-VH-02"
+    },
+    {
+      "id": "site-ma-01",
+      "customer": "bauwerk-ag",
+      "location": {
+        "lat": 49.4943,
+        "lon": 8.4779
+      },
+      "access_notes": "Washout area next to the site office",
+      "customer_ref": "BW-MA-01"
+    },
+    {
+      "id": "site-ma-02",
+      "customer": "bauwerk-ag",
+      "location": {
+        "lat": 49.4786,
+        "lon": 8.4842
+      },
+      "access_notes": "Gate 1, pump on the north side",
+      "customer_ref": "BW-MA-02"
+    },
+    {
+      "id": "site-hd-01",
+      "customer": "bauwerk-ag",
+      "location": {
+        "lat": 49.4045,
+        "lon": 8.6821
+      },
+      "access_notes": "Access via the construction road, max 32 t",
+      "customer_ref": "BW-HD-01"
+    },
+    {
+      "id": "site-hd-02",
+      "customer": "bauwerk-ag",
+      "location": {
+        "lat": 49.3922,
+        "lon": 8.6653
+      },
+      "access_notes": "Narrow street, approach from the east",
+      "customer_ref": "BW-HD-02"
+    },
+    {
+      "id": "site-hd-03",
+      "customer": "bauwerk-ag",
+      "location": {
+        "lat": 49.3881,
+        "lon": 8.6884
+      },
+      "access_notes": "No deliveries after 20:00 (noise limit)",
+      "customer_ref": "BW-HD-03"
+    },
+    {
+      "id": "site-lm-01",
+      "customer": "bauwerk-ag",
+      "location": {
+        "lat": 49.3524,
+        "lon": 8.6842
+      },
+      "access_notes": "Washout area next to the site office",
+      "customer_ref": "BW-LM-01"
+    },
+    {
+      "id": "site-lm-02",
+      "customer": "bauwerk-ag",
+      "location": {
+        "lat": 49.3429,
+        "lon": 8.6989
+      },
+      "access_notes": "Gate 1, pump on the north side",
+      "customer_ref": "BW-LM-02"
+    },
+    {
+      "id": "site-wd-01",
+      "customer": "bauwerk-ag",
+      "location": {
+        "lat": 49.3141,
+        "lon": 8.6295
+      },
+      "access_notes": "Access via the construction road, max 32 t",
+      "customer_ref": "BW-WD-01"
+    },
+    {
+      "id": "site-wl-01",
+      "customer": "bauwerk-ag",
+      "location": {
+        "lat": 49.299,
+        "lon": 8.7074
+      },
+      "access_notes": "Narrow street, approach from the east",
+      "customer_ref": "BW-WL-01"
+    },
+    {
+      "id": "site-wl-02",
+      "customer": "bauwerk-ag",
+      "location": {
+        "lat": 49.288,
+        "lon": 8.6905
+      },
+      "access_notes": "No deliveries after 20:00 (noise limit)",
+      "customer_ref": "BW-WL-02"
+    },
+    {
+      "id": "site-ma-03",
+      "customer": "rheinbau-gmbh",
+      "location": {
+        "lat": 49.4991,
+        "lon": 8.4568
+      },
+      "access_notes": "Washout area next to the site office",
+      "customer_ref": "RB-MA-01"
+    },
+    {
+      "id": "site-ma-04",
+      "customer": "rheinbau-gmbh",
+      "location": {
+        "lat": 49.4703,
+        "lon": 8.4737
+      },
+      "access_notes": "Gate 1, pump on the north side",
+      "customer_ref": "RB-MA-02"
+    },
+    {
+      "id": "site-ma-05",
+      "customer": "rheinbau-gmbh",
+      "location": {
+        "lat": 49.4978,
+        "lon": 8.4926
+      },
+      "access_notes": "Access via the construction road, max 32 t",
+      "customer_ref": "RB-MA-03"
+    },
+    {
+      "id": "site-lu-01",
+      "customer": "rheinbau-gmbh",
+      "location": {
+        "lat": 49.484,
+        "lon": 8.4232
+      },
+      "access_notes": "Narrow street, approach from the east",
+      "customer_ref": "RB-LU-01"
+    },
+    {
+      "id": "site-lu-02",
+      "customer": "rheinbau-gmbh",
+      "location": {
+        "lat": 49.469,
+        "lon": 8.4337
+      },
+      "access_notes": "No deliveries after 20:00 (noise limit)",
+      "customer_ref": "RB-LU-02"
+    },
+    {
+      "id": "site-sp-01",
+      "customer": "rheinbau-gmbh",
+      "location": {
+        "lat": 49.323,
+        "lon": 8.4316
+      },
+      "access_notes": "Washout area next to the site office",
+      "customer_ref": "RB-SP-01"
+    },
+    {
+      "id": "site-sp-02",
+      "customer": "rheinbau-gmbh",
+      "location": {
+        "lat": 49.3113,
+        "lon": 8.4442
+      },
+      "access_notes": "Gate 1, pump on the north side",
+      "customer_ref": "RB-SP-02"
+    },
+    {
+      "id": "site-schw-01",
+      "customer": "rheinbau-gmbh",
+      "location": {
+        "lat": 49.3881,
+        "lon": 8.5621
+      },
+      "access_notes": "Access via the construction road, max 32 t",
+      "customer_ref": "RB-SCHW-01"
+    },
+    {
+      "id": "site-schw-02",
+      "customer": "rheinbau-gmbh",
+      "location": {
+        "lat": 49.3771,
+        "lon": 8.5789
+      },
+      "access_notes": "Narrow street, approach from the east",
+      "customer_ref": "RB-SCHW-02"
+    },
+    {
+      "id": "site-ho-01",
+      "customer": "rheinbau-gmbh",
+      "location": {
+        "lat": 49.3223,
+        "lon": 8.5389
+      },
+      "access_notes": "No deliveries after 20:00 (noise limit)",
+      "customer_ref": "RB-HO-01"
+    },
+    {
+      "id": "site-ho-02",
+      "customer": "rheinbau-gmbh",
+      "location": {
+        "lat": 49.3127,
+        "lon": 8.5558
+      },
+      "access_notes": "Washout area next to the site office",
+      "customer_ref": "RB-HO-02"
+    },
+    {
+      "id": "site-ep-01",
+      "customer": "rheinbau-gmbh",
+      "location": {
+        "lat": 49.4073,
+        "lon": 8.6274
+      },
+      "access_notes": "Gate 1, pump on the north side",
+      "customer_ref": "RB-EP-01"
+    },
+    {
+      "id": "site-lb-01",
+      "customer": "rheinbau-gmbh",
+      "location": {
+        "lat": 49.4662,
+        "lon": 8.6
+      },
+      "access_notes": "Access via the construction road, max 32 t",
+      "customer_ref": "RB-LB-01"
+    },
+    {
+      "id": "site-hd-04",
+      "customer": "neckar-infra",
+      "location": {
+        "lat": 49.4141,
+        "lon": 8.6758
+      },
+      "access_notes": "Narrow street, approach from the east",
+      "customer_ref": "NI-HD-01"
+    },
+    {
+      "id": "site-hd-05",
+      "customer": "neckar-infra",
+      "location": {
+        "lat": 49.4169,
+        "lon": 8.6947
+      },
+      "access_notes": "No deliveries after 20:00 (noise limit)",
+      "customer_ref": "NI-HD-02"
+    },
+    {
+      "id": "site-hd-06",
+      "customer": "neckar-infra",
+      "location": {
+        "lat": 49.3949,
+        "lon": 8.6526
+      },
+      "access_notes": "Washout area next to the site office",
+      "customer_ref": "NI-HD-03"
+    },
+    {
+      "id": "site-ng-01",
+      "customer": "neckar-infra",
+      "location": {
+        "lat": 49.3949,
+        "lon": 8.7895
+      },
+      "access_notes": "Gate 1, pump on the north side",
+      "customer_ref": "NI-NG-01"
+    },
+    {
+      "id": "site-ng-02",
+      "customer": "neckar-infra",
+      "location": {
+        "lat": 49.384,
+        "lon": 8.8063
+      },
+      "access_notes": "Access via the construction road, max 32 t",
+      "customer_ref": "NI-NG-02"
+    },
+    {
+      "id": "site-bm-01",
+      "customer": "neckar-infra",
+      "location": {
+        "lat": 49.3566,
+        "lon": 8.7811
+      },
+      "access_notes": "Narrow street, approach from the east",
+      "customer_ref": "NI-BM-01"
+    },
+    {
+      "id": "site-lb-02",
+      "customer": "neckar-infra",
+      "location": {
+        "lat": 49.4799,
+        "lon": 8.6147
+      },
+      "access_notes": "No deliveries after 20:00 (noise limit)",
+      "customer_ref": "NI-LB-01"
+    },
+    {
+      "id": "site-ep-02",
+      "customer": "neckar-infra",
+      "location": {
+        "lat": 49.4114,
+        "lon": 8.6379
+      },
+      "access_notes": "Washout area next to the site office",
+      "customer_ref": "NI-EP-01"
+    },
+    {
+      "id": "site-lm-03",
+      "customer": "neckar-infra",
+      "location": {
+        "lat": 49.3387,
+        "lon": 8.68
+      },
+      "access_notes": "Gate 1, pump on the north side",
+      "customer_ref": "NI-LM-01"
+    },
+    {
+      "id": "site-wl-03",
+      "customer": "neckar-infra",
+      "location": {
+        "lat": 49.288,
+        "lon": 8.7179
+      },
+      "access_notes": "Access via the construction road, max 32 t",
+      "customer_ref": "NI-WL-01"
+    },
+    {
+      "id": "site-si-01",
+      "customer": "neckar-infra",
+      "location": {
+        "lat": 49.2592,
+        "lon": 8.8737
+      },
+      "access_notes": "Narrow street, approach from the east",
+      "customer_ref": "NI-SI-01"
+    },
+    {
+      "id": "site-si-02",
+      "customer": "neckar-infra",
+      "location": {
+        "lat": 49.2483,
+        "lon": 8.8905
+      },
+      "access_notes": "No deliveries after 20:00 (noise limit)",
+      "customer_ref": "NI-SI-02"
+    },
+    {
+      "id": "site-si-03",
+      "customer": "neckar-infra",
+      "location": {
+        "lat": 49.2442,
+        "lon": 8.8653
+      },
+      "access_notes": "Washout area next to the site office",
+      "customer_ref": "NI-SI-03"
+    }
+  ],
+  "mixes": [
+    {
+      "code": "C20/25-X0",
+      "max_minutes_from_batching": 90
+    },
+    {
+      "code": "C25/30-XC2",
+      "max_minutes_from_batching": 90
+    },
+    {
+      "code": "C30/37-XC4",
+      "max_minutes_from_batching": 90
+    },
+    {
+      "code": "C30/37-XC4-VZ",
+      "max_minutes_from_batching": 150
+    }
+  ]
+}

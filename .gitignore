@@ -1,2 +1,5 @@
 /target
 .env
+
+# Local design system (Tailwind Plus Spotlight, licensed): never committed
+docs/.design
