@@ -55,11 +55,10 @@ postal code's centroid. The world also has 3 plants, 25 trucks and 4 mix designs
 plan in `docs/context/specs/` has diagrams of how it fits together.
 
 ```sh
-make logs                                          # status changes, batch tickets, orders, SFTP drops
-C="docker compose -f deploy/compose/compose.yaml"
-$C exec mosquitto mosquitto_sub -t 'trucks/#' -v   # live truck telematics
-$C exec mosquitto mosquitto_sub -t 'plants/#' -v   # batch tickets
-$C exec sftp ls -l /config/rheinbau-gmbh           # rheinbau-gmbh's CSV drops
+make logs                                                         # status changes, tickets, orders, SFTP drops
+docker exec pourline-mosquitto-1 mosquitto_sub -t 'trucks/#' -v   # live truck telematics
+docker exec pourline-mosquitto-1 mosquitto_sub -t 'plants/#' -v   # batch tickets
+docker exec pourline-sftp-1 ls -l /config/rheinbau-gmbh           # rheinbau-gmbh's CSV drops
 ```
 
 | What | Channel | Notes |
