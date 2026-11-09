@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use domain::{Location, Truck, TruckStatus};
+use domain::{DrumRotation, Location, Truck, TruckStatus};
 use rand::seq::IndexedRandom;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use serde::Serialize;
@@ -32,7 +32,7 @@ use tracing::{debug, info};
 use crate::Clock;
 use crate::link::{Chaos, Modem, Outgoing};
 use crate::plant::PlantSim;
-use crate::world::World;
+use domain::Seed;
 
 pub const ROAD_FACTOR: f64 = 1.3;
 pub const AVG_SPEED_KMH: f64 = 40.0;
@@ -45,23 +45,12 @@ pub struct FleetConfig {
     pub dead_zone_trip_share: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum Rotation {
-    Charging,
-    Mixing,
-    Discharging,
-    Idle,
-}
-
-impl Rotation {
-    fn rpm(self) -> f64 {
-        match self {
-            Rotation::Charging => 14.0,
-            Rotation::Mixing => 3.0,
-            Rotation::Discharging => 8.0,
-            Rotation::Idle => 0.0,
-        }
+fn rpm(rotation: DrumRotation) -> f64 {
+    match rotation {
+        DrumRotation::Charging => 14.0,
+        DrumRotation::Mixing => 3.0,
+        DrumRotation::Discharging => 8.0,
+        DrumRotation::Idle => 0.0,
     }
 }
 
@@ -125,7 +114,7 @@ struct Gps {
 
 #[derive(Serialize)]
 struct Drum {
-    rotation: Rotation,
+    rotation: DrumRotation,
     rpm: f64,
 }
 
@@ -137,7 +126,7 @@ struct Status {
 pub struct TruckSim {
     truck: Truck,
     home: Arc<PlantSim>,
-    world: Arc<World>,
+    world: Arc<Seed>,
     out: mpsc::Sender<Outgoing>,
     clock: Clock,
     modem: Modem,
@@ -145,14 +134,14 @@ pub struct TruckSim {
     dead_zone_trip_share: f64,
     seq: u64,
     status: Option<TruckStatus>,
-    rotation: Option<Rotation>,
+    rotation: Option<DrumRotation>,
 }
 
 impl TruckSim {
     pub fn new(
         truck: Truck,
         home: Arc<PlantSim>,
-        world: Arc<World>,
+        world: Arc<Seed>,
         out: mpsc::Sender<Outgoing>,
         clock: Clock,
         config: FleetConfig,
@@ -177,8 +166,13 @@ impl TruckSim {
         // Stagger the fleet so 25 trucks don't all queue at once.
         let rest = Duration::from_secs(self.rng.random_range(0..120));
         let home = Motion::Parked(self.home.plant.location);
-        self.phase(TruckStatus::Available, Rotation::Idle, home, sleep(rest))
-            .await?;
+        self.phase(
+            TruckStatus::Available,
+            DrumRotation::Idle,
+            home,
+            sleep(rest),
+        )
+        .await?;
         loop {
             self.trip().await?;
         }
@@ -210,7 +204,7 @@ impl TruckSim {
         let bay = self
             .phase(
                 TruckStatus::Available,
-                Rotation::Idle,
+                DrumRotation::Idle,
                 parked.clone(),
                 plant.acquire_bay(),
             )
@@ -219,7 +213,7 @@ impl TruckSim {
         let ticket = self
             .phase(
                 TruckStatus::Loading,
-                Rotation::Charging,
+                DrumRotation::Charging,
                 parked.clone(),
                 load,
             )
@@ -228,19 +222,24 @@ impl TruckSim {
         let paperwork = self.minutes(1..=3);
         self.phase(
             TruckStatus::Loading,
-            Rotation::Mixing,
+            DrumRotation::Mixing,
             parked,
             sleep(paperwork),
         )
         .await?;
 
         let out = self.drive(plant_at, site_at);
-        self.phase(TruckStatus::EnRoute, Rotation::Mixing, out.0, sleep(out.1))
-            .await?;
+        self.phase(
+            TruckStatus::EnRoute,
+            DrumRotation::Mixing,
+            out.0,
+            sleep(out.1),
+        )
+        .await?;
         let wait = self.minutes(2..=10);
         self.phase(
             TruckStatus::OnSite,
-            Rotation::Mixing,
+            DrumRotation::Mixing,
             Motion::Parked(site_at),
             sleep(wait),
         )
@@ -251,7 +250,7 @@ impl TruckSim {
         let on_site = Motion::Parked(site_at);
         self.phase(
             TruckStatus::Discharging,
-            Rotation::Discharging,
+            DrumRotation::Discharging,
             on_site,
             sleep(discharge),
         )
@@ -260,7 +259,7 @@ impl TruckSim {
         let back = self.drive(site_at, plant_at);
         self.phase(
             TruckStatus::Returning,
-            Rotation::Idle,
+            DrumRotation::Idle,
             back.0,
             sleep(back.1),
         )
@@ -268,7 +267,7 @@ impl TruckSim {
         let rest = self.minutes(5..=20);
         self.phase(
             TruckStatus::Available,
-            Rotation::Idle,
+            DrumRotation::Idle,
             Motion::Parked(plant_at),
             sleep(rest),
         )
@@ -310,7 +309,7 @@ impl TruckSim {
     async fn phase<T>(
         &mut self,
         status: TruckStatus,
-        rotation: Rotation,
+        rotation: DrumRotation,
         motion: Motion,
         until: impl Future<Output = T>,
     ) -> anyhow::Result<T> {
@@ -326,7 +325,7 @@ impl TruckSim {
                 "drum",
                 Drum {
                     rotation,
-                    rpm: rotation.rpm(),
+                    rpm: rpm(rotation),
                 },
             )
             .await?;
@@ -360,7 +359,7 @@ impl TruckSim {
                     "drum",
                     Drum {
                         rotation,
-                        rpm: rotation.rpm(),
+                        rpm: rpm(rotation),
                     },
                 )
                 .await?;
@@ -423,12 +422,12 @@ mod tests {
     }
 
     /// Runs one truck until it is available again after its first trip.
-    async fn one_trip(world: World, dead_zone_trip_share: f64) -> (Vec<Seen>, Arc<World>) {
+    async fn one_trip(world: Seed, dead_zone_trip_share: f64) -> (Vec<Seen>, Arc<Seed>) {
         let world = Arc::new(world);
         let (tx, mut rx) = mpsc::channel(100_000);
         let clock = Clock::start(Utc.with_ymd_and_hms(2026, 11, 9, 6, 0, 0).unwrap());
         let truck = world.trucks[0].clone();
-        let home = world.plant(&truck.home_plant).unwrap().clone();
+        let home = world.plant(&truck.home_plant.0).unwrap().clone();
         let plant = Arc::new(PlantSim::new(home, tx.clone(), clock, Chaos::NONE, 1));
         let config = FleetConfig {
             chaos: Chaos::NONE,
@@ -485,7 +484,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_trip_follows_the_lifecycle_and_the_travel_model() {
-        let (seen, world) = one_trip(World::seed().unwrap(), 0.0).await;
+        let (seen, world) = one_trip(Seed::rhine_neckar().unwrap(), 0.0).await;
         assert_eq!(statuses(&seen), LIFECYCLE);
 
         let seqs: Vec<u64> = seen
@@ -542,7 +541,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_dead_zone_delays_messages_but_loses_none() {
-        let (seen, _) = one_trip(World::seed().unwrap(), 1.0).await;
+        let (seen, _) = one_trip(Seed::rhine_neckar().unwrap(), 1.0).await;
         assert_eq!(statuses(&seen), LIFECYCLE);
 
         let seqs: Vec<u64> = seen
@@ -563,7 +562,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn trucks_drive_to_the_postal_code_centroid_of_an_address_only_site() {
-        let mut world = World::seed().unwrap();
+        let mut world = Seed::rhine_neckar().unwrap();
         world.sites.retain(|s| s.location.is_none());
         let centroids: Vec<Location> = world
             .sites

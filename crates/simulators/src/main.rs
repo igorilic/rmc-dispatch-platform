@@ -9,7 +9,6 @@ mod fleet;
 mod link;
 mod orders;
 mod plant;
-mod world;
 
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -33,7 +32,7 @@ use crate::fleet::{FleetConfig, TruckSim};
 use crate::link::Chaos;
 use crate::orders::{OrderBook, OrderNumbers};
 use crate::plant::PlantSim;
-use crate::world::World;
+use domain::Seed;
 
 /// Wall-clock time that follows tokio's clock, so payload timestamps stay right in paused-time tests.
 #[derive(Debug, Clone, Copy)]
@@ -61,6 +60,8 @@ struct Config {
     sftp: SftpDrop,
     bauwerk_webhook_url: Option<String>,
     neckar_webhook_url: Option<String>,
+    bauwerk_webhook_token: String,
+    neckar_webhook_token: String,
     order_interval: Duration,
     fleet: FleetConfig,
     seed: u64,
@@ -94,6 +95,8 @@ impl Config {
             },
             bauwerk_webhook_url: var("BAUWERK_WEBHOOK_URL"),
             neckar_webhook_url: var("NECKAR_WEBHOOK_URL"),
+            bauwerk_webhook_token: parse("WEBHOOK_TOKEN_BAUWERK_AG", "dev-token-bauwerk-ag"),
+            neckar_webhook_token: parse("WEBHOOK_TOKEN_NECKAR_INFRA", "dev-token-neckar-infra"),
             order_interval: secs("ORDER_INTERVAL_SECS", "180")?,
             fleet: FleetConfig {
                 chaos: Chaos {
@@ -124,7 +127,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
     let config = Config::from_lookup(|key| std::env::var(key).ok())?;
-    let world = Arc::new(World::seed()?);
+    let world = Arc::new(Seed::rhine_neckar()?);
     let clock = Clock::start(Utc::now());
     let seed = |n: u64| StdRng::seed_from_u64(config.seed.wrapping_add(n));
 
@@ -195,6 +198,7 @@ async fn main() -> anyhow::Result<()> {
     let bauwerk = Webhook {
         customer: "bauwerk-ag",
         url: config.bauwerk_webhook_url.clone(),
+        token: config.bauwerk_webhook_token.clone(),
         content_type: "application/json",
         duplicate_rate: 0.05,
         render: |order, _| Ok(customers::bauwerk_json(order)?),
@@ -202,6 +206,7 @@ async fn main() -> anyhow::Result<()> {
     let neckar = Webhook {
         customer: "neckar-infra",
         url: config.neckar_webhook_url.clone(),
+        token: config.neckar_webhook_token.clone(),
         content_type: "application/xml",
         duplicate_rate: 0.0,
         render: |order, sites| {
@@ -299,6 +304,9 @@ mod tests {
         assert_eq!(config.fleet.chaos.duplicate_rate, 0.03);
         assert_eq!(config.fleet.dead_zone_trip_share, 0.2);
         assert_eq!(config.seed, 42);
+        // Throwaway dev tokens, the same defaults ingest uses.
+        assert_eq!(config.bauwerk_webhook_token, "dev-token-bauwerk-ag");
+        assert_eq!(config.neckar_webhook_token, "dev-token-neckar-infra");
         assert_eq!(
             (config.bauwerk_webhook_url, config.neckar_webhook_url),
             (None, None)

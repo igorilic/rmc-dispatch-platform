@@ -258,9 +258,22 @@ pub struct Webhook {
     pub customer: &'static str,
     /// `None` until ingest exists. The payload is logged instead.
     pub url: Option<String>,
+    /// Sent as `Authorization: Bearer <token>`.
+    pub token: String,
     pub content_type: &'static str,
     pub duplicate_rate: f64,
     pub render: fn(&GeneratedOrder, &[String]) -> anyhow::Result<String>,
+}
+
+const MAX_ATTEMPTS: u32 = 8;
+
+/// How long to wait before the next attempt: the server's `Retry-After` (in seconds) if it sent
+/// one, otherwise exponential backoff. Either way at most a minute.
+fn retry_delay(attempt: u32, retry_after: Option<&str>) -> Duration {
+    let secs = retry_after
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or_else(|| 2u64.saturating_pow(attempt));
+    Duration::from_secs(secs.min(60))
 }
 
 pub async fn run_webhook(
@@ -292,26 +305,38 @@ async fn deliver(http: &reqwest::Client, hook: &Webhook, order: &GeneratedOrder,
         info!(customer, order = %order.order_ref, revision = order.revision, payload = body, "order (no receiver until M3, logged)");
         return;
     };
-    for attempt in 1..=3u32 {
+    for attempt in 1..=MAX_ATTEMPTS {
         let sent = http
             .post(url)
+            .bearer_auth(&hook.token)
             .header(reqwest::header::CONTENT_TYPE, hook.content_type)
             .body(body.to_owned())
             .send()
-            .await
-            .and_then(reqwest::Response::error_for_status);
-        match sent {
-            Ok(_) => {
-                info!(customer, order = %order.order_ref, revision = order.revision, "order posted");
+            .await;
+        let retry_after = match sent {
+            Ok(response) if response.status().is_success() => {
+                info!(customer, order = %order.order_ref, revision = order.revision, status = %response.status(), "order posted");
                 return;
+            }
+            Ok(response) => {
+                let status = response.status();
+                // Only "busy" and "slow down" are worth retrying; other 4xx won't change by waiting.
+                if status.is_client_error() && status != reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    error!(customer, order = %order.order_ref, %status, "order rejected, not retrying");
+                    return;
+                }
+                warn!(customer, order = %order.order_ref, attempt, %status, "posting the order failed");
+                let header = response.headers().get(reqwest::header::RETRY_AFTER);
+                header.and_then(|v| v.to_str().ok()).map(str::to_owned)
             }
             Err(error) => {
                 warn!(customer, order = %order.order_ref, attempt, %error, "posting the order failed");
-                sleep(Duration::from_secs(2u64.pow(attempt))).await;
+                None
             }
-        }
+        };
+        sleep(retry_delay(attempt, retry_after.as_deref())).await;
     }
-    error!(customer, order = %order.order_ref, "gave up after 3 attempts");
+    error!(customer, order = %order.order_ref, "gave up after {MAX_ATTEMPTS} attempts");
 }
 
 /// rheinbau-gmbh's SFTP account and how often it drops a file.
@@ -405,7 +430,7 @@ async fn upload(drop: &SftpDrop, name: &str, data: &[u8]) -> anyhow::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::World;
+    use domain::Seed;
     use serde_json::Value;
 
     #[allow(clippy::too_many_arguments)]
@@ -433,6 +458,24 @@ mod tests {
             updated_at: "2026-11-09T09:15:02Z".parse().unwrap(),
             cancelled: false,
         }
+    }
+
+    #[test]
+    fn retries_honour_retry_after_and_back_off() {
+        assert_eq!(retry_delay(1, Some("5")), Duration::from_secs(5));
+        assert_eq!(
+            retry_delay(1, Some("3600")),
+            Duration::from_secs(60),
+            "capped"
+        );
+        assert_eq!(
+            retry_delay(1, Some("soon")),
+            Duration::from_secs(2),
+            "unparseable: back off"
+        );
+        assert_eq!(retry_delay(1, None), Duration::from_secs(2));
+        assert_eq!(retry_delay(3, None), Duration::from_secs(8));
+        assert_eq!(retry_delay(10, None), Duration::from_secs(60), "capped");
     }
 
     #[test]
@@ -540,7 +583,7 @@ mod tests {
 
     #[test]
     fn neckar_sites_are_split_between_v1_and_v2() {
-        let world = World::seed().unwrap();
+        let world = Seed::rhine_neckar().unwrap();
         let sites: Vec<String> = world
             .sites_of("10001003")
             .iter()
@@ -562,11 +605,11 @@ mod tests {
 #[cfg(test)]
 mod integration_tests {
     use super::INTEGRATIONS;
-    use crate::world::World;
+    use domain::Seed;
 
     #[test]
     fn every_integration_orders_for_a_known_customer() {
-        let world = World::seed().unwrap();
+        let world = Seed::rhine_neckar().unwrap();
         for (integration, customer) in INTEGRATIONS {
             assert!(
                 world.customers.iter().any(|c| c.id.0 == customer),

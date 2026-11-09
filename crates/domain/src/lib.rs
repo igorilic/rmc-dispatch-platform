@@ -7,6 +7,12 @@
 //! planned [`Load`]s, one per truck trip. A [`Delivery`] only exists once batching for a load starts.
 //! Until then an order has no deliveries at all.
 
+mod events;
+mod seed;
+
+pub use events::{Channel, DrumRotation, Event, EventEnvelope, EventSource};
+pub use seed::Seed;
+
 use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, NaiveTime, Utc};

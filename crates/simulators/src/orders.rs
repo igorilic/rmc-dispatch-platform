@@ -76,7 +76,14 @@ impl OrderBook {
         &self.ship_tos
     }
 
+    /// Drops orders whose start has passed. The customer's system no longer lists them, which keeps
+    /// rheinbau's snapshots bounded however long the simulators run.
+    pub fn prune(&mut self, now: DateTime<Utc>) {
+        self.open.retain(|o| o.start >= now);
+    }
+
     pub fn next_change(&mut self, rng: &mut StdRng, now: DateTime<Utc>) -> GeneratedOrder {
+        self.prune(now);
         let change = match rng.random::<f64>() {
             r if r < 0.80 => None,
             r if r < 0.95 => self.update(rng, now),
@@ -227,6 +234,30 @@ mod tests {
         assert_eq!((updated.revision, updated.updated_at), (2, later));
         assert!((8.0..=150.0).contains(&updated.volume_m3));
         assert_eq!(book.open(), [updated]);
+    }
+
+    #[test]
+    fn orders_leave_the_book_once_their_start_has_passed() {
+        let mut rng = StdRng::seed_from_u64(6);
+        let mut book = book();
+        for _ in 0..20 {
+            book.create(&mut rng, now());
+        }
+        // Every start is at most ~26 h ahead, so two days later the customer no longer lists them.
+        let later = now() + TimeDelta::days(2);
+        book.prune(later);
+        assert!(book.open().is_empty(), "{:?}", book.open());
+
+        // next_change prunes too, so snapshots stay bounded however long the simulators run.
+        for _ in 0..20 {
+            book.create(&mut rng, now());
+        }
+        book.next_change(&mut rng, later);
+        assert!(
+            book.open().iter().all(|o| o.start >= later),
+            "{:?}",
+            book.open()
+        );
     }
 
     #[test]

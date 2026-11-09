@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Milestone 3 plan</title>
+<link rel="stylesheet" href="../../.design/styles.css">
+<style>
+/* Diagram styles: Spotlight tokens only (zinc greys, one teal accent). */
+.dg{display:block;width:100%;height:auto}
+.dg text{font-family:var(--font-sans);font-size:12px;fill:var(--text-body)}
+.dg .t{fill:var(--text-strong);font-weight:600;font-size:13px}
+.dg .s{fill:var(--text-muted);font-size:11px}
+.dg .m{font-family:var(--font-mono);font-size:10.5px;fill:var(--text-strong)}
+.dg .c{text-anchor:middle}
+.dg .end{text-anchor:end}
+.dg .halo{paint-order:stroke;stroke:var(--surface-column);stroke-width:3px;stroke-linejoin:round}
+.dg .b-done{fill:var(--surface-solid);stroke:var(--zinc-500);stroke-width:1}
+.dg .b-now{fill:color-mix(in oklab,var(--accent) 14%,var(--surface-column));stroke:var(--accent);stroke-width:1.5}
+.dg .b-later{fill:none;stroke:var(--zinc-500);stroke-width:1;stroke-dasharray:4 3}
+.dg .g-done{fill:none;stroke:var(--zinc-600);stroke-width:1}
+.dg .g-now{fill:none;stroke:var(--accent);stroke-width:1}
+.dg .e-now{fill:none;stroke:var(--accent);stroke-width:1.5}
+.dg .e-done{fill:none;stroke:var(--zinc-400);stroke-width:1.5}
+.dg .e-err{fill:none;stroke:var(--zinc-500);stroke-width:1.5;stroke-dasharray:4 3}
+.dg .e-ret{fill:none;stroke:var(--zinc-500);stroke-width:1.2;stroke-dasharray:4 3}
+.dg .life{fill:none;stroke:var(--zinc-700);stroke-width:1;stroke-dasharray:3 4}
+.dg .cell{fill:var(--surface-solid);stroke:var(--zinc-600);stroke-width:1}
+.dg .dot-pub{fill:var(--accent)}
+.dg .dot-skip{fill:none;stroke:var(--zinc-400);stroke-width:1.5}
+.ah{fill:var(--zinc-400)}
+.ah-now{fill:var(--accent)}
+.ah-err{fill:var(--zinc-500)}
+.sp-prose figure{margin-left:0;margin-right:0}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+<defs>
+<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0 1 L9 5 L0 9 z"/></marker>
+<marker id="ah-now" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-now" d="M0 1 L9 5 L0 9 z"/></marker>
+<marker id="ah-err" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-err" d="M0 1 L9 5 L0 9 z"/></marker>
+</defs>
+</svg>
+<div class="sp-layout__bg"><div><div></div></div></div>
+<div class="sp-layout__fg">
+<main class="sp-layout__main">
+<div class="sp-container-outer sp-article"><div class="sp-container-outer__in">
+<div class="sp-container-inner"><div class="sp-container-inner__in">
+<div class="sp-article__col">
+<article>
+<header class="sp-article__header">
+<h1 class="sp-h1">Milestone 3 plan: ingest</h1>
+<time class="sp-article__date" datetime="2026-11-09"><span class="sp-bar"></span><span style="margin-left:.75rem">November 9, 2026</span></time>
+</header>
+<div class="sp-prose" style="margin-top:2rem">
+
+<p>Milestone 3 turns everything the simulators send into canonical events on NATS JetStream. That covers orders from three customers with three different formats, plus truck telematics and batch tickets. Customer formats are described in YAML, so there is no customer-specific Rust. Duplicates never create duplicate orders. Anything that can’t be mapped lands in a dead-letter stream, and <code>ingest-cli</code> can replay it after the mapping is fixed. Everything follows the master-data model from the M2 correction: orders carry our customer and ship-to numbers, and ingest checks both.</p>
+
+<p><strong>Done when:</strong></p>
+<ul>
+<li><code>make up</code> runs <code>ingest</code>. The simulators post to it, and the <code>EVENTS</code> stream grows while <code>DLQ</code> stays empty in normal operation.</li>
+<li>Bauwerk retries, repeated rheinbau snapshots and duplicated telematics produce no duplicate events.</li>
+<li><code>ingest-cli validate</code> names the exact row, field and reason for every problem in a broken sample.</li>
+<li>Breaking a mapping fills the DLQ. After the mapping is fixed, <code>ingest-cli dlq replay</code> empties it into <code>EVENTS</code>.</li>
+<li><code>make test</code> passes, including the new integration tests against a real NATS container, and so do <code>make audit</code> and CI.</li>
+</ul>
+
+<h2 id="where">Where ingest sits</h2>
+
+<figure>
+<svg class="dg" viewBox="0 0 680 400" role="img" aria-labelledby="f1t f1d">
+<title id="f1t">Ingest architecture</title>
+<desc id="f1d">The simulators send bauwerk-ag JSON and neckar-infra XML as HTTP posts to ingest’s webhooks. rheinbau-gmbh CSV goes to the SFTP server, which ingest polls. Truck telematics and plant tickets go to Mosquitto, which ingest subscribes to. Inside ingest, every message is mapped and validated against master data, then deduplicated and published to the EVENTS stream on NATS JetStream. Order keys are kept in a dedup key-value bucket. Messages that fail go to the DLQ stream. ingest-cli validates sample files and replays the DLQ.</desc>
+<rect class="b-done" x="10" y="8" width="16" height="12" rx="3"/><text class="s" x="32" y="18">exists (M1, M2)</text>
+<rect class="b-now" x="140" y="8" width="16" height="12" rx="3"/><text class="s" x="162" y="18">built in M3</text>
+
+<rect class="g-done" x="10" y="40" width="120" height="290" rx="12"/>
+<text class="t" x="20" y="60">simulators</text>
+<rect class="b-done" x="18" y="70" width="104" height="36" rx="8"/><text class="t c" x="70" y="86">bauwerk-ag</text><text class="s c" x="70" y="100">JSON</text>
+<rect class="b-done" x="18" y="116" width="104" height="36" rx="8"/><text class="t c" x="70" y="132">neckar-infra</text><text class="s c" x="70" y="146">XML v1/v2</text>
+<rect class="b-done" x="18" y="176" width="104" height="36" rx="8"/><text class="t c" x="70" y="192">rheinbau-gmbh</text><text class="s c" x="70" y="206">CSV</text>
+<rect class="b-done" x="18" y="256" width="104" height="36" rx="8"/><text class="t c" x="70" y="272">trucks, plants</text><text class="s c" x="70" y="286">telematics</text>
+
+<rect class="b-done" x="150" y="176" width="90" height="36" rx="8"/><text class="t c" x="195" y="192">SFTP</text><text class="s c" x="195" y="206">file drop</text>
+<rect class="b-done" x="150" y="256" width="90" height="36" rx="8"/><text class="t c" x="195" y="272">Mosquitto</text><text class="s c" x="195" y="286">MQTT</text>
+
+<rect class="g-now" x="258" y="40" width="268" height="290" rx="12"/>
+<text class="t" x="270" y="60">ingest</text>
+<g><title>axum server: POST /webhooks/{integration}, bearer token per integration, 1 MiB body limit, 503 when busy</title>
+<rect class="b-now" x="268" y="70" width="78" height="82" rx="8"/><text class="t c" x="307" y="102">Webhooks</text><text class="s c" x="307" y="118">HTTP POST</text><text class="s c" x="307" y="132">token auth</text></g>
+<g><title>Polls rheinbau-gmbh/*.csv, ignores .part files, moves finished files to processed/</title>
+<rect class="b-now" x="268" y="176" width="78" height="36" rx="8"/><text class="t c" x="307" y="192">Poller</text><text class="s c" x="307" y="206">SFTP</text></g>
+<g><title>QoS 1 persistent session with manual acks: a message is acked only after its event is in JetStream</title>
+<rect class="b-now" x="268" y="256" width="78" height="36" rx="8"/><text class="t c" x="307" y="272">MQTT</text><text class="s c" x="307" y="286">subscriber</text></g>
+<g><title>Customer formats from customers/&lt;name&gt;/mapping.yaml; telematics and tickets have one fixed vendor format, mapped in Rust</title>
+<rect class="b-now" x="358" y="70" width="78" height="222" rx="8"/><text class="t c" x="397" y="160">Map</text><text class="s c" x="397" y="176">mapping.yaml</text><text class="s c" x="397" y="190">versions</text><text class="s c" x="397" y="204">master data</text></g>
+<g><title>Orders: key derived as configured, checked in the dedup KV. Telematics: JetStream message id. Publishing retries with exponential backoff.</title>
+<rect class="b-now" x="448" y="70" width="70" height="130" rx="8"/><text class="t c" x="483" y="125">Dedup</text><text class="s c" x="483" y="141">&amp; publish</text><text class="s c" x="483" y="155">retries</text></g>
+
+<text class="s c halo" x="195" y="82">POST</text>
+<text class="s c halo" x="195" y="128">POST</text>
+<path class="e-done" d="M122 88 H267" marker-end="url(#ah)"/>
+<path class="e-done" d="M122 134 H267" marker-end="url(#ah)"/>
+<path class="e-done" d="M122 194 H149" marker-end="url(#ah)"/>
+<path class="e-now" d="M240 194 H267" marker-end="url(#ah-now)"/>
+<path class="e-done" d="M122 274 H149" marker-end="url(#ah)"/>
+<path class="e-now" d="M240 274 H267" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M346 111 H357" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M346 194 H357" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M346 274 H357" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M436 135 H447" marker-end="url(#ah-now)"/>
+
+<text class="s c" x="607" y="58">NATS JetStream</text>
+<rect class="b-now" x="545" y="70" width="125" height="46" rx="8"/><text class="t c" x="607" y="90">EVENTS</text><text class="s c" x="607" y="106">canonical events</text>
+<rect class="b-now" x="545" y="150" width="125" height="46" rx="8"/><text class="t c" x="607" y="170">dedup KV</text><text class="s c" x="607" y="186">order keys, 7 days</text>
+<rect class="b-now" x="545" y="230" width="125" height="46" rx="8"/><text class="t c" x="607" y="250">DLQ</text><text class="s c" x="607" y="266">raw + errors</text>
+<path class="e-now" d="M518 93 H544" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M518 173 H544" marker-end="url(#ah-now)"/>
+<path class="e-err" d="M436 253 H544" marker-end="url(#ah-err)"/><text class="s c halo" x="490" y="247">errors</text>
+
+<rect class="b-now" x="258" y="350" width="268" height="40" rx="8"/><text class="t c" x="392" y="367">ingest-cli</text><text class="s c" x="392" y="382">validate · dlq list · dlq replay</text>
+<path class="e-now" d="M607 276 V370 H527" marker-end="url(#ah-now)"/><text class="s" x="613" y="330">replay</text>
+</svg>
+<figcaption>Figure 1. Where ingest sits. Telematics and plant tickets go through ingest too until milestone 7, when the plant-agent takes over the tickets. Dispatch (M4–M5) consumes <code>EVENTS</code>. Hover a box for details.</figcaption>
+</figure>
+
+<h2 id="pipeline">One message through the pipeline</h2>
+
+<figure>
+<svg class="dg" viewBox="0 0 680 216" role="img" aria-labelledby="f2t f2d">
+<title id="f2t">Stages of the ingest pipeline</title>
+<desc id="f2d">A message is received, parsed (choosing a schema version), mapped by mapping.yaml, validated against master data, deduplicated by its idempotency key, published to EVENTS with retries, and then acknowledged. Parse, map and validation errors send it to the DLQ. A key that was already seen is skipped. If NATS stays down after the retries, the message is not acknowledged, so the sender retries.</desc>
+<rect class="b-now" x="14" y="40" width="84" height="70" rx="8"/><text class="t c" x="56" y="62">Receive</text><text class="s c" x="56" y="80">webhook, CSV</text><text class="s c" x="56" y="94">row, MQTT</text>
+<rect class="b-now" x="108" y="40" width="84" height="70" rx="8"/><text class="t c" x="150" y="62">Parse</text><text class="s c" x="150" y="80">JSON/CSV/XML</text><text class="s c" x="150" y="94">pick version</text>
+<rect class="b-now" x="202" y="40" width="84" height="70" rx="8"/><text class="t c" x="244" y="62">Map</text><text class="s c" x="244" y="80">mapping.yaml</text><text class="s c" x="244" y="94">units, tz</text>
+<rect class="b-now" x="296" y="40" width="84" height="70" rx="8"/><text class="t c" x="338" y="62">Validate</text><text class="s c" x="338" y="80">master data</text><text class="s c" x="338" y="94">ship-to, mix</text>
+<rect class="b-now" x="390" y="40" width="84" height="70" rx="8"/><text class="t c" x="432" y="62">Dedup</text><text class="s c" x="432" y="80">idempotency</text><text class="s c" x="432" y="94">key</text>
+<rect class="b-now" x="484" y="40" width="84" height="70" rx="8"/><text class="t c" x="526" y="62">Publish</text><text class="s c" x="526" y="80">EVENTS</text><text class="s c" x="526" y="94">retry, backoff</text>
+<rect class="b-now" x="578" y="40" width="84" height="70" rx="8"/><text class="t c" x="620" y="62">Ack</text><text class="s c" x="620" y="80">202, MQTT ack</text><text class="s c" x="620" y="94">file moved</text>
+<path class="e-now" d="M98 75 H107 M192 75 H201 M286 75 H295 M380 75 H389 M474 75 H483 M568 75 H577"/>
+
+<rect class="b-done" x="108" y="160" width="272" height="44" rx="8"/><text class="t c" x="244" y="178">DLQ stream</text><text class="s c" x="244" y="194">raw message + all errors, sender still acked</text>
+<rect class="b-done" x="390" y="160" width="84" height="44" rx="8"/><text class="t c" x="432" y="178">Skip</text><text class="s c" x="432" y="194">already seen</text>
+<rect class="b-done" x="484" y="160" width="84" height="44" rx="8"/><text class="t c" x="526" y="178">Nack</text><text class="s c" x="526" y="194">sender retries</text>
+<path class="e-err" d="M150 110 V159" marker-end="url(#ah-err)"/><text class="s" x="155" y="140">unparseable</text>
+<path class="e-err" d="M244 110 V159" marker-end="url(#ah-err)"/><text class="s" x="249" y="140">unmapped</text>
+<path class="e-err" d="M338 110 V159" marker-end="url(#ah-err)"/><text class="s" x="343" y="140">invalid</text>
+<path class="e-err" d="M432 110 V159" marker-end="url(#ah-err)"/><text class="s" x="437" y="140">seen</text>
+<path class="e-err" d="M526 110 V159" marker-end="url(#ah-err)"/><text class="s" x="531" y="140">NATS down</text>
+</svg>
+<figcaption>Figure 2. Every message takes the same path, whatever the channel. Errors don’t stop at the first problem: every field error is collected, so the DLQ entry and <code>ingest-cli validate</code> list all of them at once.</figcaption>
+</figure>
+
+<h2 id="mapping">Mapping configs: customers in YAML, not Rust</h2>
+
+<p>Each customer integration has <code>customers/&lt;name&gt;/mapping.yaml</code>. It declares the format, where each canonical field comes from, how to convert it, which customer number the integration may order for, and how to build the idempotency key. Here is rheinbau-gmbh in full:</p>
+
+<pre><code># Orders must be for this master-data customer.
+customer: "10001002"
+format: csv
+csv: { delimiter: ";", header: true }
+timezone: Europe/Berlin
+fields:
+  order_ref:       { column: Auftragsnr }
+  customer:        { column: Kundennr }
+  ship_to:         { column: Warenempfänger }
+  mix:             { column: Sorte }
+  volume_m3:       { column: Menge, number: decimal_comma }
+  requested_start: { column: Liefertermin,
+                     datetime: "%d.%m.%Y %H:%M" }
+  pour_rate_m3_per_h:
+                   { column: Leistung, number: decimal_comma }
+  max_gap_minutes: { column: MaxPause, number: integer }
+  status:
+    column: Status
+    map: { bestätigt: pending, storniert: cancelled }
+# Snapshots carry no revision, so hash the mapped content.
+idempotency: { content_hash: true }</code></pre>
+
+<p>neckar-infra picks one of two field sets by schema version. v2’s litres become m³ through <code>scale</code>:</p>
+
+<pre><code>format: xml
+versions:
+  - when: { path: /Order/@version, equals: "1" }
+    fields:
+      volume_m3: { path: /Order/Quantity, number: decimal }
+      # …
+    idempotency: { content_hash: true }
+  - when: { path: /Order/@version, equals: "2" }
+    fields:
+      volume_m3:
+        path: /Order/Material/@quantityLitres
+        number: decimal
+        scale: 0.001
+      # …
+    idempotency: { fields: [order_ref, revision] }</code></pre>
+
+<table>
+<thead><tr><th>Building block</th><th>Example</th><th>Used by</th></tr></thead>
+<tbody>
+<tr><td><code>column</code> / <code>path</code></td><td><code>Menge</code>, <code>/qty/value</code>, <code>/Order/Header/@orderNo</code></td><td>CSV / JSON / XML</td></tr>
+<tr><td><code>number: decimal_comma</code></td><td><code>42,5</code> → 42.5</td><td>rheinbau</td></tr>
+<tr><td><code>scale</code></td><td><code>42500</code> × 0.001 → 42.5 m³</td><td>neckar v2</td></tr>
+<tr><td><code>datetime</code> + <code>timezone</code></td><td><code>10.11.2026 07:00</code> in Berlin → <code>06:00Z</code>; times that don’t exist (DST) are errors</td><td>rheinbau</td></tr>
+<tr><td><code>map</code></td><td><code>CONFIRMED</code> → <code>pending</code>, <code>storniert</code> → cancelled</td><td>all</td></tr>
+<tr><td><code>versions</code> + <code>when</code></td><td><code>/Order/@version == "2"</code></td><td>neckar</td></tr>
+<tr><td><code>idempotency</code></td><td><code>fields: [order_ref, updated_at]</code> or <code>content_hash: true</code></td><td>all, each its own way</td></tr>
+</tbody>
+</table>
+
+<p>Validation runs after mapping and checks each order against master data:</p>
+<ul>
+<li>the customer number is the integration’s own customer;</li>
+<li>the ship-to exists and belongs to that customer;</li>
+<li>the mix exists;</li>
+<li>volume, pour rate and gap are positive.</li>
+</ul>
+<p>XML is parsed without entity expansion (quick-xml doesn’t do it), so no XXE.</p>
+
+<h2 id="events">Canonical events</h2>
+
+<p>The event types live in <code>domain</code>, next to the entities, and every event shares one envelope. The envelope <code>id</code> is the idempotency key, and it doubles as JetStream’s <code>Nats-Msg-Id</code>.</p>
+
+<pre><code>{
+  "id": "rheinbau-gmbh:RB-7781:9f2c41…",
+  "type": "order_upserted",
+  "occurred_at": "2026-11-09T09:20:00Z",
+  "received_at": "2026-11-09T09:20:01Z",
+  "source": {
+    "integration": "rheinbau-gmbh",
+    "channel": "sftp",
+    "schema_version": null,
+    "reference": "orders_20261109_102000.csv row 2"
+  },
+  "order": {
+    "id": "10001002/RB-7781",
+    "customer": "10001002",
+    "site": "50001023",
+    "mix": "C25/30-XC2",
+    "total_volume_m3": 42.5,
+    "requested_start": "2026-11-10T06:00:00Z",
+    "pour_rate_m3_per_h": 30.0,
+    "max_gap_minutes": 20,
+    "status": "pending"
+  }
+}</code></pre>
+
+<table>
+<thead><tr><th>Event</th><th>From</th><th>Subject</th><th>Duplicates caught by</th></tr></thead>
+<tbody>
+<tr><td><code>order_upserted</code></td><td>customer integrations</td><td><code>events.orders.{customer}</code></td><td>dedup KV, key from <code>mapping.yaml</code></td></tr>
+<tr><td><code>order_cancelled</code></td><td>customer integrations</td><td><code>events.orders.{customer}</code></td><td>dedup KV</td></tr>
+<tr><td><code>truck_position_reported</code></td><td><code>trucks/{id}/gps</code></td><td><code>events.trucks.{id}</code></td><td>message id <code>{truck}:{seq}</code></td></tr>
+<tr><td><code>truck_status_reported</code></td><td><code>trucks/{id}/status</code></td><td><code>events.trucks.{id}</code></td><td>message id</td></tr>
+<tr><td><code>drum_rotation_reported</code></td><td><code>trucks/{id}/drum</code></td><td><code>events.trucks.{id}</code></td><td>message id</td></tr>
+<tr><td><code>batch_ticket_issued</code></td><td><code>plants/{id}/tickets</code></td><td><code>events.plants.{id}</code></td><td>message id <code>{ticket}:{event}</code></td></tr>
+</tbody>
+</table>
+
+<p>Telematics stay facts about trucks. Turning them into delivery events needs the plan, which tells us which load a truck carries, so that is dispatch’s job in M5. Events keep <code>occurred_at</code> from the source, so consumers can tolerate disorder.</p>
+
+<h2 id="idempotency">Idempotency</h2>
+
+<figure>
+<svg class="dg" viewBox="0 0 680 222" role="img" aria-labelledby="f3t f3d">
+<title id="f3t">Which deliveries become events</title>
+<desc id="f3d">rheinbau-gmbh sends a full snapshot every 5 minutes. In the first drop, RB-7001 and RB-7002 are new and published. In the second, both are unchanged and skipped, and the new RB-7003 is published. In the third, RB-7002’s volume changed from 42.5 to 50 cubic metres and is published, while the others are skipped. bauwerk-ag posts BW-0042 at 10:15 (published), retries the same document (skipped), posts an update at 10:22 (published) and a cancellation at 10:31 (published).</desc>
+<text class="t" x="10" y="74">rheinbau-gmbh</text><text class="s" x="10" y="90">CSV snapshot, every 5 min</text>
+<text class="s c" x="235" y="40">drop 10:00</text><text class="s c" x="405" y="40">drop 10:05</text><text class="s c" x="575" y="40">drop 10:10</text>
+
+<rect class="cell" x="170" y="50" width="130" height="20" rx="4"/><circle class="dot-pub" cx="182" cy="60" r="5"/><text class="m" x="194" y="64">RB-7001  20,0 m³</text>
+<rect class="cell" x="170" y="74" width="130" height="20" rx="4"/><circle class="dot-pub" cx="182" cy="84" r="5"/><text class="m" x="194" y="88">RB-7002  42,5 m³</text>
+
+<rect class="cell" x="340" y="50" width="130" height="20" rx="4"/><circle class="dot-skip" cx="352" cy="60" r="4.5"/><text class="m" x="364" y="64">RB-7001  20,0 m³</text>
+<rect class="cell" x="340" y="74" width="130" height="20" rx="4"/><circle class="dot-skip" cx="352" cy="84" r="4.5"/><text class="m" x="364" y="88">RB-7002  42,5 m³</text>
+<rect class="cell" x="340" y="98" width="130" height="20" rx="4"/><circle class="dot-pub" cx="352" cy="108" r="5"/><text class="m" x="364" y="112">RB-7003  18,0 m³</text>
+
+<rect class="cell" x="510" y="50" width="130" height="20" rx="4"/><circle class="dot-skip" cx="522" cy="60" r="4.5"/><text class="m" x="534" y="64">RB-7001  20,0 m³</text>
+<rect class="cell" x="510" y="74" width="130" height="20" rx="4"/><circle class="dot-pub" cx="522" cy="84" r="5"/><text class="m" x="534" y="88">RB-7002  50,0 m³</text>
+<rect class="cell" x="510" y="98" width="130" height="20" rx="4"/><circle class="dot-skip" cx="522" cy="108" r="4.5"/><text class="m" x="534" y="112">RB-7003  18,0 m³</text>
+
+<text class="t" x="10" y="160">bauwerk-ag</text><text class="s" x="10" y="176">JSON, full replacements</text>
+<text class="s c" x="228" y="142">10:15 POST</text><text class="s c" x="350" y="142">10:15 retry</text><text class="s c" x="472" y="142">10:22 update</text><text class="s c" x="594" y="142">10:31 cancel</text>
+<rect class="cell" x="170" y="150" width="116" height="20" rx="4"/><circle class="dot-pub" cx="182" cy="160" r="5"/><text class="m" x="194" y="164">BW-0042 @10:15</text>
+<rect class="cell" x="292" y="150" width="116" height="20" rx="4"/><circle class="dot-skip" cx="304" cy="160" r="4.5"/><text class="m" x="316" y="164">BW-0042 @10:15</text>
+<rect class="cell" x="414" y="150" width="116" height="20" rx="4"/><circle class="dot-pub" cx="426" cy="160" r="5"/><text class="m" x="438" y="164">BW-0042 @10:22</text>
+<rect class="cell" x="536" y="150" width="116" height="20" rx="4"/><circle class="dot-pub" cx="548" cy="160" r="5"/><text class="m" x="560" y="164">BW-0042 @10:31</text>
+
+<circle class="dot-pub" cx="176" cy="204" r="5"/><text class="s" x="186" y="208">new key, published to EVENTS</text>
+<circle class="dot-skip" cx="376" cy="204" r="4.5"/><text class="s" x="386" y="208">key already in the dedup KV, skipped</text>
+</svg>
+<figcaption>Figure 3. Duplicates are skipped and real changes get through. rheinbau’s key is a hash of the mapped content, because its snapshots carry no revision. bauwerk’s key is <code>jobId</code> + <code>updatedAt</code>, so a retry of the same document is skipped while an update or cancellation is not.</figcaption>
+</figure>
+
+<p><strong>Ordering:</strong> to keep it safe, a message is published with the key as its JetStream message id first, and only then is the key recorded in the KV. A crash between the two is covered by JetStream’s 2-minute duplicate window. Telematics duplicates arrive within seconds, so the message id alone is enough for them, and they need no KV.</p>
+
+<h2 id="dlq">Dead letters and replay</h2>
+
+<figure>
+<svg class="dg" viewBox="0 0 680 326" role="img" aria-labelledby="f4t f4d">
+<title id="f4t">A poison message, a mapping fix and a replay</title>
+<desc id="f4d">neckar-infra posts an order that the mapping cannot handle. Ingest stores the raw XML with every error in the DLQ and still answers 202 Accepted. You fix mapping.yaml and run ingest-cli dlq replay. ingest-cli reads the raw XML from the DLQ, maps it with the fixed mapping, publishes OrderUpserted to EVENTS and deletes the message from the DLQ.</desc>
+<rect class="b-done" x="15" y="14" width="110" height="30" rx="8"/><text class="t c" x="70" y="34">neckar-infra</text>
+<rect class="b-now" x="160" y="14" width="110" height="30" rx="8"/><text class="t c" x="215" y="34">ingest</text>
+<rect class="b-now" x="305" y="14" width="110" height="30" rx="8"/><text class="t c" x="360" y="34">DLQ</text>
+<rect class="b-now" x="445" y="14" width="110" height="30" rx="8"/><text class="t c" x="500" y="34">you, ingest-cli</text>
+<rect class="b-now" x="575" y="14" width="100" height="30" rx="8"/><text class="t c" x="625" y="34">EVENTS</text>
+<path class="life" d="M70 44 V318 M215 44 V318 M360 44 V318 M500 44 V318 M625 44 V318"/>
+
+<text class="s c halo" x="142" y="68">POST order (v2)</text><path class="e-now" d="M70 74 H214" marker-end="url(#ah-now)"/>
+<text class="s c halo" x="287" y="98">raw XML + errors</text><path class="e-now" d="M215 104 H359" marker-end="url(#ah-now)"/>
+<text class="s c halo" x="142" y="128">202 Accepted</text><path class="e-ret" d="M215 134 H71" marker-end="url(#ah-err)"/>
+<rect class="b-now" x="450" y="158" width="100" height="28" rx="6"/><text class="s c" x="500" y="176">fix mapping.yaml</text>
+<text class="s c halo" x="430" y="208">dlq replay</text><path class="e-now" d="M500 214 H361" marker-end="url(#ah-now)"/>
+<text class="s c halo" x="430" y="238">raw XML</text><path class="e-ret" d="M360 244 H499" marker-end="url(#ah-err)"/>
+<text class="s c halo" x="562" y="268">OrderUpserted</text><path class="e-now" d="M500 274 H624" marker-end="url(#ah-now)"/>
+<text class="s c halo" x="430" y="298">delete from DLQ</text><path class="e-now" d="M500 304 H361" marker-end="url(#ah-now)"/>
+</svg>
+<figcaption>Figure 4. A poison message isn’t lost and doesn’t block anything. The sender gets <code>202</code> because we keep its message. Replay re-maps with the current <code>mapping.yaml</code>: successes are published and removed from the DLQ, and failures stay with their new error list.</figcaption>
+</figure>
+
+<p>Transient failures, where NATS is slow or down, are not poison. They retry with exponential backoff (0.1 s doubling to 3.2 s, 6 attempts), and if NATS still isn’t back, the sender is told to try again. Only messages that can never succeed as they are go to the DLQ.</p>
+
+<h2 id="backpressure">Backpressure: slow downstream, nothing lost</h2>
+
+<table>
+<thead><tr><th>Channel</th><th>When NATS is slow or down</th><th>Why nothing is lost</th></tr></thead>
+<tbody>
+<tr><td>Webhooks</td><td>At most <code>MAX_IN_FLIGHT</code> requests are processed at once. Beyond that, ingest answers <code>503</code> with <code>Retry-After</code>.</td><td><code>202</code> is only sent after the event is in JetStream. The simulators retry and honour <code>Retry-After</code>.</td></tr>
+<tr><td>MQTT</td><td>A bounded channel fills up, so ingest stops polling and TCP pushes back to the broker.</td><td>QoS 1, a persistent session and manual acks: a message is acked only after its event is in JetStream. Mosquitto’s queue limit is raised.</td></tr>
+<tr><td>SFTP</td><td>The current file waits.</td><td>A file moves to <code>processed/</code> only after its last row is handled. A crash means reprocessing, and dedup absorbs the repeats.</td></tr>
+</tbody>
+</table>
+
+<h2 id="cli">ingest-cli</h2>
+
+<pre><code>$ ingest-cli validate --customer rheinbau-gmbh \
+    --file customers/rheinbau-gmbh/samples/broken.csv
+broken.csv: 3 rows, 2 valid, 1 invalid
+  row 3 (RB-7790) Menge:
+    "12.5" is not a decimal-comma number (e.g. 12,5)
+  row 3 (RB-7790) Warenempfänger:
+    ship-to 50001007 belongs to customer 10001001,
+    not 10001002
+$ echo $status
+1
+
+$ ingest-cli dlq list
+$ ingest-cli dlq replay --customer neckar-infra</code></pre>
+
+<p><code>validate</code> is offline: it needs only the mapping, master data and the file. Each customer gets a deliberately broken sample next to its good one, and the tests pin the exact report.</p>
+
+<h2 id="layout">Code layout</h2>
+<pre><code>crates/domain/src/lib.rs   + event envelope, seed loader
+crates/ingest/src/
+├── lib.rs           used by the service and ingest-cli
+├── mapping.rs       mapping.yaml, parsers, transforms
+├── validate.rs      master-data checks, error report
+├── telematics.rs    MQTT payloads → events
+├── nats.rs          streams, dedup KV, retries, DLQ
+├── sources.rs       webhooks, MQTT, SFTP poller
+└── main.rs          the ingest service
+crates/ingest/tests/ integration tests (NATS container)
+crates/ingest-cli/   validate · dlq list · dlq replay
+customers/&lt;name&gt;/   mapping.yaml + samples/broken.*</code></pre>
+
+<h2 id="config">Configuration</h2>
+<table>
+<thead><tr><th>Variable</th><th>Default</th></tr></thead>
+<tbody>
+<tr><td><code>HTTP_ADDR</code></td><td><code>0.0.0.0:8080</code></td></tr>
+<tr><td><code>NATS_URL</code></td><td><code>nats://localhost:4222</code> (compose sets <code>nats</code>)</td></tr>
+<tr><td><code>MQTT_URL</code>, <code>SFTP_*</code></td><td>as for the simulators</td></tr>
+<tr><td><code>SFTP_POLL_SECS</code></td><td><code>30</code></td></tr>
+<tr><td><code>MAPPINGS_DIR</code></td><td><code>customers</code></td></tr>
+<tr><td><code>WEBHOOK_TOKEN_BAUWERK_AG</code>, <code>WEBHOOK_TOKEN_NECKAR_INFRA</code></td><td>throwaway dev tokens, also given to the simulators</td></tr>
+<tr><td><code>MAX_IN_FLIGHT</code></td><td><code>64</code></td></tr>
+<tr><td><code>DEDUP_TTL_DAYS</code></td><td><code>7</code></td></tr>
+</tbody>
+</table>
+
+<h2 id="steps">Steps</h2>
+
+<h3 id="step-1">Step 1</h3>
+<p><strong>Shared master data and canonical events.</strong> Move the seed loader into <code>domain</code>, so the simulators, ingest and later dispatch read the same master data, and add the event envelope with wire-format tests. Three simulator fixes:</p>
+<ul>
+<li>orders whose start has passed leave the customers’ books, so CSV snapshots stay bounded;</li>
+<li>webhook posts carry a token;</li>
+<li>the simulators honour <code>503</code>/<code>Retry-After</code> with more retries.</li>
+</ul>
+
+<h3 id="step-2">Step 2</h3>
+<p><strong>Mapping engine and the three <code>mapping.yaml</code> files.</strong> This covers the parsers, transforms, version selection, validation against master data and idempotency keys. Tests:</p>
+<ul>
+<li>every good sample maps to golden canonical events;</li>
+<li>every broken sample produces its exact error list;</li>
+<li>a property test checks that the same content always gives the same key and any changed field gives a different one.</li>
+</ul>
+
+<h3 id="step-3">Step 3</h3>
+<p><strong><code>ingest-cli validate</code>.</strong> It prints the report from Step 2 and exits non-zero when anything is invalid. Tests pin the output for the broken samples.</p>
+
+<h3 id="step-4">Step 4</h3>
+<p><strong>NATS pipeline.</strong> Ingest creates the <code>EVENTS</code> and <code>DLQ</code> streams and the dedup KV at startup, and the step adds publishing with retries and dead-lettering. Integration tests run against a NATS container started by testcontainers:</p>
+<ul>
+<li>delivering the same order twice yields one event;</li>
+<li>a changed order yields a second event;</li>
+<li>a poison message lands in the DLQ with its errors.</li>
+</ul>
+
+<h3 id="step-5">Step 5</h3>
+<p><strong>Sources.</strong></p>
+<ul>
+<li>Webhooks get token auth, a 1 MiB body limit and <code>503</code> when full.</li>
+<li>The MQTT subscriber uses manual acks and a persistent session, and maps telematics and tickets.</li>
+<li>The SFTP poller moves files to <code>processed/</code> when they are done.</li>
+</ul>
+<p>Tests: a webhook test checks that a request beyond capacity gets <code>503</code> and that a <code>202</code> means published. Unit tests cover telematics mapping.</p>
+
+<h3 id="step-6">Step 6</h3>
+<p><strong><code>ingest-cli dlq list</code> and <code>replay</code>.</strong> An integration test breaks a mapping, sends a message, fixes the mapping, replays, and then checks that <code>EVENTS</code> has one more event and the DLQ is empty.</p>
+
+<h3 id="step-7">Step 7</h3>
+<p><strong>Compose, docs and the end-to-end check.</strong> Add an <code>ingest</code> service, point the simulators at the webhooks, and raise Mosquitto’s queue limit. The README gets a “Watching ingest” section, CI builds the new images, and <code>.env.example</code> gets the new variables. Then check stream counts on <code>localhost:8222/jsz</code> while the stack runs, and commit.</p>
+
+<h2 id="decisions">Decisions I need from you</h2>
+<p>I’ll use the default unless you say otherwise.</p>
+<table>
+<thead><tr><th>#</th><th>Question</th><th>My default</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Which order events does ingest emit? (SPEC §4 lists <code>NewOrder</code>, <code>OrderVolumeChanged</code> and <code>OrderCancelled</code> as re-dispatch triggers.)</td><td><code>order_upserted</code>, carrying the full order, and <code>order_cancelled</code>. Ingest stays almost stateless, and dispatch derives new and changed orders by comparing with what it has stored (M4–M5).</td></tr>
+<tr><td>2</td><td>Which status does an order from a customer system get?</td><td><code>pending</code>, following your definitions: the customer has confirmed and the dispatch centre hasn’t yet.</td></tr>
+<tr><td>3</td><td>What is our order id?</td><td><code>&lt;customer number&gt;/&lt;customer’s order no&gt;</code>, e.g. <code>10001002/RB-7781</code>.</td></tr>
+<tr><td>4</td><td>Do plant tickets go through ingest?</td><td>Yes, until M7, when the plant-agent takes them over with store-and-forward.</td></tr>
+<tr><td>5</td><td>Should telematics be mapped in YAML too?</td><td>No. There is one telematics vendor with a fixed format, so a small Rust mapper is enough. YAML is for customer integrations, where formats vary.</td></tr>
+<tr><td>6</td><td>Where do idempotency keys live?</td><td>Order keys go in a NATS KV bucket with a 7-day TTL, since snapshots repeat for days. Telematics rely on JetStream’s 2-minute message-id window.</td></tr>
+<tr><td>7</td><td>Should webhooks be authenticated? (The spec doesn’t say; M8’s CRD has Secret refs.)</td><td>Yes: one bearer token per integration, compared in constant time. Dev tokens are throwaway values in <code>.env.example</code>.</td></tr>
+<tr><td>8</td><td>Which YAML library?</td><td><code>serde-saphyr</code>. SPEC §11’s <code>serde_yaml</code> is deprecated, and its fork <code>serde_yml</code> is flagged as unsound (RUSTSEC-2025-0068).</td></tr>
+<tr><td>9</td><td>Where does master data come from until Postgres (M4)?</td><td>The seed file, through a shared loader in <code>domain</code>.</td></tr>
+</tbody>
+</table>
+
+<h2 id="later">Heads-up</h2>
+<ul>
+<li><strong><code>make test</code> now needs Docker,</strong> because SPEC §12 wants integration tests with testcontainers. On colima, the Makefile takes <code>DOCKER_HOST</code> from your Docker context, and CI runners already have Docker.</li>
+<li><strong>Stale revisions:</strong> ingest skips duplicates but doesn’t reorder revisions that arrive out of order. <code>order_upserted</code> carries the source’s revision or timestamp, so dispatch can ignore an older one (M4).</li>
+<li><strong>No healthcheck for ingest in compose:</strong> the distroless image has no curl. <code>/healthz</code> exists, and compose waits for “running”. M6 brings proper probes.</li>
+</ul>
+
+<h2 id="deps">New dependencies</h2>
+<p>These are all the latest stable releases, checked today against RustSec.</p>
+<table>
+<thead><tr><th>Crate</th><th>Version</th><th>For</th></tr></thead>
+<tbody>
+<tr><td><code>async-nats</code></td><td>0.52.0</td><td>JetStream, KV</td></tr>
+<tr><td><code>axum</code></td><td>0.8.9</td><td>webhook server</td></tr>
+<tr><td><code>serde-saphyr</code></td><td>2.1.1</td><td>mapping.yaml</td></tr>
+<tr><td><code>sha2</code></td><td>0.11.1</td><td>content-hash idempotency keys (stable across releases, unlike <code>DefaultHasher</code>)</td></tr>
+<tr><td><code>clap</code></td><td>4.6.7</td><td>ingest-cli</td></tr>
+<tr><td><code>thiserror</code></td><td>2.0.21</td><td>errors in the ingest library (SPEC §15)</td></tr>
+<tr><td><code>testcontainers</code></td><td>0.28.0</td><td>NATS in integration tests (its generic image; the modules crate lags a version behind)</td></tr>
+<tr><td><code>proptest</code></td><td>1.12.0</td><td>the idempotency-key property</td></tr>
+</tbody>
+</table>
+<p>Reused from M2: <code>quick-xml</code>, <code>csv</code>, <code>rumqttc</code>, <code>russh-sftp</code>, <code>chrono-tz</code> and <code>tokio</code>.</p>
+
+</div>
+</article>
+</div></div></div></div></div>
+</main>
+</div>
+</body>
+</html>
