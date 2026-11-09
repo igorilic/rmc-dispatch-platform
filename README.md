@@ -6,15 +6,16 @@ A ready-mix concrete dispatch platform in Rust. It plans which truck carries whi
 which batching plant, so every pour stays continuous and every load is discharged before it
 sets. When a truck breaks down or a site runs late, it re-plans. The full design is in [SPEC.md](SPEC.md).
 
-> **Status: milestone 3 of 9 (ingest).** A simulated world of 25 trucks, three batching plants and
+> **Status: milestone 4 of 9 (dispatch v1).** A simulated world of 25 trucks, three batching plants and
 > three contractors sends orders and telematics. Ingest turns all of it into canonical events on
 > NATS JetStream, with no duplicates, and keeps a dead-letter queue for anything it can't map.
-> Dispatch arrives in milestone 4.
+> Dispatch keeps every order in Postgres and plans truck loads on request, never breaking a hard
+> constraint. Re-dispatch arrives in milestone 5.
 
 ## Prerequisites
 
 - **Docker** with Compose v2. This is all `make up` needs. `make test` needs it too: the
-  integration tests start a NATS container with testcontainers.
+  integration tests start NATS and Postgres containers with testcontainers.
 - **Rust** via [rustup](https://rustup.rs). `rust-toolchain.toml` pins 1.99.1, and rustup installs it on first use.
 - Optional: `cargo install cargo-audit --locked` for `make audit`.
 
@@ -28,6 +29,7 @@ Kubernetes tooling (k3d, kubectl, Helm) is only needed from milestone 7 onwards.
 | `make logs` | Follows the simulators’ logs |
 | `make test` | Runs the fmt check, clippy (`-D warnings`) and all tests |
 | `make audit` | Checks the dependencies against the RustSec advisory database |
+| `make sqlx-prepare` | Refreshes `.sqlx/` after a query or migration changes (needs `make up` and `cargo install sqlx-cli --locked`) |
 | `make down` | Stops everything and deletes the volumes |
 
 `make demo` arrives with milestone 5. `make k8s` and `make chaos` arrive with milestone 7.
@@ -40,6 +42,7 @@ Every port binds to `127.0.0.1` only.
 |---|---|---|
 | Postgres | `localhost:5432` | `pourline` / `pourline`, database `pourline` |
 | Ingest webhooks | http://localhost:8080/webhooks/{integration} | a bearer token per integration |
+| Dispatch API | http://localhost:8081, Swagger UI at http://localhost:8081/swagger-ui/ | none |
 | NATS (JetStream) | `localhost:4222`, monitoring at http://localhost:8222 | none |
 | Mosquitto (MQTT) | `localhost:1883` | anonymous |
 | SFTP | `localhost:2222` | `pourline` / `pourline` |
@@ -134,6 +137,43 @@ To see a replay end to end, break a mapping, let orders fail, fix it, and replay
 | `MAX_IN_FLIGHT` | `64` | Webhook requests processed at once. More get `503` with `Retry-After` |
 | `DEDUP_TTL_DAYS` | `7` | How long order keys are remembered for duplicate detection |
 | `WEBHOOK_TOKEN_<INTEGRATION>` | `dev-token-<integration>` | Bearer token per webhook integration |
+
+## Planning
+
+Dispatch keeps a Postgres copy of the master data and of every order, read from `events.orders.*`
+on the `EVENTS` stream. Its durable consumer resumes after a restart, and an older revision of an
+order never overwrites a newer one. `POST /plans` plans every open order (unconfirmed, pending or
+confirmed) that starts in the next 48 hours, and stores the plan as a new version.
+
+```sh
+curl -s 'localhost:8081/orders?status=pending' | jq length
+curl -s -X POST localhost:8081/plans | jq '.version, .metrics, .unplanned'
+curl -s localhost:8081/plans/latest | jq '.loads[0]'
+```
+
+Each order is split into full drums, with a smaller last load. Each load goes to the plant and
+truck that get it to site earliest, and later loads follow on as the previous one finishes
+discharging. Every plan keeps the hard constraints: one load per truck at a time, loads within
+drum capacity, no more parallel loads than a plant has bays, discharge finished within the mix's
+time limit, no out-of-service trucks or offline plants, and batching only during opening hours.
+An order is planned whole, or listed in `unplanned` with the reason.
+
+`crates/dispatch/src/verify.rs` re-checks those constraints independently of the planner. The
+property tests run it on 300 random worlds, and the API tests run it on plans made from stored
+orders. `metrics` measures the soft objectives: lateness, pour gaps and empty kilometres.
+
+This first plan is greedy: correct, but not good. At the simulators' default order rate, demand
+outgrows 25 trucks within hours, so most orders are planned to start late. Milestone 5's local
+search improves it. The milestone 4 plan in `docs/context/specs/` has diagrams.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `DISPATCH_HTTP_ADDR` | `0.0.0.0:8081` | API server |
+| `DATABASE_URL` | `postgres://pourline:pourline@localhost:5432/pourline` | Postgres (compose sets the container address) |
+| `NATS_URL` | `nats://localhost:4222` | JetStream, shared with ingest |
+
+Queries are checked at compile time against `.sqlx/`, so building needs no database. After you
+change a query or a migration, run `make up` and then `make sqlx-prepare`.
 
 ## Dependencies and security
 

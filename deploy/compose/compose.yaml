@@ -1,4 +1,4 @@
-# Local stack (SPEC §9): infrastructure plus the simulators. The other services arrive in later milestones.
+# Local stack (SPEC §9): infrastructure, the simulators, ingest and dispatch. More services arrive in later milestones.
 # Images are pinned to exact versions; Dependabot proposes bumps.
 # Host ports bind to 127.0.0.1 only: the dev credentials below never leave this machine.
 name: pourline
@@ -66,6 +66,20 @@ services:
       nats: { condition: service_healthy }
       mosquitto: { condition: service_healthy }
       sftp: { condition: service_healthy }
+    restart: unless-stopped
+
+  dispatch:
+    build:
+      context: ../..
+      args: { BIN: dispatch }
+    env_file: [{ path: ../../.env, required: false }]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-pourline}:${POSTGRES_PASSWORD:-pourline}@postgres:5432/${POSTGRES_DB:-pourline}
+      NATS_URL: nats://nats:4222
+    ports: ["127.0.0.1:8081:8081"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      nats: { condition: service_healthy }
     restart: unless-stopped
 
   simulators:
