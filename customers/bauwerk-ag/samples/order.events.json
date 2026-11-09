@@ -1,0 +1,15 @@
+[
+  {
+    "id": "bauwerk-ag:BW-2026-0042:2026-11-09T09:15:02Z",
+    "occurred_at": "2026-11-09T09:15:02Z",
+    "received_at": "2026-11-09T09:20:00Z",
+    "source": { "integration": "bauwerk-ag", "channel": "webhook", "schema_version": null, "reference": "order.json" },
+    "type": "order_upserted",
+    "order": {
+      "id": "10001001/BW-2026-0042", "customer": "10001001", "site": "50001007", "mix": "C30/37-XC4",
+      "total_volume_m3": 42.5, "requested_start": "2026-11-10T06:00:00Z", "pour_rate_m3_per_h": 30.0,
+      "max_gap_minutes": 20, "status": "pending"
+    },
+    "source_revision": "2026-11-09T09:15:02Z"
+  }
+]

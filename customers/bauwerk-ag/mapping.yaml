@@ -1,0 +1,20 @@
+# bauwerk-ag posts JSON with its own field names and re-sends every change as the full document.
+customer: "10001001"          # orders must be for this master-data customer
+channel: webhook
+format: json
+timezone: Europe/Berlin
+fields:
+  order_ref:          { path: /jobId }
+  updated_at:         { path: /updatedAt }
+  customer:           { path: /customerNo }
+  ship_to:            { path: /deliverTo/shipTo }
+  mix:                { path: /product }
+  volume_m3:          { path: /qty/value }
+  requested_start:    { path: /pourStart }
+  pour_rate_m3_per_h: { path: /pumpRate }
+  max_gap_minutes:    { path: /maxIntervalMinutes, number: integer }
+  status:
+    path: /state
+    map: { CONFIRMED: pending, CANCELLED: cancelled }
+# The same document re-sent is a duplicate; a newer updatedAt is a real change.
+idempotency: { fields: [order_ref, updated_at] }

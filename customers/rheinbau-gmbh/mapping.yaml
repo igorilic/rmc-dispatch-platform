@@ -1,0 +1,20 @@
+# rheinbau-gmbh drops a semicolon CSV on SFTP: decimal commas, Berlin local time, full snapshots.
+customer: "10001002"          # orders must be for this master-data customer
+channel: sftp
+format: csv
+csv: { delimiter: ";" }
+timezone: Europe/Berlin
+fields:
+  order_ref:          { column: Auftragsnr }
+  customer:           { column: Kundennr }
+  ship_to:            { column: Warenempfänger }
+  mix:                { column: Sorte }
+  volume_m3:          { column: Menge, number: decimal_comma }
+  requested_start:    { column: Liefertermin, datetime: "%d.%m.%Y %H:%M" }
+  pour_rate_m3_per_h: { column: Leistung, number: decimal_comma }
+  max_gap_minutes:    { column: MaxPause, number: integer }
+  status:
+    column: Status
+    map: { bestätigt: pending, storniert: cancelled }
+# Snapshots repeat every order and carry no revision, so the key hashes the mapped content.
+idempotency: { content_hash: true }

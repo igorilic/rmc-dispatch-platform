@@ -1,0 +1,4 @@
+Auftragsnr;Kundennr;Warenempfänger;Sorte;Menge;Liefertermin;Leistung;MaxPause;Status
+RB-7788;10001002;50001015;C30/37-XC4;12,5;10.11.2026 07:00;30,0;20;bestätigt
+RB-7789;10001002;50001016;C25/30-XC2;30,0;10.11.2026 08:00;25,0;20;bestätigt
+RB-7790;10001002;50001007;C30/37-XC4;12.5;29.03.2026 02:30;30,0;20;bestätigt

@@ -1,0 +1,38 @@
+# neckar-infra posts XML; schema v1 and v2 are live at the same time (SPEC §5).
+customer: "10001003"          # orders must be for this master-data customer
+channel: webhook
+format: xml
+timezone: Europe/Berlin
+versions:
+  - when: { path: /Order/@version, equals: "1" }
+    fields:
+      order_ref:          { path: /Order/OrderNo }
+      customer:           { path: /Order/CustomerNo }
+      ship_to:            { path: /Order/ShipTo }
+      mix:                { path: /Order/Product }
+      volume_m3:          { path: /Order/Quantity }
+      requested_start:    { path: /Order/Start }
+      pour_rate_m3_per_h: { path: /Order/PourRate }
+      max_gap_minutes:    { path: /Order/MaxGap, number: integer }
+      status:
+        path: /Order/Status
+        map: { confirmed: pending, cancelled: cancelled }
+    # v1 has no revision, so the key hashes the mapped content.
+    idempotency: { content_hash: true }
+
+  # v2: attributes, UTC timestamps, litres, and a revision counter.
+  - when: { path: /Order/@version, equals: "2" }
+    fields:
+      order_ref:          { path: /Order/Header/@orderNo }
+      revision:           { path: /Order/Header/@revision }
+      customer:           { path: /Order/Header/@customerNo }
+      ship_to:            { path: /Order/Delivery/@shipTo }
+      mix:                { path: /Order/Material/@code }
+      volume_m3:          { path: /Order/Material/@quantityLitres, scale: 0.001 }
+      requested_start:    { path: /Order/Delivery/@start }
+      pour_rate_m3_per_h: { path: /Order/Material/@rateLitresPerHour, scale: 0.001 }
+      max_gap_minutes:    { path: /Order/Delivery/@maxGapMin, number: integer }
+      status:
+        path: /Order/Header/@status
+        map: { confirmed: pending, cancelled: cancelled }
+    idempotency: { fields: [order_ref, revision] }

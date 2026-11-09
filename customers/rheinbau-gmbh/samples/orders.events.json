@@ -1,0 +1,38 @@
+[
+  {
+    "id": "rheinbau-gmbh:RB-7781:<content-hash>",
+    "occurred_at": "2026-11-09T09:20:00Z",
+    "received_at": "2026-11-09T09:20:00Z",
+    "source": { "integration": "rheinbau-gmbh", "channel": "sftp", "schema_version": null, "reference": "orders.csv line 2" },
+    "type": "order_upserted",
+    "order": {
+      "id": "10001002/RB-7781", "customer": "10001002", "site": "50001023", "mix": "C25/30-XC2",
+      "total_volume_m3": 42.5, "requested_start": "2026-11-10T06:00:00Z", "pour_rate_m3_per_h": 30.0,
+      "max_gap_minutes": 20, "status": "pending"
+    },
+    "source_revision": null
+  },
+  {
+    "id": "rheinbau-gmbh:RB-7782:<content-hash>",
+    "occurred_at": "2026-11-09T09:20:00Z",
+    "received_at": "2026-11-09T09:20:00Z",
+    "source": { "integration": "rheinbau-gmbh", "channel": "sftp", "schema_version": null, "reference": "orders.csv line 3" },
+    "type": "order_upserted",
+    "order": {
+      "id": "10001002/RB-7782", "customer": "10001002", "site": "50001015", "mix": "C30/37-XC4",
+      "total_volume_m3": 120.0, "requested_start": "2026-11-10T05:30:00Z", "pour_rate_m3_per_h": 45.0,
+      "max_gap_minutes": 15, "status": "pending"
+    },
+    "source_revision": null
+  },
+  {
+    "id": "rheinbau-gmbh:RB-7779:<content-hash>",
+    "occurred_at": "2026-11-09T09:20:00Z",
+    "received_at": "2026-11-09T09:20:00Z",
+    "source": { "integration": "rheinbau-gmbh", "channel": "sftp", "schema_version": null, "reference": "orders.csv line 4" },
+    "type": "order_cancelled",
+    "order": "10001002/RB-7779",
+    "customer": "10001002",
+    "source_revision": null
+  }
+]

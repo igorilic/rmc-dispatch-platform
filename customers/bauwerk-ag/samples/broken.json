@@ -1,0 +1,11 @@
+{
+  "jobId": "BW-2026-0099",
+  "updatedAt": "2026-11-09T11:00:00+01:00",
+  "customerNo": "10001001",
+  "deliverTo": { "shipTo": "50001007" },
+  "product": "C99/99",
+  "qty": { "value": -5, "unit": "m3" },
+  "pumpRate": 30,
+  "maxIntervalMinutes": 20,
+  "state": "CONFIRMED"
+}
