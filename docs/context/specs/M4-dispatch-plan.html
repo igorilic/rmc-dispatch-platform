@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Milestone 4 plan</title>
+<link rel="stylesheet" href="../../.design/styles.css">
+<style>
+/* Diagram styles: Spotlight tokens only (zinc greys, one teal accent). */
+.dg{display:block;width:100%;height:auto}
+.dg text{font-family:var(--font-sans);font-size:12px;fill:var(--text-body)}
+.dg .t{fill:var(--text-strong);font-weight:600;font-size:13px}
+.dg .s{fill:var(--text-muted);font-size:11px}
+.dg .m{font-family:var(--font-mono);font-size:10.5px;fill:var(--text-body)}
+.dg .bl{font-size:10.5px;fill:var(--text-strong)}
+.dg .bd{font-size:10.5px;fill:var(--zinc-900);font-weight:600}
+.dg .c{text-anchor:middle}
+.dg .end{text-anchor:end}
+.dg .halo{paint-order:stroke;stroke:var(--surface-column);stroke-width:3px;stroke-linejoin:round}
+.dg .b-done{fill:var(--surface-solid);stroke:var(--zinc-500);stroke-width:1}
+.dg .b-now{fill:color-mix(in oklab,var(--accent) 14%,var(--surface-column));stroke:var(--accent);stroke-width:1.5}
+.dg .b-later{fill:none;stroke:var(--zinc-500);stroke-width:1;stroke-dasharray:4 3}
+.dg .g-now{fill:none;stroke:var(--accent);stroke-width:1}
+.dg .hdr{fill:color-mix(in oklab,var(--accent) 30%,var(--surface-column))}
+.dg .e-now{fill:none;stroke:var(--accent);stroke-width:1.5}
+.dg .e-done{fill:none;stroke:var(--zinc-400);stroke-width:1.5}
+.dg .e-later{fill:none;stroke:var(--zinc-500);stroke-width:1.5;stroke-dasharray:4 3}
+.dg .axis{fill:none;stroke:var(--zinc-600);stroke-width:1}
+.dg .guide{fill:none;stroke:var(--zinc-700);stroke-width:1;stroke-dasharray:2 3}
+.dg .p-load{fill:var(--zinc-300)}
+.dg .p-drive{fill:var(--zinc-600)}
+.dg .p-dis{fill:var(--accent)}
+.dg .p-back{fill:var(--zinc-800);stroke:var(--zinc-600);stroke-width:1;stroke-dasharray:3 2}
+.dg .p-wait{fill:none;stroke:var(--zinc-500);stroke-width:1}
+.dg .lim{fill:none;stroke:var(--accent);stroke-width:1.5}
+.dg .brk{fill:none;stroke:var(--zinc-400);stroke-width:1.2}
+.ah{fill:var(--zinc-400)}
+.ah-now{fill:var(--accent)}
+.ah-later{fill:var(--zinc-500)}
+.sp-prose figure{margin-left:0;margin-right:0}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+<defs>
+<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0 1 L9 5 L0 9 z"/></marker>
+<marker id="ah-now" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-now" d="M0 1 L9 5 L0 9 z"/></marker>
+<marker id="ah-later" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-later" d="M0 1 L9 5 L0 9 z"/></marker>
+</defs>
+</svg>
+<div class="sp-layout__bg"><div><div></div></div></div>
+<div class="sp-layout__fg">
+<main class="sp-layout__main">
+<div class="sp-container-outer sp-article"><div class="sp-container-outer__in">
+<div class="sp-container-inner"><div class="sp-container-inner__in">
+<div class="sp-article__col">
+<article>
+<header class="sp-article__header">
+<h1 class="sp-h1">Milestone 4 plan: dispatch v1</h1>
+<time class="sp-article__date" datetime="2026-11-09"><span class="sp-bar"></span><span style="margin-left:.75rem">November 9, 2026</span></time>
+</header>
+<div class="sp-prose" style="margin-top:2rem">
+
+<p>Milestone 4 builds the first version of the <code>dispatch</code> service. It keeps a Postgres copy of master data and of every order that arrives on <code>EVENTS</code>. On request, it plans: it splits orders into truck loads and decides which plant batches each load, when, and on which truck. It never breaks a hard constraint from SPEC §4. A REST API with OpenAPI and Swagger UI exposes orders and plans, and property tests check every hard constraint on thousands of random worlds. Improving plans with local search, re-dispatching when something changes, plan diffs and benchmarks all belong to milestone 5.</p>
+
+<p><strong>Done when:</strong></p>
+<ul>
+<li><code>make up</code> runs <code>dispatch</code>. It loads master data from the seed, and its order table follows <code>EVENTS</code>: new, changed, and cancelled orders, with stale updates ignored.</li>
+<li><code>POST /plans</code> produces a plan, and <code>GET /plans/latest</code> shows every load and every order that couldn’t be planned, with the reason. Swagger UI runs at <code>localhost:8081/swagger-ui</code>.</li>
+<li>Property tests check each SPEC §4 hard constraint on random worlds, and integration tests run against real Postgres and NATS containers.</li>
+<li><code>make test</code>, <code>make audit</code> and CI are green.</li>
+</ul>
+
+<h2 id="where">Where dispatch sits</h2>
+
+<figure>
+<svg class="dg" viewBox="0 0 680 320" role="img" aria-labelledby="f1t f1d">
+<title id="f1t">Dispatch architecture</title>
+<desc id="f1d">Order events from the EVENTS stream go to dispatch’s order intake, a durable consumer that upserts orders into Postgres and ignores stale updates. Master data from the seed file is imported into Postgres at startup. The REST API triggers the construction heuristic, which reads orders and master data from Postgres and writes a new plan version back. API clients, a dispatcher today and the plant-agent from milestone 7, read orders and plans. Truck and plant events become relevant in milestone 5.</desc>
+<rect class="b-done" x="10" y="8" width="16" height="12" rx="3"/><text class="s" x="32" y="18">exists (M1–M3)</text>
+<rect class="b-now" x="140" y="8" width="16" height="12" rx="3"/><text class="s" x="162" y="18">built in M4</text>
+<rect class="b-later" x="250" y="8" width="16" height="12" rx="3"/><text class="s" x="272" y="18">later milestone</text>
+
+<rect class="b-done" x="10" y="80" width="120" height="46" rx="8"/><text class="t c" x="70" y="100">EVENTS</text><text class="s c" x="70" y="116">events.orders.*</text>
+<rect class="b-done" x="10" y="200" width="120" height="46" rx="8"/><text class="t c" x="70" y="220">seed file</text><text class="s c" x="70" y="236">master data</text>
+<rect class="b-later" x="10" y="262" width="120" height="46" rx="8"/><text class="t c" x="70" y="282">truck events</text><text class="s c" x="70" y="298">re-dispatch, M5</text>
+
+<rect class="g-now" x="160" y="40" width="310" height="270" rx="12"/>
+<text class="t" x="172" y="60">dispatch</text>
+<g><title>A durable JetStream consumer on events.orders.*: upsert on order_upserted, cancel on order_cancelled, skip anything older than what is stored</title>
+<rect class="b-now" x="172" y="80" width="130" height="46" rx="8"/><text class="t c" x="237" y="100">Order intake</text><text class="s c" x="237" y="116">stale-safe upsert</text></g>
+<g><title>Customers, ship-tos, plants, trucks and mixes from deploy/seed, upserted at every start</title>
+<rect class="b-now" x="172" y="200" width="130" height="46" rx="8"/><text class="t c" x="237" y="220">Master data</text><text class="s c" x="237" y="236">imported at start</text></g>
+<g><title>Greedy, by order start: split into loads, then take the earliest feasible plant, bay, truck and time for each load</title>
+<rect class="b-now" x="322" y="140" width="136" height="60" rx="8"/><text class="t c" x="390" y="162">Construction</text><text class="t c" x="390" y="178">heuristic</text><text class="s c" x="390" y="193">hard constraints</text></g>
+<g><title>axum with utoipa: orders, plans, OpenAPI JSON and Swagger UI</title>
+<rect class="b-now" x="322" y="230" width="136" height="46" rx="8"/><text class="t c" x="390" y="250">REST API</text><text class="s c" x="390" y="266">OpenAPI, Swagger</text></g>
+
+<rect class="b-done" x="500" y="80" width="170" height="110" rx="8"/><text class="t c" x="585" y="120">Postgres</text><text class="s c" x="585" y="138">master data, orders</text><text class="s c" x="585" y="154">plans and loads</text><text class="s c" x="585" y="170">migrations (sqlx)</text>
+<rect class="b-later" x="500" y="240" width="170" height="46" rx="8"/><text class="t c" x="585" y="260">API clients</text><text class="s c" x="585" y="276">dispatcher, plant-agent M7</text>
+
+<path class="e-now" d="M130 103 H171" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M130 223 H171" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M302 103 H499" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M302 223 H312 V125 H499" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M459 170 H499" marker-start="url(#ah-now)" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M390 230 V201" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M458 236 H520 V191" marker-end="url(#ah-now)"/>
+<path class="e-later" d="M499 263 H459" marker-end="url(#ah-later)"/>
+<path class="e-later" d="M130 285 H159" marker-end="url(#ah-later)"/>
+</svg>
+<figcaption>Figure 1. Where dispatch sits. In M4, planning runs when asked through <code>POST /plans</code>. From M5 it also reacts to events by itself. Hover a box for details.</figcaption>
+</figure>
+
+<h2 id="model">Data model</h2>
+
+<figure>
+<svg class="dg" viewBox="0 0 680 360" role="img" aria-labelledby="f2t f2d">
+<title id="f2t">Postgres tables and references</title>
+<desc id="f2d">Sites reference customers. Orders reference a customer, a site and a mix design. Trucks reference their home plant. Each plan version holds loads; a load references its plan, its order, a plant and a truck. Unplanned orders and plan metrics are stored on the plan.</desc>
+<rect class="b-done" x="10" y="20" width="180" height="68" rx="6"/><rect class="hdr" x="10.5" y="20.5" width="179" height="22" rx="6"/><text class="t" x="20" y="36">customers</text><text class="m" x="20" y="60">id (customer no.)</text><text class="m" x="20" y="78">name, address</text>
+<rect class="b-done" x="250" y="20" width="180" height="86" rx="6"/><rect class="hdr" x="250.5" y="20.5" width="179" height="22" rx="6"/><text class="t" x="260" y="36">sites (ship-tos)</text><text class="m" x="260" y="60">id (ship-to no.)</text><text class="m" x="260" y="78">customer, name</text><text class="m" x="260" y="96">address?, location?</text>
+<rect class="b-done" x="490" y="20" width="180" height="68" rx="6"/><rect class="hdr" x="490.5" y="20.5" width="179" height="22" rx="6"/><text class="t" x="500" y="36">mix_designs</text><text class="m" x="500" y="60">code</text><text class="m" x="500" y="78">max_minutes</text>
+<rect class="b-now" x="250" y="140" width="180" height="104" rx="6"/><rect class="hdr" x="250.5" y="140.5" width="179" height="22" rx="6"/><text class="t" x="260" y="156">orders</text><text class="m" x="260" y="180">id = customer/order no.</text><text class="m" x="260" y="198">customer, site, mix</text><text class="m" x="260" y="216">volume, start, rate, gap</text><text class="m" x="260" y="234">status, occurred_at</text>
+<rect class="b-done" x="490" y="140" width="180" height="68" rx="6"/><rect class="hdr" x="490.5" y="140.5" width="179" height="22" rx="6"/><text class="t" x="500" y="156">trucks</text><text class="m" x="500" y="180">id, home_plant</text><text class="m" x="500" y="198">capacity, status</text>
+<rect class="b-now" x="10" y="260" width="180" height="86" rx="6"/><rect class="hdr" x="10.5" y="260.5" width="179" height="22" rx="6"/><text class="t" x="20" y="276">plans</text><text class="m" x="20" y="300">version, created_at</text><text class="m" x="20" y="318">metrics</text><text class="m" x="20" y="336">unplanned + reasons</text>
+<rect class="b-now" x="250" y="260" width="180" height="86" rx="6"/><rect class="hdr" x="250.5" y="260.5" width="179" height="22" rx="6"/><text class="t" x="260" y="276">loads</text><text class="m" x="260" y="300">plan, order, sequence</text><text class="m" x="260" y="318">plant, truck, volume</text><text class="m" x="260" y="336">batch_at, eta, window</text>
+<rect class="b-done" x="490" y="260" width="180" height="86" rx="6"/><rect class="hdr" x="490.5" y="260.5" width="179" height="22" rx="6"/><text class="t" x="500" y="276">plants</text><text class="m" x="500" y="300">id, location</text><text class="m" x="500" y="318">bays, rate, hours</text><text class="m" x="500" y="336">status</text>
+
+<path class="e-done" d="M250 54 H191" marker-end="url(#ah)"/>
+<path class="e-done" d="M340 140 V107" marker-end="url(#ah)"/>
+<path class="e-done" d="M250 192 H100 V89" marker-end="url(#ah)"/>
+<path class="e-done" d="M400 140 V120 H580 V89" marker-end="url(#ah)"/>
+<path class="e-done" d="M340 260 V245" marker-end="url(#ah)"/>
+<path class="e-done" d="M250 300 H191" marker-end="url(#ah)"/>
+<path class="e-done" d="M430 285 H460 V174 H489" marker-end="url(#ah)"/>
+<path class="e-done" d="M430 320 H489" marker-end="url(#ah)"/>
+<path class="e-done" d="M580 208 V259" marker-end="url(#ah)"/>
+</svg>
+<figcaption>Figure 2. The tables. Arrows point from a reference to what it references. Grey tables are master data, imported from the seed. Teal tables change while dispatch runs. Every plan is a new version, so earlier plans stay readable. That is also what M5’s diffs will compare.</figcaption>
+</figure>
+
+<h2 id="heuristic">How the construction heuristic plans</h2>
+
+<p>The plan covers orders that start within the next 48 hours. Orders are processed by requested start. Each order is split into loads: full drums, with the remainder as the last load. Then, load by load, the heuristic looks for the best slot:</p>
+<ol>
+<li>The <strong>target arrival</strong> is the requested start for the first load. For every later load, it is the moment the previous load finishes discharging, so the pour stays continuous.</li>
+<li>Every <strong>online plant</strong> is combined with every <strong>truck in service</strong>. The batch time is worked back from the target, using travel time and batching time.</li>
+<li>If that slot is taken, it moves later until the plant is open, a <strong>bay</strong> is free, and the <strong>truck</strong> is free. A truck is free only if it can drive empty from its previous site in time, and still reach its next trip afterwards.</li>
+<li>A slot is <strong>rejected</strong> if discharge would end after the mix design’s limit.</li>
+<li>The slot that arrives <strong>closest to the target</strong> wins, and fewer empty kilometres break ties.</li>
+<li>If no slot exists, the order is <strong>unplanned</strong>, with a reason such as “the site is 75 min from every plant, too far for the 90 min limit of C30/37-XC4”.</li>
+</ol>
+
+<figure>
+<svg class="dg" viewBox="0 0 680 280" role="img" aria-labelledby="f3t f3d">
+<title id="f3t">A planned order: five loads on four trucks</title>
+<desc id="f3d">An order of 42.5 cubic metres of C30/37-XC4 for a Heidelberg site starts at 07:00, poured at 30 cubic metres an hour with at most 20 minutes between trucks. Walldorf batches five loads: four of 9 and a last of 6.5 cubic metres, on trucks 18 to 21. Each truck loads, drives 25 minutes, discharges for 18 minutes and drives back. Truck 18 returns for the fifth load, which arrives 4 minutes after the fourth finishes: a gap within the 20 minute limit. At the site, discharges follow each other back to back from 07:00 to 08:29.</desc>
+<text class="t" x="10" y="53">Walldorf bays</text>
+<text class="t" x="10" y="83">truck-18</text>
+<text class="t" x="10" y="109">truck-19</text>
+<text class="t" x="10" y="135">truck-20</text>
+<text class="t" x="10" y="161">truck-21</text>
+<text class="t" x="10" y="199">Heidelberg site</text>
+
+<path class="guide" d="M265 40 V212 M325.8 40 V212 M387.1 40 V212 M447.3 40 V212 M508 40 V212 M521.5 40 V212"/>
+
+<g><title>batching + loading: 8 min per load, never more than Walldorf's 2 bays at once</title>
+<rect class="p-load" x="153.6" y="40" width="27" height="18" rx="3"/><rect class="p-load" x="214.4" y="40" width="27" height="18" rx="3"/><rect class="p-load" x="275.1" y="40" width="27" height="18" rx="3"/><rect class="p-load" x="335.9" y="40" width="27" height="18" rx="3"/><rect class="p-load" x="410.1" y="40" width="27" height="18" rx="3"/></g>
+
+<rect class="p-load" x="153.6" y="70" width="27" height="18" rx="3"/><rect class="p-drive" x="180.6" y="70" width="84.4" height="18" rx="3"/><rect class="p-dis" x="265" y="70" width="60.8" height="18" rx="3"/><text class="bd c" x="295.4" y="83">L1</text><rect class="p-back" x="325.8" y="70" width="84.3" height="18" rx="3"/>
+<rect class="p-load" x="410.1" y="70" width="27" height="18" rx="3"/><rect class="p-drive" x="437.1" y="70" width="84.4" height="18" rx="3"/><rect class="p-dis" x="521.5" y="70" width="43.9" height="18" rx="3"/><text class="bd c" x="543.4" y="83">L5</text><rect class="p-back" x="565.4" y="70" width="84.4" height="18" rx="3"/>
+<rect class="p-load" x="214.4" y="96" width="27" height="18" rx="3"/><rect class="p-drive" x="241.4" y="96" width="84.4" height="18" rx="3"/><rect class="p-dis" x="325.8" y="96" width="61.3" height="18" rx="3"/><text class="bd c" x="356.4" y="109">L2</text><rect class="p-back" x="387.1" y="96" width="83.8" height="18" rx="3"/>
+<rect class="p-load" x="275.1" y="122" width="27" height="18" rx="3"/><rect class="p-drive" x="302.1" y="122" width="85" height="18" rx="3"/><rect class="p-dis" x="387.1" y="122" width="60.2" height="18" rx="3"/><text class="bd c" x="417.2" y="135">L3</text><rect class="p-back" x="447.3" y="122" width="84.3" height="18" rx="3"/>
+<rect class="p-load" x="335.9" y="148" width="27" height="18" rx="3"/><rect class="p-drive" x="362.9" y="148" width="84.4" height="18" rx="3"/><rect class="p-dis" x="447.3" y="148" width="60.7" height="18" rx="3"/><text class="bd c" x="477.6" y="161">L4</text><rect class="p-back" x="508" y="148" width="84.4" height="18" rx="3"/>
+
+<g><title>At the site: each load arrives as the previous one finishes, so the pour is continuous</title>
+<rect class="p-dis" x="265" y="186" width="59.8" height="20" rx="3"/><text class="bd c" x="295" y="200">L1</text>
+<rect class="p-dis" x="325.8" y="186" width="60.3" height="20" rx="3"/><text class="bd c" x="356" y="200">L2</text>
+<rect class="p-dis" x="387.1" y="186" width="59.2" height="20" rx="3"/><text class="bd c" x="416.7" y="200">L3</text>
+<rect class="p-dis" x="447.3" y="186" width="59.7" height="20" rx="3"/><text class="bd c" x="477.2" y="200">L4</text>
+<rect class="p-dis" x="521.5" y="186" width="43.9" height="20" rx="3"/><text class="bd c" x="543.4" y="200">L5</text></g>
+<path class="lim" d="M508 210 V216 H521.5 V210"/><text class="s c" x="515" y="230">4 min gap ≤ 20</text>
+
+<path class="axis" d="M130 240 H670 M163.8 240 V244 M265 240 V244 M366.3 240 V244 M467.5 240 V244 M568.8 240 V244 M670 240 V244"/>
+<text class="s c" x="163.8" y="256">06:30</text><text class="s c" x="265" y="256">07:00</text><text class="s c" x="366.3" y="256">07:30</text><text class="s c" x="467.5" y="256">08:00</text><text class="s c" x="568.8" y="256">08:30</text><text class="s end" x="670" y="256">09:00</text>
+
+<rect class="p-load" x="10" y="266" width="14" height="10" rx="2"/><text class="s" x="29" y="275">batch + load</text>
+<rect class="p-drive" x="120" y="266" width="14" height="10" rx="2"/><text class="s" x="139" y="275">drive loaded</text>
+<rect class="p-dis" x="230" y="266" width="14" height="10" rx="2"/><text class="s" x="249" y="275">discharge</text>
+<rect class="p-back" x="320" y="266" width="14" height="10" rx="2"/><text class="s" x="339" y="275">drive empty</text>
+</svg>
+<figcaption>Figure 3. An order of 42.5 m³ for 07:00 at 30 m³/h, with at most 20 min between trucks. Walldorf batches five loads (4 × 9 m³ and a last 6.5 m³) on four trucks. Truck 18 comes back for load 5, which arrives 4 minutes after load 4 finishes, within the 20-minute limit. A gap over the limit is allowed but counted: it is a soft objective, not a hard constraint.</figcaption>
+</figure>
+
+<figure>
+<svg class="dg" viewBox="0 0 680 196" role="img" aria-labelledby="f4t f4d">
+<title id="f4t">One load and the hard constraints on it</title>
+<desc id="f4d">One load’s timeline: an empty drive from the truck’s previous site to the plant, batching and loading in a bay, the loaded drive, a short wait on site, discharge, then the drive to the truck’s next plant. The bay is occupied only while batching and loading, and a plant may never have more loads in its bays than it has bays. The truck is busy from the empty drive until it reaches its next plant, and carries one load at a time. Discharge must end within the mix design’s limit, counted from the start of batching. Loads only use online plants and trucks in service, and never exceed the drum capacity.</desc>
+<rect class="p-back" x="120" y="30" width="67" height="22" rx="3"/><text class="bl c" x="153.5" y="45">empty</text>
+<rect class="p-load" x="187.5" y="30" width="36" height="22" rx="3"/>
+<rect class="p-drive" x="223.5" y="30" width="112.5" height="22" rx="3"/><text class="bl c" x="279.8" y="45">drive 25 min</text>
+<rect class="p-wait" x="336" y="30" width="18" height="22" rx="3"/>
+<rect class="p-dis" x="354" y="30" width="81" height="22" rx="3"/><text class="bd c" x="394.5" y="45">discharge</text>
+<rect class="p-back" x="435" y="30" width="112.5" height="22" rx="3"/><text class="bl c" x="491.3" y="45">to next plant</text>
+<text class="s c" x="205.5" y="22">batch + load</text><text class="s c" x="345" y="22">wait</text>
+
+<path class="brk" d="M187.5 70 V76 H223.5 V70"/><text class="s" x="232" y="80">bay: no more loads at once than the plant has bays</text>
+<path class="brk" d="M120 98 V104 H547.5 V98"/><text class="s" x="120" y="118">truck: one load at a time, empty drives included</text>
+<path class="lim" d="M187.5 136 V142 H592.5 V136"/><circle cx="435" cy="142" r="4" style="fill:var(--accent)"/><text class="s" x="187.5" y="158">mix limit: discharge ends at most 90 min after batching starts</text>
+<text class="s" x="120" y="184">and only online plants, trucks in service, and loads no bigger than the drum</text>
+</svg>
+<figcaption>Figure 4. One load and the hard constraints it has to satisfy. The heuristic only takes slots that satisfy all of them. The property tests check each one again, independently, on the finished plan.</figcaption>
+</figure>
+
+<h2 id="constraints">Hard constraints and their property tests</h2>
+<table>
+<thead><tr><th>SPEC §4 hard constraint</th><th>How the heuristic keeps it</th><th>Property checked on random worlds</th></tr></thead>
+<tbody>
+<tr><td>A truck carries one load at a time</td><td>A truck’s trips are kept in time order. A new trip must fit between its neighbours, empty drives included.</td><td>Consecutive trips of a truck never overlap, travel included</td></tr>
+<tr><td>Load ≤ drum capacity</td><td>Volume is the smaller of what remains and the truck’s capacity</td><td>Every load fits its truck</td></tr>
+<tr><td>Parallel loads ≤ loading bays</td><td>Each plant keeps its bay intervals. A slot is free only while fewer loads than bays overlap.</td><td>At no instant does a plant batch more loads than it has bays</td></tr>
+<tr><td>Discharge within the mix limit</td><td>A slot is rejected if discharge ends after batch start + limit</td><td>Every load’s discharge ends in time</td></tr>
+<tr><td>No out-of-service trucks, no offline plants</td><td>They are filtered out before the search</td><td>No load uses one</td></tr>
+<tr><td><em>also:</em> nothing lost, plant hours</td><td>The last load takes the remainder; slots respect opening hours</td><td>A planned order’s loads add up to its volume; batching happens inside opening hours</td></tr>
+</tbody>
+</table>
+<p>The random worlds cover offline plants, trucks out of service, single-bay plants, far-away sites and short mix limits. Each case also runs on the seeded Rhine-Neckar world. The soft objectives (pour gaps, lateness, empty kilometres) are measured and stored with each plan. M4 only uses them to break ties; M5’s local search optimises their weighted sum.</p>
+
+<h2 id="intake">Order intake</h2>
+<p>A durable JetStream consumer reads <code>events.orders.*</code>:</p>
+<ul>
+<li><code>order_upserted</code> inserts or replaces an order;</li>
+<li><code>order_cancelled</code> marks it cancelled.</li>
+</ul>
+<p>An event older than what is stored for that order, by <code>occurred_at</code>, is skipped. That is how a late, stale revision can’t overwrite a newer one. A message is acknowledged only after its transaction commits, and replays are harmless because an upsert of the same state changes nothing. Truck and ticket events stay unread until M5.</p>
+
+<h2 id="api">REST API</h2>
+<table>
+<thead><tr><th>Endpoint</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><code>GET /orders</code></td><td>Orders, filterable by status and date</td></tr>
+<tr><td><code>GET /orders/{id}</code></td><td>One order, with its loads in the latest plan</td></tr>
+<tr><td><code>POST /plans</code></td><td>Plans the next 48 h now, then stores and returns the new version</td></tr>
+<tr><td><code>GET /plans/latest</code>, <code>GET /plans/{version}</code></td><td>Loads, unplanned orders with reasons, and metrics</td></tr>
+<tr><td><code>GET /healthz</code></td><td>Liveness</td></tr>
+<tr><td><code>/swagger-ui</code>, <code>/api-docs/openapi.json</code></td><td>Interactive docs and the OpenAPI document</td></tr>
+</tbody>
+</table>
+
+<h2 id="travel">Travel time</h2>
+<p>Travel time comes from a <code>TravelTimeProvider</code> trait, which SPEC §3 asks for so OSRM can be plugged in later. The first implementation computes haversine distance × road factor 1.3 ÷ average speed. The speed depends on the time of day: 30 km/h in the rush hours (07–09 and 16–18 Berlin time) and 45 km/h otherwise. Address-only ship-tos use their postal code’s centroid, through the same <code>PostalCodeGeocoder</code> the simulators use.</p>
+
+<h2 id="layout">Code layout</h2>
+<pre><code>crates/dispatch/
+├── migrations/       sqlx migrations
+├── src/lib.rs        used by the service and the tests
+├── src/travel.rs     TravelTimeProvider, haversine model
+├── src/planner.rs    construction heuristic, metrics
+├── src/store.rs      Postgres: master data, orders, plans
+├── src/intake.rs     JetStream consumer for orders
+├── src/api.rs        axum routes, OpenAPI
+├── src/main.rs       the dispatch service
+└── tests/            Postgres + NATS containers
+.sqlx/                offline query data for sqlx</code></pre>
+
+<h2 id="config">Configuration</h2>
+<table>
+<thead><tr><th>Variable</th><th>Default</th></tr></thead>
+<tbody>
+<tr><td><code>HTTP_ADDR</code></td><td><code>0.0.0.0:8081</code> (ingest has 8080)</td></tr>
+<tr><td><code>DATABASE_URL</code></td><td><code>postgres://pourline:pourline@localhost:5432/pourline</code> (compose sets <code>postgres</code>)</td></tr>
+<tr><td><code>NATS_URL</code></td><td><code>nats://localhost:4222</code></td></tr>
+<tr><td><code>PLANNING_HORIZON_HOURS</code></td><td><code>48</code></td></tr>
+<tr><td><code>ROAD_FACTOR</code></td><td><code>1.3</code></td></tr>
+<tr><td><code>SPEED_KMH</code>, <code>RUSH_HOUR_SPEED_KMH</code></td><td><code>45</code>, <code>30</code></td></tr>
+</tbody>
+</table>
+
+<h2 id="steps">Steps</h2>
+
+<h3 id="step-1">Step 1</h3>
+<p><strong>Travel time and load timing.</strong> Add the <code>TravelTimeProvider</code> trait, the haversine model with time-of-day speeds, and the time a load spends at the plant and on site. Tests cover rush hour against midday, and address-only sites.</p>
+
+<h3 id="step-2">Step 2</h3>
+<p><strong>The construction heuristic, as pure code without a database.</strong> Hand-made scenarios check:</p>
+<ul>
+<li>a continuous pour;</li>
+<li>bay contention;</li>
+<li>a truck reused after its return;</li>
+<li>a too-far site, which ends up unplanned with its reason;</li>
+<li>offline plants and out-of-service trucks being skipped.</li>
+</ul>
+<p>Property tests then check each hard constraint, volume conservation and plant hours on random worlds.</p>
+
+<h3 id="step-3">Step 3</h3>
+<p><strong>Postgres.</strong> Write the migrations and the master-data import from the seed. Plan versions are stored, and every query is checked at compile time, with <code>.sqlx/</code> offline data so CI and Docker builds need no database. Integration tests run against a Postgres container.</p>
+
+<h3 id="step-4">Step 4</h3>
+<p><strong>Order intake.</strong> A durable consumer reads <code>events.orders.*</code>. Integration tests use Postgres and NATS containers: a new order, a changed order, a cancellation, and a stale revision that gets ignored.</p>
+
+<h3 id="step-5">Step 5</h3>
+<p><strong>REST API.</strong> Add the routes, the OpenAPI document and the vendored Swagger UI. Tests drive the router: <code>POST /plans</code> on stored orders must produce a plan that passes the same constraint checks, and the OpenAPI document must list every route.</p>
+
+<h3 id="step-6">Step 6</h3>
+<p><strong>Compose, docs and the end-to-end check.</strong> Add a <code>dispatch</code> service to compose and its image to CI, write a README section “Planning”, and update <code>.env.example</code>. Then run <code>make up</code>: ingest’s orders must show up in <code>GET /orders</code>, and <code>POST /plans</code> on that live data must produce a sensible plan. Then commit.</p>
+
+<h2 id="decisions">Decisions I need from you</h2>
+<p>I’ll use the default unless you say otherwise. The first two are domain questions, where your experience matters most.</p>
+<table>
+<thead><tr><th>#</th><th>Question</th><th>My default</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Which orders are planned?</td><td>Every order starting within 48 h that is <code>unconfirmed</code>, <code>pending</code> or <code>confirmed</code>, i.e. not cancelled and not yet started. The plan is a tentative view of capacity. A dispatcher confirming orders through the API can come later.</td></tr>
+<tr><td>2</td><td>How is an order split into loads?</td><td>Full drums, with the remainder as the last, smaller load: 42.5 m³ on 9 m³ trucks is 9 + 9 + 9 + 9 + 6.5. The alternative is equal loads (5 × 8.5).</td></tr>
+<tr><td>3</td><td>Does dispatch read order events already?</td><td>Yes, through the stale-safe intake above. Truck and ticket events wait for M5.</td></tr>
+<tr><td>4</td><td>What triggers planning?</td><td><code>POST /plans</code> in M4. Planning automatically on events comes in M5.</td></tr>
+<tr><td>5</td><td>Where are trucks when planning starts?</td><td>At their home plant, available from the planning time. Real positions and statuses from telematics come in M5.</td></tr>
+<tr><td>6</td><td>Where does a truck go after unloading?</td><td>Straight to the plant of its next load. The empty kilometres are counted, and it doesn’t have to return home.</td></tr>
+<tr><td>7</td><td>Are plant opening hours enforced?</td><td>Yes: batching only happens between opening and closing, in local time.</td></tr>
+<tr><td>8</td><td>How are sqlx’s compile-time checks kept working in CI?</td><td><code>.sqlx/</code> is committed and regenerated with a new <code>make sqlx-prepare</code>, which runs against the compose Postgres.</td></tr>
+</tbody>
+</table>
+
+<h2 id="later">Heads-up</h2>
+<ul>
+<li><strong>Plan and reality diverge on purpose for now:</strong> the simulator’s trucks keep making random trips until M5 has them follow the plan.</li>
+<li><strong>Swagger UI is vendored</strong> into the binary at build time, so nothing is downloaded during a build.</li>
+<li><strong>The first plan is greedy and correct, not good.</strong> Expect some gaps and extra empty kilometres. Improving them is M5’s local search, with benchmarks at 50, 200 and 1,000 loads.</li>
+</ul>
+
+<h2 id="deps">New dependencies</h2>
+<p>These are the latest stable releases, checked today against RustSec.</p>
+<table>
+<thead><tr><th>Crate</th><th>Version</th><th>For</th></tr></thead>
+<tbody>
+<tr><td><code>sqlx</code></td><td>0.9.0</td><td>Postgres, migrations, compile-time-checked queries. No TLS feature, since local Postgres doesn’t need it.</td></tr>
+<tr><td><code>utoipa</code></td><td>6.0.0</td><td>OpenAPI from the Rust types</td></tr>
+<tr><td><code>utoipa-swagger-ui</code></td><td>10.0.2</td><td>Swagger UI, vendored. Its build uses <code>zip</code> 9.x, past all of this year’s <code>zip</code> advisories.</td></tr>
+<tr><td><code>sqlx-cli</code></td><td>0.9.0</td><td>A developer tool for <code>make sqlx-prepare</code>, not a dependency</td></tr>
+</tbody>
+</table>
+<p>Reused: <code>axum</code>, <code>async-nats</code>, <code>proptest</code>, <code>testcontainers</code> (Postgres through its generic image), and <code>chrono-tz</code>.</p>
+
+</div>
+</article>
+</div></div></div></div></div>
+</main>
+</div>
+</body>
+</html>
