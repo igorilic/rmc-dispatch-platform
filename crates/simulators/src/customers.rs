@@ -6,6 +6,9 @@
 //!   local time. Each drop is a full snapshot of the open orders, plus any cancelled since the last drop.
 //! - `neckar-infra` posts XML. Half of its sites use schema v1 and half use v2.
 //!
+//! Customers and ship-tos are our master data. Every order carries our customer number and our
+//! ship-to number, each in the customer's own field names.
+//!
 //! Until ingest exists (M3), the webhook URLs are unset and the payloads are logged instead.
 
 use std::sync::Arc;
@@ -23,11 +26,19 @@ use tracing::{error, info, warn};
 use crate::Clock;
 use crate::orders::{GeneratedOrder, OrderBook};
 
+/// Each fake integration and the customer number (from our master data) it orders for.
+pub const INTEGRATIONS: [(&str, &str); 3] = [
+    ("bauwerk-ag", "10001001"),
+    ("rheinbau-gmbh", "10001002"),
+    ("neckar-infra", "10001003"),
+];
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BauwerkOrder<'a> {
     job_id: &'a str,
     updated_at: String,
+    customer_no: &'a str,
     deliver_to: DeliverTo<'a>,
     product: &'a str,
     qty: Qty,
@@ -40,7 +51,7 @@ struct BauwerkOrder<'a> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DeliverTo<'a> {
-    site_ref: &'a str,
+    ship_to: &'a str,
 }
 
 #[derive(Serialize)]
@@ -55,7 +66,8 @@ struct NeckarV1<'a> {
     #[serde(rename = "@version")]
     version: u8,
     order_no: &'a str,
-    site_code: &'a str,
+    customer_no: &'a str,
+    ship_to: &'a str,
     product: &'a str,
     quantity: f64,
     start: String,
@@ -79,6 +91,8 @@ struct NeckarV2<'a> {
 struct V2Header<'a> {
     #[serde(rename = "@orderNo")]
     order_no: &'a str,
+    #[serde(rename = "@customerNo")]
+    customer_no: &'a str,
     #[serde(rename = "@revision")]
     revision: u32,
     #[serde(rename = "@status")]
@@ -87,8 +101,8 @@ struct V2Header<'a> {
 
 #[derive(Serialize)]
 struct V2Delivery<'a> {
-    #[serde(rename = "@site")]
-    site: &'a str,
+    #[serde(rename = "@shipTo")]
+    ship_to: &'a str,
     #[serde(rename = "@start")]
     start: String,
     #[serde(rename = "@maxGapMin")]
@@ -118,8 +132,9 @@ pub fn bauwerk_json(o: &GeneratedOrder) -> serde_json::Result<String> {
     serde_json::to_string(&BauwerkOrder {
         job_id: &o.order_ref,
         updated_at: berlin(o.updated_at),
+        customer_no: &o.customer,
         deliver_to: DeliverTo {
-            site_ref: &o.site_ref,
+            ship_to: &o.ship_to,
         },
         product: &o.mix,
         qty: Qty {
@@ -144,7 +159,8 @@ pub fn rheinbau_csv(orders: &[GeneratedOrder]) -> anyhow::Result<String> {
         .from_writer(Vec::new());
     csv.write_record([
         "Auftragsnr",
-        "Baustelle",
+        "Kundennr",
+        "Warenempfänger",
         "Sorte",
         "Menge",
         "Liefertermin",
@@ -155,7 +171,8 @@ pub fn rheinbau_csv(orders: &[GeneratedOrder]) -> anyhow::Result<String> {
     for o in orders {
         csv.write_record([
             o.order_ref.as_str(),
-            o.site_ref.as_str(),
+            o.customer.as_str(),
+            o.ship_to.as_str(),
             o.mix.as_str(),
             decimal_comma(o.volume_m3).as_str(),
             o.start
@@ -175,9 +192,9 @@ pub fn rheinbau_csv(orders: &[GeneratedOrder]) -> anyhow::Result<String> {
     Ok(String::from_utf8(csv.into_inner()?)?)
 }
 
-/// Every other neckar-infra site is still on v1.
-pub fn neckar_version(site_ref: &str, site_refs: &[String]) -> u8 {
-    match site_refs.iter().position(|s| s == site_ref) {
+/// Every other neckar-infra ship-to is still on v1.
+pub fn neckar_version(ship_to: &str, ship_tos: &[String]) -> u8 {
+    match ship_tos.iter().position(|s| s == ship_to) {
         Some(i) if i % 2 == 1 => 2,
         _ => 1,
     }
@@ -196,7 +213,8 @@ pub fn neckar_xml(o: &GeneratedOrder, version: u8) -> anyhow::Result<String> {
         NeckarV1 {
             version,
             order_no: &o.order_ref,
-            site_code: &o.site_ref,
+            customer_no: &o.customer,
+            ship_to: &o.ship_to,
             product: &o.mix,
             quantity: o.volume_m3,
             start: berlin(o.start),
@@ -210,11 +228,12 @@ pub fn neckar_xml(o: &GeneratedOrder, version: u8) -> anyhow::Result<String> {
             version,
             header: V2Header {
                 order_no: &o.order_ref,
+                customer_no: &o.customer,
                 revision: o.revision,
                 status,
             },
             delivery: V2Delivery {
-                site: &o.site_ref,
+                ship_to: &o.ship_to,
                 start: o.start.to_rfc3339_opts(SecondsFormat::Secs, true),
                 max_gap_min: o.max_gap_minutes,
             },
@@ -255,7 +274,7 @@ pub async fn run_webhook(
     loop {
         sleep(jitter(&mut rng, order_interval)).await;
         let order = book.next_change(&mut rng, clock.now());
-        let body = (hook.render)(&order, book.site_refs())?;
+        let body = (hook.render)(&order, book.ship_tos())?;
         let copies = if rng.random_bool(hook.duplicate_rate) {
             2
         } else {
@@ -392,7 +411,8 @@ mod tests {
     #[allow(clippy::too_many_arguments)]
     fn order(
         order_ref: &str,
-        site_ref: &str,
+        customer: &str,
+        ship_to: &str,
         mix: &str,
         volume_m3: f64,
         start: &str,
@@ -402,7 +422,8 @@ mod tests {
     ) -> GeneratedOrder {
         GeneratedOrder {
             order_ref: order_ref.into(),
-            site_ref: site_ref.into(),
+            customer: customer.into(),
+            ship_to: ship_to.into(),
             mix: mix.into(),
             volume_m3,
             start: start.parse().unwrap(),
@@ -418,7 +439,8 @@ mod tests {
     fn bauwerk_json_matches_the_sample() {
         let o = order(
             "BW-2026-0042",
-            "BW-HD-03",
+            "10001001",
+            "50001007",
             "C30/37-XC4",
             42.5,
             "2026-11-10T06:00:00Z",
@@ -446,7 +468,8 @@ mod tests {
         let orders = [
             order(
                 "RB-7781",
-                "RB-SCHW-02",
+                "10001002",
+                "50001023",
                 "C25/30-XC2",
                 42.5,
                 "2026-11-10T06:00:00Z",
@@ -456,7 +479,8 @@ mod tests {
             ),
             order(
                 "RB-7782",
-                "RB-MA-01",
+                "10001002",
+                "50001015",
                 "C30/37-XC4",
                 120.0,
                 "2026-11-10T05:30:00Z",
@@ -468,7 +492,8 @@ mod tests {
                 cancelled: true,
                 ..order(
                     "RB-7779",
-                    "RB-SP-01",
+                    "10001002",
+                    "50001020",
                     "C20/25-X0",
                     18.0,
                     "2026-11-10T12:00:00Z",
@@ -486,7 +511,8 @@ mod tests {
     fn neckar_xml_v1_and_v2_match_the_samples() {
         let v1 = order(
             "NI-88213",
-            "NI-HD-07",
+            "10001003",
+            "50001028",
             "C30/37-XC4",
             42.5,
             "2026-11-10T06:00:00Z",
@@ -499,7 +525,8 @@ mod tests {
 
         let v2 = order(
             "NI-88214",
-            "NI-NG-02",
+            "10001003",
+            "50001032",
             "C30/37-XC4",
             42.5,
             "2026-11-10T06:00:00Z",
@@ -515,9 +542,9 @@ mod tests {
     fn neckar_sites_are_split_between_v1_and_v2() {
         let world = World::seed().unwrap();
         let sites: Vec<String> = world
-            .sites_of("neckar-infra")
+            .sites_of("10001003")
             .iter()
-            .map(|s| s.customer_ref.clone())
+            .map(|s| s.id.0.clone())
             .collect();
         let v1 = sites
             .iter()
@@ -529,5 +556,26 @@ mod tests {
             .count();
         assert_eq!(v1 + v2, sites.len());
         assert!(v1.abs_diff(v2) <= 1, "{v1} on v1, {v2} on v2");
+    }
+}
+
+#[cfg(test)]
+mod integration_tests {
+    use super::INTEGRATIONS;
+    use crate::world::World;
+
+    #[test]
+    fn every_integration_orders_for_a_known_customer() {
+        let world = World::seed().unwrap();
+        for (integration, customer) in INTEGRATIONS {
+            assert!(
+                world.customers.iter().any(|c| c.id.0 == customer),
+                "{integration} → {customer}"
+            );
+            assert!(
+                !world.sites_of(customer).is_empty(),
+                "{integration} has no ship-tos"
+            );
+        }
     }
 }

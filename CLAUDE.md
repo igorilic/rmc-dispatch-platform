@@ -25,6 +25,14 @@ edge node at each plant with store-and-forward.
 
 ## Domain decisions (owner clarifications on top of SPEC §3)
 
+- Customers and their ship-tos are **our master data**, in one uniform model. Customers never send
+  them. `Customer { id = our customer number, name, address }`. The ship-to keeps the spec's name
+  `Site { id = our ship-to number, customer, name, address?, location?, access_notes }`. A site has
+  an address, coordinates, or both. Address-only sites are placed at their postal code's centroid
+  (`PostalCodeGeocoder`, a deliberately fake geocoder).
+- Orders from customer systems reference **our** customer number and ship-to number, in each
+  channel's own field names. Ingest validates both against master data; there is no mapping of
+  customer-side codes.
 - An order has exactly one mix. Two mixes means two orders.
 - Order status values: `unconfirmed` (dispatch centre confirmed, customer not), `pending` (customer
   confirmed, dispatch centre not), `confirmed` (both), `in_progress` (batching/loading started, a

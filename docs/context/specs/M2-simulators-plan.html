@@ -234,7 +234,7 @@
 </tbody>
 </table>
 
-<p>Each site has an ID of our own and the customer’s own reference for it, for example <code>BW-HD-03</code>. Customers only ever send their own reference. Ingest resolves it in milestone 3.</p>
+<p><strong>Corrected after M2:</strong> customers and their ship-tos are our master data. The seed holds 3 customers (<code>10001001</code>–<code>10001003</code>) and 40 ship-tos (<code>50001001</code>–<code>50001040</code>), each with an address. 34 of them also have coordinates; the other 6 are placed at their postal code’s centroid. Orders reference our customer number and ship-to number, and ingest validates both in milestone 3.</p>
 
 <h2 id="inside">Inside the simulators process</h2>
 
@@ -421,7 +421,8 @@
 <pre><code>{
   "jobId": "BW-2026-0042",
   "updatedAt": "2026-11-09T10:15:02+01:00",
-  "deliverTo": { "siteRef": "BW-HD-03" },
+  "customerNo": "10001001",
+  "deliverTo": { "shipTo": "50001007" },
   "product": "C30/37-XC4",
   "qty": { "value": 42.5, "unit": "m3" },
   "pourStart": "2026-11-10T07:00:00+01:00",
@@ -432,16 +433,17 @@
 
 <h3 id="rheinbau">rheinbau-gmbh: CSV over SFTP</h3>
 <p>Every 5 minutes, a full snapshot of all open orders is uploaded, so the same order arrives again and again. That makes idempotency matter from the very first drop. Files are written as <code>.part</code> and then renamed, so a reader never sees half a file. The CSV is semicolon-separated, uses decimal commas, and has German local times with no offset.</p>
-<pre><code>Auftragsnr;Baustelle;Sorte;Menge;Liefertermin;Leistung;MaxPause;Status
-RB-7781;RB-SCHW-02;C25/30-XC2;42,5;10.11.2026 07:00;30,0;20;bestätigt
-RB-7782;RB-MA-01;C30/37-XC4;120,0;10.11.2026 06:30;45,0;15;bestätigt
-RB-7779;RB-SP-01;C20/25-X0;18,0;10.11.2026 13:00;20,0;30;storniert</code></pre>
+<pre><code>Auftragsnr;Kundennr;Warenempfänger;Sorte;Menge;Liefertermin;Leistung;MaxPause;Status
+RB-7781;10001002;50001023;C25/30-XC2;42,5;10.11.2026 07:00;30,0;20;bestätigt
+RB-7782;10001002;50001015;C30/37-XC4;120,0;10.11.2026 06:30;45,0;15;bestätigt
+RB-7779;10001002;50001020;C20/25-X0;18,0;10.11.2026 13:00;20,0;30;storniert</code></pre>
 
 <h3 id="neckar">neckar-infra: XML webhook, v1 and v2 side by side</h3>
 <p>Half of the sites still run the v1 system and the other half have moved to v2, so both versions arrive all the time. v2 switches to attributes, UTC timestamps and litres, and adds a revision counter.</p>
 <pre><code>&lt;Order version="1"&gt;
   &lt;OrderNo&gt;NI-88213&lt;/OrderNo&gt;
-  &lt;SiteCode&gt;NI-HD-07&lt;/SiteCode&gt;
+  &lt;CustomerNo&gt;10001003&lt;/CustomerNo&gt;
+  &lt;ShipTo&gt;50001028&lt;/ShipTo&gt;
   &lt;Product&gt;C30/37-XC4&lt;/Product&gt;
   &lt;Quantity&gt;42.5&lt;/Quantity&gt;
   &lt;Start&gt;2026-11-10T07:00:00+01:00&lt;/Start&gt;
@@ -451,8 +453,8 @@ RB-7779;RB-SP-01;C20/25-X0;18,0;10.11.2026 13:00;20,0;30;storniert</code></pre>
 &lt;/Order&gt;
 
 &lt;Order version="2"&gt;
-  &lt;Header orderNo="NI-88214" revision="2" status="confirmed"/&gt;
-  &lt;Delivery site="NI-NG-02" start="2026-11-10T06:00:00Z" maxGapMin="20"/&gt;
+  &lt;Header orderNo="NI-88214" customerNo="10001003" revision="2" status="confirmed"/&gt;
+  &lt;Delivery shipTo="50001032" start="2026-11-10T06:00:00Z" maxGapMin="20"/&gt;
   &lt;Material code="C30/37-XC4" quantityLitres="42500" rateLitresPerHour="30000"/&gt;
 &lt;/Order&gt;</code></pre>
 
@@ -516,7 +518,7 @@ Dockerfile         one multi-stage file for every binary (ARG BIN)</code></pre>
 <tr><td>2</td><td>Who decides where trucks go before dispatch exists?</td><td>Trucks run autonomous trips to random sites. Telematics carry no order references; dispatch links trucks to loads through the plan. In M5 the trucks switch to following the plan.</td></tr>
 <tr><td>3</td><td>Should simulated time run faster than real time?</td><td>No. Real time only, so timestamps stay truthful for ingest and dispatch.</td></tr>
 <tr><td>4</td><td>Where do webhooks go before ingest exists?</td><td>Nowhere. The payload is logged until <code>*_WEBHOOK_URL</code> is set, which happens in M3.</td></tr>
-<tr><td>5</td><td>Do customers send our site IDs?</td><td>No. They send their own references (<code>BW-HD-03</code>), and the seed maps them to our IDs.</td></tr>
+<tr><td>5</td><td>Do customers send our site IDs?</td><td><strong>Corrected after M2:</strong> yes. Orders carry our customer number and ship-to number from master data. I originally proposed customer-side references mapped by us.</td></tr>
 <tr><td>6</td><td>One container or one per simulator?</td><td>One <code>simulators</code> binary and container, with each simulator running as tokio tasks.</td></tr>
 </tbody>
 </table>

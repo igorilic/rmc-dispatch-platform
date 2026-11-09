@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Order version="1">
   <OrderNo>NI-88213</OrderNo>
-  <SiteCode>NI-HD-07</SiteCode>
+  <CustomerNo>10001003</CustomerNo>
+  <ShipTo>50001028</ShipTo>
   <Product>C30/37-XC4</Product>
   <Quantity>42.5</Quantity>
   <Start>2026-11-10T07:00:00+01:00</Start>

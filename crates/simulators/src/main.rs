@@ -169,13 +169,28 @@ async fn main() -> anyhow::Result<()> {
     drop(tx);
 
     let mixes: Vec<String> = world.mixes.iter().map(|m| m.code.0.clone()).collect();
-    let book = |customer: &str, numbers: OrderNumbers| {
-        let sites = world
+    // Each integration orders for one customer from our master data, to that customer's ship-tos.
+    let book = |integration: &str, numbers: OrderNumbers| -> anyhow::Result<OrderBook> {
+        let (_, customer) = customers::INTEGRATIONS
+            .iter()
+            .find(|(name, _)| *name == integration)
+            .with_context(|| format!("no customer for integration {integration}"))?;
+        let master = world.customers.iter().find(|c| c.id.0 == *customer);
+        let master = master.with_context(|| {
+            format!("customer {customer} ({integration}) is not in the master data")
+        })?;
+        info!(integration, customer, name = %master.name, "ordering for customer");
+        let ship_tos = world
             .sites_of(customer)
             .iter()
-            .map(|s| s.customer_ref.clone())
+            .map(|s| s.id.0.clone())
             .collect();
-        OrderBook::new(numbers, sites, mixes.clone())
+        Ok(OrderBook::new(
+            numbers,
+            (*customer).to_owned(),
+            ship_tos,
+            mixes.clone(),
+        ))
     };
     let bauwerk = Webhook {
         customer: "bauwerk-ag",
@@ -190,7 +205,7 @@ async fn main() -> anyhow::Result<()> {
         content_type: "application/xml",
         duplicate_rate: 0.0,
         render: |order, sites| {
-            customers::neckar_xml(order, customers::neckar_version(&order.site_ref, sites))
+            customers::neckar_xml(order, customers::neckar_version(&order.ship_to, sites))
         },
     };
     let numbers = |prefix, first, width| OrderNumbers {
@@ -201,19 +216,19 @@ async fn main() -> anyhow::Result<()> {
     let interval = config.order_interval;
     tasks.spawn(customers::run_webhook(
         bauwerk,
-        book("bauwerk-ag", numbers("BW-2026-", 1, 4)),
+        book("bauwerk-ag", numbers("BW-2026-", 1, 4))?,
         interval,
         clock,
         seed(200),
     ));
     tasks.spawn(customers::run_webhook(
         neckar,
-        book("neckar-infra", numbers("NI-", 88001, 5)),
+        book("neckar-infra", numbers("NI-", 88001, 5))?,
         interval,
         clock,
         seed(201),
     ));
-    let rheinbau = book("rheinbau-gmbh", numbers("RB-", 7001, 4));
+    let rheinbau = book("rheinbau-gmbh", numbers("RB-", 7001, 4))?;
     tasks.spawn(customers::run_sftp(
         config.sftp,
         rheinbau,

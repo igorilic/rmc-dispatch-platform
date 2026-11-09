@@ -1,22 +1,18 @@
-//! The seeded world: plants, trucks, sites and mixes from `deploy/seed/rhine-neckar.json`.
+//! The seeded world from `deploy/seed/rhine-neckar.json`. It holds our master data (customers and
+//! their ship-tos, with a postal-code table for address-only sites) plus plants, trucks and mixes.
 
-use domain::{MixDesign, Plant, Site, Truck};
+use domain::{Customer, MixDesign, Plant, PostalCodeGeocoder, Site, Truck};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct World {
+    pub customers: Vec<Customer>,
+    #[serde(rename = "postal_codes")]
+    pub geocoder: PostalCodeGeocoder,
     pub plants: Vec<Plant>,
     pub trucks: Vec<Truck>,
-    pub sites: Vec<SeedSite>,
+    pub sites: Vec<Site>,
     pub mixes: Vec<MixDesign>,
-}
-
-/// A site plus the customer's own reference for it. Customers only ever send their reference.
-#[derive(Debug, Clone, Deserialize)]
-pub struct SeedSite {
-    #[serde(flatten)]
-    pub site: Site,
-    pub customer_ref: String,
 }
 
 impl World {
@@ -30,10 +26,11 @@ impl World {
         self.plants.iter().find(|p| &p.id == id)
     }
 
-    pub fn sites_of(&self, customer: &str) -> Vec<&SeedSite> {
+    /// The ship-tos of the customer with this customer number.
+    pub fn sites_of(&self, customer: &str) -> Vec<&Site> {
         self.sites
             .iter()
-            .filter(|s| s.site.customer.0 == customer)
+            .filter(|s| s.customer.0 == customer)
             .collect()
     }
 }
@@ -44,8 +41,6 @@ mod tests {
 
     use super::*;
 
-    const CUSTOMERS: [&str; 3] = ["bauwerk-ag", "rheinbau-gmbh", "neckar-infra"];
-
     fn all_unique<'a>(ids: impl Iterator<Item = &'a str>) -> bool {
         let ids: Vec<_> = ids.collect();
         ids.len() == ids.iter().collect::<HashSet<_>>().len()
@@ -55,34 +50,43 @@ mod tests {
     fn seed_is_consistent() {
         let world = World::seed().unwrap();
         let counts = (
+            world.customers.len(),
             world.plants.len(),
             world.trucks.len(),
             world.sites.len(),
             world.mixes.len(),
         );
-        assert_eq!(counts, (3, 25, 40, 4));
+        assert_eq!(counts, (3, 3, 25, 40, 4));
 
+        assert!(all_unique(world.customers.iter().map(|c| c.id.0.as_str())));
         assert!(all_unique(world.plants.iter().map(|p| p.id.0.as_str())));
         assert!(all_unique(world.trucks.iter().map(|t| t.id.0.as_str())));
-        assert!(all_unique(world.sites.iter().map(|s| s.site.id.0.as_str())));
-        assert!(all_unique(
-            world.sites.iter().map(|s| s.customer_ref.as_str())
-        ));
+        assert!(all_unique(world.sites.iter().map(|s| s.id.0.as_str())));
 
         for truck in &world.trucks {
             assert!(world.plant(&truck.home_plant).is_some(), "{truck:?}");
         }
-        for customer in CUSTOMERS {
+        for customer in &world.customers {
             assert!(
-                !world.sites_of(customer).is_empty(),
-                "{customer} has no sites"
+                !world.sites_of(&customer.id.0).is_empty(),
+                "{} has no ship-tos",
+                customer.name
             );
         }
-        let site_customers: usize = CUSTOMERS.iter().map(|c| world.sites_of(c).len()).sum();
-        assert_eq!(
-            site_customers,
-            world.sites.len(),
-            "a site belongs to an unknown customer"
+        for site in &world.sites {
+            assert!(
+                world.customers.iter().any(|c| c.id == site.customer),
+                "{site:?}"
+            );
+            assert!(
+                world.geocoder.locate(site).is_some(),
+                "cannot place {site:?}"
+            );
+        }
+        let address_only = world.sites.iter().filter(|s| s.location.is_none()).count();
+        assert!(
+            address_only > 0,
+            "the seed should exercise the postal-code geocoder"
         );
     }
 }

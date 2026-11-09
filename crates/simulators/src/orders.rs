@@ -5,7 +5,8 @@
 //! - changes the volume of an open order (15 %),
 //! - cancels an open order (5 %).
 //!
-//! A new order gets one of the customer's sites and a mix. Its volume is 8–150 m³, mostly 10–60, in
+//! A new order carries our customer number, one of that customer's ship-tos from our master data,
+//! and a mix. Its volume is 8–150 m³, mostly 10–60, in
 //! 0.5 m³ steps. Its start is 2–26 hours ahead, between 06:00 and 15:45 Berlin time. The pour rate
 //! is 20–60 m³/h and the maximum gap 15–30 minutes. The customers only differ in how they deliver
 //! orders (see `customers`).
@@ -18,7 +19,10 @@ use rand::{RngExt, rngs::StdRng};
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeneratedOrder {
     pub order_ref: String,
-    pub site_ref: String,
+    /// Our customer number, from master data.
+    pub customer: String,
+    /// Our ship-to number, from master data.
+    pub ship_to: String,
     pub mix: String,
     pub volume_m3: f64,
     pub start: DateTime<Utc>,
@@ -41,17 +45,24 @@ pub struct OrderNumbers {
 pub struct OrderBook {
     numbers: OrderNumbers,
     next: u32,
-    site_refs: Vec<String>,
+    customer: String,
+    ship_tos: Vec<String>,
     mixes: Vec<String>,
     open: Vec<GeneratedOrder>,
 }
 
 impl OrderBook {
-    pub fn new(numbers: OrderNumbers, site_refs: Vec<String>, mixes: Vec<String>) -> Self {
+    pub fn new(
+        numbers: OrderNumbers,
+        customer: String,
+        ship_tos: Vec<String>,
+        mixes: Vec<String>,
+    ) -> Self {
         OrderBook {
             next: numbers.first,
             numbers,
-            site_refs,
+            customer,
+            ship_tos,
             mixes,
             open: Vec::new(),
         }
@@ -61,8 +72,8 @@ impl OrderBook {
         &self.open
     }
 
-    pub fn site_refs(&self) -> &[String] {
-        &self.site_refs
+    pub fn ship_tos(&self) -> &[String] {
+        &self.ship_tos
     }
 
     pub fn next_change(&mut self, rng: &mut StdRng, now: DateTime<Utc>) -> GeneratedOrder {
@@ -78,7 +89,8 @@ impl OrderBook {
         let OrderNumbers { prefix, width, .. } = self.numbers;
         let order = GeneratedOrder {
             order_ref: format!("{prefix}{:0width$}", self.next),
-            site_ref: self.site_refs.choose(rng).cloned().unwrap_or_default(),
+            customer: self.customer.clone(),
+            ship_to: self.ship_tos.choose(rng).cloned().unwrap_or_default(),
             mix: self.mixes.choose(rng).cloned().unwrap_or_default(),
             volume_m3: half_m3(8.0 + 142.0 * rng.random::<f64>().powi(2)),
             start: start_time(rng, now),
@@ -154,7 +166,8 @@ mod tests {
         };
         OrderBook::new(
             numbers,
-            vec!["RB-MA-01".into(), "RB-SP-01".into()],
+            "10001002".into(),
+            vec!["50001015".into(), "50001020".into()],
             vec!["C25/30-XC2".into()],
         )
     }
@@ -172,6 +185,11 @@ mod tests {
         for n in 7002..7500 {
             let o = book.create(&mut rng, now());
             assert_eq!(o.order_ref, format!("RB-{n}"));
+            assert_eq!(o.customer, "10001002", "orders carry our customer number");
+            assert!(
+                ["50001015", "50001020"].contains(&o.ship_to.as_str()),
+                "{o:?}"
+            );
             assert!(
                 (8.0..=150.0).contains(&o.volume_m3) && (o.volume_m3 * 2.0).fract() == 0.0,
                 "{o:?}"

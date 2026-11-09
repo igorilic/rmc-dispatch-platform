@@ -7,7 +7,7 @@
 //! planned [`Load`]s, one per truck trip. A [`Delivery`] only exists once batching for a load starts.
 //! Until then an order has no deliveries at all.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -102,12 +102,58 @@ pub struct Truck {
     pub last_position: Option<Location>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Address {
+    pub street: String,
+    pub postal_code: String,
+    pub city: String,
+    /// ISO 3166-1 alpha-2, e.g. `DE`.
+    pub country: String,
+}
+
+/// A customer from our master data. Customers never send this; we own it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Customer {
+    /// Our customer number.
+    pub id: CustomerId,
+    pub name: String,
+    pub address: Address,
+}
+
+/// A ship-to: the place we deliver to for a customer, from our master data.
+/// It has an address, coordinates, or both. See [`PostalCodeGeocoder`] for address-only sites.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Site {
+    /// Our ship-to number.
     pub id: SiteId,
     pub customer: CustomerId,
-    pub location: Location,
+    pub name: String,
+    pub address: Option<Address>,
+    pub location: Option<Location>,
     pub access_notes: String,
+}
+
+/// Places a site: its own coordinates when it has them, otherwise its postal code's centroid.
+/// ponytail: centroid lookup only, so address-only sites land in the town centre; swap in a real
+/// geocoder if street-level accuracy ever matters.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PostalCodeGeocoder {
+    centroids: HashMap<String, Location>,
+}
+
+impl PostalCodeGeocoder {
+    pub fn new(centroids: HashMap<String, Location>) -> Self {
+        PostalCodeGeocoder { centroids }
+    }
+
+    pub fn locate(&self, site: &Site) -> Option<Location> {
+        site.location.or_else(|| {
+            self.centroids
+                .get(&site.address.as_ref()?.postal_code)
+                .copied()
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -324,17 +370,82 @@ mod tests {
     }
 
     #[test]
-    fn site_and_mix_wire_format() {
+    fn customer_site_and_mix_wire_format() {
+        assert_wire_format::<Customer>(json!({
+            "id": "10001001",
+            "name": "Bauwerk AG",
+            "address": {
+                "street": "Industriestraße 12",
+                "postal_code": "69115",
+                "city": "Heidelberg",
+                "country": "DE"
+            }
+        }));
         assert_wire_format::<Site>(json!({
-            "id": "site-heidelberg-bahnstadt",
-            "customer": "bauwerk-ag",
+            "id": "50001007",
+            "customer": "10001001",
+            "name": "Heidelberg Wohnquartier",
+            "address": {
+                "street": "Grüne Meile 3",
+                "postal_code": "69115",
+                "city": "Heidelberg",
+                "country": "DE"
+            },
             "location": { "lat": 49.4, "lon": 8.67 },
             "access_notes": "Gate 3, pump on the north side"
+        }));
+        // A ship-to may have only an address, or only coordinates.
+        assert_wire_format::<Site>(json!({
+            "id": "50001008",
+            "customer": "10001001",
+            "name": "Leimen Kita",
+            "address": { "street": "Rathausstraße 8", "postal_code": "69181", "city": "Leimen", "country": "DE" },
+            "location": null,
+            "access_notes": ""
         }));
         assert_wire_format::<MixDesign>(json!({
             "code": "C30/37-XC4",
             "max_minutes_from_batching": 90
         }));
+    }
+
+    #[test]
+    fn sites_are_located_by_coordinates_then_postal_code() {
+        let leimen = Location {
+            lat: 49.3481,
+            lon: 8.6911,
+        };
+        let geocoder = PostalCodeGeocoder::new([("69181".to_owned(), leimen)].into());
+        let address = |postal_code: &str| Address {
+            street: "Rathausstraße 8".into(),
+            postal_code: postal_code.into(),
+            city: "Leimen".into(),
+            country: "DE".into(),
+        };
+        let site = |address: Option<Address>, location: Option<Location>| Site {
+            id: SiteId("50001008".into()),
+            customer: CustomerId("10001001".into()),
+            name: "Leimen Kita".into(),
+            address,
+            location,
+            access_notes: String::new(),
+        };
+        let exact = Location {
+            lat: 49.35,
+            lon: 8.69,
+        };
+
+        assert_eq!(
+            geocoder.locate(&site(Some(address("69181")), Some(exact))),
+            Some(exact)
+        );
+        assert_eq!(geocoder.locate(&site(None, Some(exact))), Some(exact));
+        assert_eq!(
+            geocoder.locate(&site(Some(address("69181")), None)),
+            Some(leimen)
+        );
+        assert_eq!(geocoder.locate(&site(Some(address("99999")), None)), None);
+        assert_eq!(geocoder.locate(&site(None, None)), None);
     }
 
     #[test]

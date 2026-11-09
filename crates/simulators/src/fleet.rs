@@ -192,7 +192,10 @@ impl TruckSim {
             .sites
             .choose(&mut self.rng)
             .context("the seed has no sites")?;
-        let (site_id, site_at) = (site.site.id.0.clone(), site.site.location);
+        let site_id = site.id.0.clone();
+        let site_at = self.world.geocoder.locate(site).with_context(|| {
+            format!("ship-to {site_id} has neither coordinates nor a known postal code")
+        })?;
         let mix = self
             .world
             .mixes
@@ -420,8 +423,8 @@ mod tests {
     }
 
     /// Runs one truck until it is available again after its first trip.
-    async fn one_trip(dead_zone_trip_share: f64) -> (Vec<Seen>, Arc<World>) {
-        let world = Arc::new(World::seed().unwrap());
+    async fn one_trip(world: World, dead_zone_trip_share: f64) -> (Vec<Seen>, Arc<World>) {
+        let world = Arc::new(world);
         let (tx, mut rx) = mpsc::channel(100_000);
         let clock = Clock::start(Utc.with_ymd_and_hms(2026, 11, 9, 6, 0, 0).unwrap());
         let truck = world.trucks[0].clone();
@@ -482,7 +485,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_trip_follows_the_lifecycle_and_the_travel_model() {
-        let (seen, world) = one_trip(0.0).await;
+        let (seen, world) = one_trip(World::seed().unwrap(), 0.0).await;
         assert_eq!(statuses(&seen), LIFECYCLE);
 
         let seqs: Vec<u64> = seen
@@ -539,7 +542,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_dead_zone_delays_messages_but_loses_none() {
-        let (seen, _) = one_trip(1.0).await;
+        let (seen, _) = one_trip(World::seed().unwrap(), 1.0).await;
         assert_eq!(statuses(&seen), LIFECYCLE);
 
         let seqs: Vec<u64> = seen
@@ -556,5 +559,37 @@ mod tests {
             .iter()
             .filter(|s| s.received_ms - s.body["ts_ms"].as_i64().unwrap() >= 20_000);
         assert!(late.count() >= 2, "a dead zone should deliver a late burst");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn trucks_drive_to_the_postal_code_centroid_of_an_address_only_site() {
+        let mut world = World::seed().unwrap();
+        world.sites.retain(|s| s.location.is_none());
+        let centroids: Vec<Location> = world
+            .sites
+            .iter()
+            .map(|s| world.geocoder.locate(s).unwrap())
+            .collect();
+        assert!(!centroids.is_empty());
+
+        let (seen, _) = one_trip(world, 0.0).await;
+        let on_site = seen
+            .iter()
+            .position(|s| s.body["status"] == "on_site")
+            .unwrap();
+        let fix = seen[on_site..]
+            .iter()
+            .find(|s| s.topic.ends_with("/gps"))
+            .unwrap();
+        let (lat, lon) = (
+            fix.body["lat"].as_f64().unwrap(),
+            fix.body["lon"].as_f64().unwrap(),
+        );
+        assert!(
+            centroids
+                .iter()
+                .any(|c| (c.lat - lat).abs() < 1e-6 && (c.lon - lon).abs() < 1e-6),
+            "parked at {lat},{lon}; expected one of {centroids:?}"
+        );
     }
 }

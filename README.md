@@ -48,8 +48,10 @@ These credentials are throwaway local defaults. To override them, copy `.env.exa
 
 ## Watching the simulators
 
-The simulated world lives in [`deploy/seed/rhine-neckar.json`](deploy/seed/rhine-neckar.json):
-3 plants, 25 trucks, 40 sites and 4 mix designs around Heidelberg and Mannheim. The milestone 2
+The simulated world lives in [`deploy/seed/rhine-neckar.json`](deploy/seed/rhine-neckar.json),
+around Heidelberg and Mannheim. It holds our master data: 3 customers and their 40 ship-tos
+(sites), each with an address. 6 of the ship-tos have no coordinates and are placed at their
+postal code's centroid. The world also has 3 plants, 25 trucks and 4 mix designs. The milestone 2
 plan in `docs/context/specs/` has diagrams of how it fits together.
 
 ```sh
@@ -68,7 +70,9 @@ $C exec sftp ls -l /config/rheinbau-gmbh           # rheinbau-gmbh's CSV drops
 | `neckar-infra` orders | HTTP POST, XML | Schema v1 and v2 are live side by side. Logged until a webhook URL is set. |
 | `rheinbau-gmbh` orders | SFTP, CSV | A full snapshot every 5 minutes: semicolons, decimal commas, Berlin local time. |
 
-Sample payloads for each customer are in [`customers/`](customers). The tests check the simulators against them.
+Every order references our customer number and ship-to number from the master data, in the
+customer's own field names. Sample payloads for each customer are in [`customers/`](customers),
+and the tests check the simulators against them.
 
 | Variable | Default | Effect |
 |---|---|---|

@@ -1,4 +1,102 @@
 {
+  "customers": [
+    {
+      "id": "10001001",
+      "name": "Bauwerk AG",
+      "address": {
+        "street": "Industriestraße 12",
+        "postal_code": "69115",
+        "city": "Heidelberg",
+        "country": "DE"
+      }
+    },
+    {
+      "id": "10001002",
+      "name": "Rheinbau GmbH",
+      "address": {
+        "street": "Hafenstraße 41",
+        "postal_code": "68159",
+        "city": "Mannheim",
+        "country": "DE"
+      }
+    },
+    {
+      "id": "10001003",
+      "name": "Neckar Infra GmbH",
+      "address": {
+        "street": "Am Neckarufer 7",
+        "postal_code": "69151",
+        "city": "Neckargemünd",
+        "country": "DE"
+      }
+    }
+  ],
+  "postal_codes": {
+    "67059": {
+      "lat": 49.4774,
+      "lon": 8.4452
+    },
+    "67346": {
+      "lat": 49.3173,
+      "lon": 8.4412
+    },
+    "68159": {
+      "lat": 49.4875,
+      "lon": 8.466
+    },
+    "68519": {
+      "lat": 49.5403,
+      "lon": 8.5789
+    },
+    "68526": {
+      "lat": 49.473,
+      "lon": 8.609
+    },
+    "68723": {
+      "lat": 49.3833,
+      "lon": 8.57
+    },
+    "68766": {
+      "lat": 49.3181,
+      "lon": 8.5472
+    },
+    "69115": {
+      "lat": 49.3988,
+      "lon": 8.6724
+    },
+    "69151": {
+      "lat": 49.3897,
+      "lon": 8.7966
+    },
+    "69168": {
+      "lat": 49.2942,
+      "lon": 8.6986
+    },
+    "69181": {
+      "lat": 49.3481,
+      "lon": 8.6911
+    },
+    "69190": {
+      "lat": 49.3064,
+      "lon": 8.6428
+    },
+    "69214": {
+      "lat": 49.4019,
+      "lon": 8.6336
+    },
+    "69245": {
+      "lat": 49.356,
+      "lon": 8.779
+    },
+    "69469": {
+      "lat": 49.545,
+      "lon": 8.665
+    },
+    "74889": {
+      "lat": 49.2526,
+      "lon": 8.8796
+    }
+  },
   "plants": [
     {
       "id": "plant-mannheim",
@@ -222,404 +320,626 @@
   ],
   "sites": [
     {
-      "id": "site-wh-01",
-      "customer": "bauwerk-ag",
+      "id": "50001001",
+      "customer": "10001001",
+      "name": "Weinheim Wohnquartier",
+      "address": {
+        "street": "Hauptstraße 1",
+        "postal_code": "69469",
+        "city": "Weinheim",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.5512,
         "lon": 8.6589
       },
-      "access_notes": "Gate 1, pump on the north side",
-      "customer_ref": "BW-WH-01"
+      "access_notes": "Gate 1, pump on the north side"
     },
     {
-      "id": "site-wh-02",
-      "customer": "bauwerk-ag",
+      "id": "50001002",
+      "customer": "10001001",
+      "name": "Weinheim Gewerbehalle",
+      "address": {
+        "street": "Gewerbepark 8",
+        "postal_code": "69469",
+        "city": "Weinheim",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.5375,
         "lon": 8.6758
       },
-      "access_notes": "Access via the construction road, max 32 t",
-      "customer_ref": "BW-WH-02"
+      "access_notes": "Access via the construction road, max 32 t"
     },
     {
-      "id": "site-vh-01",
-      "customer": "bauwerk-ag",
+      "id": "50001003",
+      "customer": "10001001",
+      "name": "Viernheim Schulneubau",
+      "address": {
+        "street": "Gartenstraße 15",
+        "postal_code": "68519",
+        "city": "Viernheim",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.5457,
         "lon": 8.5737
       },
-      "access_notes": "Narrow street, approach from the east",
-      "customer_ref": "BW-VH-01"
+      "access_notes": "Narrow street, approach from the east"
     },
     {
-      "id": "site-vh-02",
-      "customer": "bauwerk-ag",
-      "location": {
-        "lat": 49.5348,
-        "lon": 8.5874
+      "id": "50001004",
+      "customer": "10001001",
+      "name": "Viernheim Tiefgarage",
+      "address": {
+        "street": "Bergstraße 22",
+        "postal_code": "68519",
+        "city": "Viernheim",
+        "country": "DE"
       },
-      "access_notes": "No deliveries after 20:00 (noise limit)",
-      "customer_ref": "BW-VH-02"
+      "location": null,
+      "access_notes": "No deliveries after 20:00 (noise limit)"
     },
     {
-      "id": "site-ma-01",
-      "customer": "bauwerk-ag",
+      "id": "50001005",
+      "customer": "10001001",
+      "name": "Mannheim Brücke",
+      "address": {
+        "street": "Am Sportplatz 29",
+        "postal_code": "68159",
+        "city": "Mannheim",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.4943,
         "lon": 8.4779
       },
-      "access_notes": "Washout area next to the site office",
-      "customer_ref": "BW-MA-01"
+      "access_notes": "Washout area next to the site office"
     },
     {
-      "id": "site-ma-02",
-      "customer": "bauwerk-ag",
+      "id": "50001006",
+      "customer": "10001001",
+      "name": "Mannheim Kita",
+      "address": {
+        "street": "Industriestraße 36",
+        "postal_code": "68159",
+        "city": "Mannheim",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.4786,
         "lon": 8.4842
       },
-      "access_notes": "Gate 1, pump on the north side",
-      "customer_ref": "BW-MA-02"
+      "access_notes": "Gate 1, pump on the north side"
     },
     {
-      "id": "site-hd-01",
-      "customer": "bauwerk-ag",
+      "id": "50001007",
+      "customer": "10001001",
+      "name": "Heidelberg Bürogebäude",
+      "address": {
+        "street": "Lindenallee 43",
+        "postal_code": "69115",
+        "city": "Heidelberg",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.4045,
         "lon": 8.6821
       },
-      "access_notes": "Access via the construction road, max 32 t",
-      "customer_ref": "BW-HD-01"
+      "access_notes": "Access via the construction road, max 32 t"
     },
     {
-      "id": "site-hd-02",
-      "customer": "bauwerk-ag",
+      "id": "50001008",
+      "customer": "10001001",
+      "name": "Heidelberg Pflegeheim",
+      "address": {
+        "street": "Schulstraße 50",
+        "postal_code": "69115",
+        "city": "Heidelberg",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.3922,
         "lon": 8.6653
       },
-      "access_notes": "Narrow street, approach from the east",
-      "customer_ref": "BW-HD-02"
+      "access_notes": "Narrow street, approach from the east"
     },
     {
-      "id": "site-hd-03",
-      "customer": "bauwerk-ag",
+      "id": "50001009",
+      "customer": "10001001",
+      "name": "Heidelberg Logistikzentrum",
+      "address": {
+        "street": "Bahnhofstraße 57",
+        "postal_code": "69115",
+        "city": "Heidelberg",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.3881,
         "lon": 8.6884
       },
-      "access_notes": "No deliveries after 20:00 (noise limit)",
-      "customer_ref": "BW-HD-03"
+      "access_notes": "No deliveries after 20:00 (noise limit)"
     },
     {
-      "id": "site-lm-01",
-      "customer": "bauwerk-ag",
-      "location": {
-        "lat": 49.3524,
-        "lon": 8.6842
+      "id": "50001010",
+      "customer": "10001001",
+      "name": "Leimen Sporthalle",
+      "address": {
+        "street": "Mühlweg 4",
+        "postal_code": "69181",
+        "city": "Leimen",
+        "country": "DE"
       },
-      "access_notes": "Washout area next to the site office",
-      "customer_ref": "BW-LM-01"
+      "location": null,
+      "access_notes": "Washout area next to the site office"
     },
     {
-      "id": "site-lm-02",
-      "customer": "bauwerk-ag",
+      "id": "50001011",
+      "customer": "10001001",
+      "name": "Leimen Ärztehaus",
+      "address": {
+        "street": "Ringstraße 11",
+        "postal_code": "69181",
+        "city": "Leimen",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.3429,
         "lon": 8.6989
       },
-      "access_notes": "Gate 1, pump on the north side",
-      "customer_ref": "BW-LM-02"
+      "access_notes": "Gate 1, pump on the north side"
     },
     {
-      "id": "site-wd-01",
-      "customer": "bauwerk-ag",
+      "id": "50001012",
+      "customer": "10001001",
+      "name": "Walldorf Wohnquartier",
+      "address": {
+        "street": "Hauptstraße 18",
+        "postal_code": "69190",
+        "city": "Walldorf",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.3141,
         "lon": 8.6295
       },
-      "access_notes": "Access via the construction road, max 32 t",
-      "customer_ref": "BW-WD-01"
+      "access_notes": "Access via the construction road, max 32 t"
     },
     {
-      "id": "site-wl-01",
-      "customer": "bauwerk-ag",
+      "id": "50001013",
+      "customer": "10001001",
+      "name": "Wiesloch Gewerbehalle",
+      "address": {
+        "street": "Gewerbepark 25",
+        "postal_code": "69168",
+        "city": "Wiesloch",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.299,
         "lon": 8.7074
       },
-      "access_notes": "Narrow street, approach from the east",
-      "customer_ref": "BW-WL-01"
+      "access_notes": "Narrow street, approach from the east"
     },
     {
-      "id": "site-wl-02",
-      "customer": "bauwerk-ag",
+      "id": "50001014",
+      "customer": "10001001",
+      "name": "Wiesloch Schulneubau",
+      "address": {
+        "street": "Gartenstraße 32",
+        "postal_code": "69168",
+        "city": "Wiesloch",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.288,
         "lon": 8.6905
       },
-      "access_notes": "No deliveries after 20:00 (noise limit)",
-      "customer_ref": "BW-WL-02"
+      "access_notes": "No deliveries after 20:00 (noise limit)"
     },
     {
-      "id": "site-ma-03",
-      "customer": "rheinbau-gmbh",
+      "id": "50001015",
+      "customer": "10001002",
+      "name": "Mannheim Tiefgarage",
+      "address": {
+        "street": "Bergstraße 39",
+        "postal_code": "68159",
+        "city": "Mannheim",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.4991,
         "lon": 8.4568
       },
-      "access_notes": "Washout area next to the site office",
-      "customer_ref": "RB-MA-01"
+      "access_notes": "Washout area next to the site office"
     },
     {
-      "id": "site-ma-04",
-      "customer": "rheinbau-gmbh",
+      "id": "50001016",
+      "customer": "10001002",
+      "name": "Mannheim Brücke",
+      "address": {
+        "street": "Am Sportplatz 46",
+        "postal_code": "68159",
+        "city": "Mannheim",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.4703,
         "lon": 8.4737
       },
-      "access_notes": "Gate 1, pump on the north side",
-      "customer_ref": "RB-MA-02"
+      "access_notes": "Gate 1, pump on the north side"
     },
     {
-      "id": "site-ma-05",
-      "customer": "rheinbau-gmbh",
+      "id": "50001017",
+      "customer": "10001002",
+      "name": "Mannheim Kita",
+      "address": {
+        "street": "Industriestraße 53",
+        "postal_code": "68159",
+        "city": "Mannheim",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.4978,
         "lon": 8.4926
       },
-      "access_notes": "Access via the construction road, max 32 t",
-      "customer_ref": "RB-MA-03"
+      "access_notes": "Access via the construction road, max 32 t"
     },
     {
-      "id": "site-lu-01",
-      "customer": "rheinbau-gmbh",
-      "location": {
-        "lat": 49.484,
-        "lon": 8.4232
+      "id": "50001018",
+      "customer": "10001002",
+      "name": "Ludwigshafen Bürogebäude",
+      "address": {
+        "street": "Lindenallee 60",
+        "postal_code": "67059",
+        "city": "Ludwigshafen",
+        "country": "DE"
       },
-      "access_notes": "Narrow street, approach from the east",
-      "customer_ref": "RB-LU-01"
+      "location": null,
+      "access_notes": "Narrow street, approach from the east"
     },
     {
-      "id": "site-lu-02",
-      "customer": "rheinbau-gmbh",
+      "id": "50001019",
+      "customer": "10001002",
+      "name": "Ludwigshafen Pflegeheim",
+      "address": {
+        "street": "Schulstraße 7",
+        "postal_code": "67059",
+        "city": "Ludwigshafen",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.469,
         "lon": 8.4337
       },
-      "access_notes": "No deliveries after 20:00 (noise limit)",
-      "customer_ref": "RB-LU-02"
+      "access_notes": "No deliveries after 20:00 (noise limit)"
     },
     {
-      "id": "site-sp-01",
-      "customer": "rheinbau-gmbh",
+      "id": "50001020",
+      "customer": "10001002",
+      "name": "Speyer Logistikzentrum",
+      "address": {
+        "street": "Bahnhofstraße 14",
+        "postal_code": "67346",
+        "city": "Speyer",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.323,
         "lon": 8.4316
       },
-      "access_notes": "Washout area next to the site office",
-      "customer_ref": "RB-SP-01"
+      "access_notes": "Washout area next to the site office"
     },
     {
-      "id": "site-sp-02",
-      "customer": "rheinbau-gmbh",
+      "id": "50001021",
+      "customer": "10001002",
+      "name": "Speyer Sporthalle",
+      "address": {
+        "street": "Mühlweg 21",
+        "postal_code": "67346",
+        "city": "Speyer",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.3113,
         "lon": 8.4442
       },
-      "access_notes": "Gate 1, pump on the north side",
-      "customer_ref": "RB-SP-02"
+      "access_notes": "Gate 1, pump on the north side"
     },
     {
-      "id": "site-schw-01",
-      "customer": "rheinbau-gmbh",
+      "id": "50001022",
+      "customer": "10001002",
+      "name": "Schwetzingen Ärztehaus",
+      "address": {
+        "street": "Ringstraße 28",
+        "postal_code": "68723",
+        "city": "Schwetzingen",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.3881,
         "lon": 8.5621
       },
-      "access_notes": "Access via the construction road, max 32 t",
-      "customer_ref": "RB-SCHW-01"
+      "access_notes": "Access via the construction road, max 32 t"
     },
     {
-      "id": "site-schw-02",
-      "customer": "rheinbau-gmbh",
+      "id": "50001023",
+      "customer": "10001002",
+      "name": "Schwetzingen Wohnquartier",
+      "address": {
+        "street": "Hauptstraße 35",
+        "postal_code": "68723",
+        "city": "Schwetzingen",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.3771,
         "lon": 8.5789
       },
-      "access_notes": "Narrow street, approach from the east",
-      "customer_ref": "RB-SCHW-02"
+      "access_notes": "Narrow street, approach from the east"
     },
     {
-      "id": "site-ho-01",
-      "customer": "rheinbau-gmbh",
-      "location": {
-        "lat": 49.3223,
-        "lon": 8.5389
+      "id": "50001024",
+      "customer": "10001002",
+      "name": "Hockenheim Gewerbehalle",
+      "address": {
+        "street": "Gewerbepark 42",
+        "postal_code": "68766",
+        "city": "Hockenheim",
+        "country": "DE"
       },
-      "access_notes": "No deliveries after 20:00 (noise limit)",
-      "customer_ref": "RB-HO-01"
+      "location": null,
+      "access_notes": "No deliveries after 20:00 (noise limit)"
     },
     {
-      "id": "site-ho-02",
-      "customer": "rheinbau-gmbh",
+      "id": "50001025",
+      "customer": "10001002",
+      "name": "Hockenheim Schulneubau",
+      "address": {
+        "street": "Gartenstraße 49",
+        "postal_code": "68766",
+        "city": "Hockenheim",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.3127,
         "lon": 8.5558
       },
-      "access_notes": "Washout area next to the site office",
-      "customer_ref": "RB-HO-02"
+      "access_notes": "Washout area next to the site office"
     },
     {
-      "id": "site-ep-01",
-      "customer": "rheinbau-gmbh",
+      "id": "50001026",
+      "customer": "10001002",
+      "name": "Eppelheim Tiefgarage",
+      "address": {
+        "street": "Bergstraße 56",
+        "postal_code": "69214",
+        "city": "Eppelheim",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.4073,
         "lon": 8.6274
       },
-      "access_notes": "Gate 1, pump on the north side",
-      "customer_ref": "RB-EP-01"
+      "access_notes": "Gate 1, pump on the north side"
     },
     {
-      "id": "site-lb-01",
-      "customer": "rheinbau-gmbh",
+      "id": "50001027",
+      "customer": "10001002",
+      "name": "Ladenburg Brücke",
+      "address": {
+        "street": "Am Sportplatz 3",
+        "postal_code": "68526",
+        "city": "Ladenburg",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.4662,
         "lon": 8.6
       },
-      "access_notes": "Access via the construction road, max 32 t",
-      "customer_ref": "RB-LB-01"
+      "access_notes": "Access via the construction road, max 32 t"
     },
     {
-      "id": "site-hd-04",
-      "customer": "neckar-infra",
+      "id": "50001028",
+      "customer": "10001003",
+      "name": "Heidelberg Kita",
+      "address": {
+        "street": "Industriestraße 10",
+        "postal_code": "69115",
+        "city": "Heidelberg",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.4141,
         "lon": 8.6758
       },
-      "access_notes": "Narrow street, approach from the east",
-      "customer_ref": "NI-HD-01"
+      "access_notes": "Narrow street, approach from the east"
     },
     {
-      "id": "site-hd-05",
-      "customer": "neckar-infra",
+      "id": "50001029",
+      "customer": "10001003",
+      "name": "Heidelberg Bürogebäude",
+      "address": {
+        "street": "Lindenallee 17",
+        "postal_code": "69115",
+        "city": "Heidelberg",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.4169,
         "lon": 8.6947
       },
-      "access_notes": "No deliveries after 20:00 (noise limit)",
-      "customer_ref": "NI-HD-02"
+      "access_notes": "No deliveries after 20:00 (noise limit)"
     },
     {
-      "id": "site-hd-06",
-      "customer": "neckar-infra",
+      "id": "50001030",
+      "customer": "10001003",
+      "name": "Heidelberg Pflegeheim",
+      "address": {
+        "street": "Schulstraße 24",
+        "postal_code": "69115",
+        "city": "Heidelberg",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.3949,
         "lon": 8.6526
       },
-      "access_notes": "Washout area next to the site office",
-      "customer_ref": "NI-HD-03"
+      "access_notes": "Washout area next to the site office"
     },
     {
-      "id": "site-ng-01",
-      "customer": "neckar-infra",
-      "location": {
-        "lat": 49.3949,
-        "lon": 8.7895
+      "id": "50001031",
+      "customer": "10001003",
+      "name": "Neckargemünd Logistikzentrum",
+      "address": {
+        "street": "Bahnhofstraße 31",
+        "postal_code": "69151",
+        "city": "Neckargemünd",
+        "country": "DE"
       },
-      "access_notes": "Gate 1, pump on the north side",
-      "customer_ref": "NI-NG-01"
+      "location": null,
+      "access_notes": "Gate 1, pump on the north side"
     },
     {
-      "id": "site-ng-02",
-      "customer": "neckar-infra",
+      "id": "50001032",
+      "customer": "10001003",
+      "name": "Neckargemünd Sporthalle",
+      "address": {
+        "street": "Mühlweg 38",
+        "postal_code": "69151",
+        "city": "Neckargemünd",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.384,
         "lon": 8.8063
       },
-      "access_notes": "Access via the construction road, max 32 t",
-      "customer_ref": "NI-NG-02"
+      "access_notes": "Access via the construction road, max 32 t"
     },
     {
-      "id": "site-bm-01",
-      "customer": "neckar-infra",
+      "id": "50001033",
+      "customer": "10001003",
+      "name": "Bammental Ärztehaus",
+      "address": {
+        "street": "Ringstraße 45",
+        "postal_code": "69245",
+        "city": "Bammental",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.3566,
         "lon": 8.7811
       },
-      "access_notes": "Narrow street, approach from the east",
-      "customer_ref": "NI-BM-01"
+      "access_notes": "Narrow street, approach from the east"
     },
     {
-      "id": "site-lb-02",
-      "customer": "neckar-infra",
+      "id": "50001034",
+      "customer": "10001003",
+      "name": "Ladenburg Wohnquartier",
+      "address": {
+        "street": "Hauptstraße 52",
+        "postal_code": "68526",
+        "city": "Ladenburg",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.4799,
         "lon": 8.6147
       },
-      "access_notes": "No deliveries after 20:00 (noise limit)",
-      "customer_ref": "NI-LB-01"
+      "access_notes": "No deliveries after 20:00 (noise limit)"
     },
     {
-      "id": "site-ep-02",
-      "customer": "neckar-infra",
+      "id": "50001035",
+      "customer": "10001003",
+      "name": "Eppelheim Gewerbehalle",
+      "address": {
+        "street": "Gewerbepark 59",
+        "postal_code": "69214",
+        "city": "Eppelheim",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.4114,
         "lon": 8.6379
       },
-      "access_notes": "Washout area next to the site office",
-      "customer_ref": "NI-EP-01"
+      "access_notes": "Washout area next to the site office"
     },
     {
-      "id": "site-lm-03",
-      "customer": "neckar-infra",
+      "id": "50001036",
+      "customer": "10001003",
+      "name": "Leimen Schulneubau",
+      "address": {
+        "street": "Gartenstraße 6",
+        "postal_code": "69181",
+        "city": "Leimen",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.3387,
         "lon": 8.68
       },
-      "access_notes": "Gate 1, pump on the north side",
-      "customer_ref": "NI-LM-01"
+      "access_notes": "Gate 1, pump on the north side"
     },
     {
-      "id": "site-wl-03",
-      "customer": "neckar-infra",
-      "location": {
-        "lat": 49.288,
-        "lon": 8.7179
+      "id": "50001037",
+      "customer": "10001003",
+      "name": "Wiesloch Tiefgarage",
+      "address": {
+        "street": "Bergstraße 13",
+        "postal_code": "69168",
+        "city": "Wiesloch",
+        "country": "DE"
       },
-      "access_notes": "Access via the construction road, max 32 t",
-      "customer_ref": "NI-WL-01"
+      "location": null,
+      "access_notes": "Access via the construction road, max 32 t"
     },
     {
-      "id": "site-si-01",
-      "customer": "neckar-infra",
+      "id": "50001038",
+      "customer": "10001003",
+      "name": "Sinsheim Brücke",
+      "address": {
+        "street": "Am Sportplatz 20",
+        "postal_code": "74889",
+        "city": "Sinsheim",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.2592,
         "lon": 8.8737
       },
-      "access_notes": "Narrow street, approach from the east",
-      "customer_ref": "NI-SI-01"
+      "access_notes": "Narrow street, approach from the east"
     },
     {
-      "id": "site-si-02",
-      "customer": "neckar-infra",
+      "id": "50001039",
+      "customer": "10001003",
+      "name": "Sinsheim Kita",
+      "address": {
+        "street": "Industriestraße 27",
+        "postal_code": "74889",
+        "city": "Sinsheim",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.2483,
         "lon": 8.8905
       },
-      "access_notes": "No deliveries after 20:00 (noise limit)",
-      "customer_ref": "NI-SI-02"
+      "access_notes": "No deliveries after 20:00 (noise limit)"
     },
     {
-      "id": "site-si-03",
-      "customer": "neckar-infra",
+      "id": "50001040",
+      "customer": "10001003",
+      "name": "Sinsheim Bürogebäude",
+      "address": {
+        "street": "Lindenallee 34",
+        "postal_code": "74889",
+        "city": "Sinsheim",
+        "country": "DE"
+      },
       "location": {
         "lat": 49.2442,
         "lon": 8.8653
       },
-      "access_notes": "Washout area next to the site office",
-      "customer_ref": "NI-SI-03"
+      "access_notes": "Washout area next to the site office"
     }
   ],
   "mixes": [

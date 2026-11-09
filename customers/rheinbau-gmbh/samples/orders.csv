@@ -1,4 +1,4 @@
-Auftragsnr;Baustelle;Sorte;Menge;Liefertermin;Leistung;MaxPause;Status
-RB-7781;RB-SCHW-02;C25/30-XC2;42,5;10.11.2026 07:00;30,0;20;bestätigt
-RB-7782;RB-MA-01;C30/37-XC4;120,0;10.11.2026 06:30;45,0;15;bestätigt
-RB-7779;RB-SP-01;C20/25-X0;18,0;10.11.2026 13:00;20,0;30;storniert
+Auftragsnr;Kundennr;Warenempfänger;Sorte;Menge;Liefertermin;Leistung;MaxPause;Status
+RB-7781;10001002;50001023;C25/30-XC2;42,5;10.11.2026 07:00;30,0;20;bestätigt
+RB-7782;10001002;50001015;C30/37-XC4;120,0;10.11.2026 06:30;45,0;15;bestätigt
+RB-7779;10001002;50001020;C20/25-X0;18,0;10.11.2026 13:00;20,0;30;storniert

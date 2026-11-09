@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Order version="2">
-  <Header orderNo="NI-88214" revision="2" status="confirmed"/>
-  <Delivery site="NI-NG-02" start="2026-11-10T06:00:00Z" maxGapMin="20"/>
+  <Header orderNo="NI-88214" customerNo="10001003" revision="2" status="confirmed"/>
+  <Delivery shipTo="50001032" start="2026-11-10T06:00:00Z" maxGapMin="20"/>
   <Material code="C30/37-XC4" quantityLitres="42500" rateLitresPerHour="30000"/>
 </Order>
