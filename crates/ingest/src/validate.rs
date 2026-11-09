@@ -60,3 +60,30 @@ pub(crate) fn check(
     }
     errors
 }
+
+/// The human report `ingest-cli validate` prints: every invalid record with all its problems.
+pub fn report(file: &str, outcomes: &[crate::mapping::Outcome]) -> String {
+    let plural = |n: usize| if n == 1 { "record" } else { "records" };
+    let total = outcomes.len();
+    let invalid: Vec<_> = outcomes
+        .iter()
+        .filter_map(|o| o.result.as_ref().err().map(|e| (o, e)))
+        .collect();
+    let mut out = if invalid.is_empty() {
+        format!("{file}: {total} {}, all valid\n", plural(total))
+    } else {
+        format!(
+            "{file}: {total} {}, {} valid, {} invalid\n",
+            plural(total),
+            total - invalid.len(),
+            invalid.len()
+        )
+    };
+    for (outcome, errors) in invalid {
+        out.push_str(&format!("  {}\n", outcome.record));
+        for error in errors {
+            out.push_str(&format!("    {error}\n"));
+        }
+    }
+    out
+}

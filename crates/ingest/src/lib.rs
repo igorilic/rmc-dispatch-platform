@@ -2,3 +2,5 @@
 
 pub mod mapping;
 mod validate;
+
+pub use validate::report;
