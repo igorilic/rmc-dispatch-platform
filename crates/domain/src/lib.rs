@@ -230,6 +230,8 @@ pub struct Load {
     pub eta_on_site: DateTime<Utc>,
     /// From the ETA on site until the mix design's limit after batching.
     pub discharge_window: TimeWindow,
+    /// Batching has started (a [`Delivery`] exists), so re-dispatch never moves this load.
+    pub frozen: bool,
 }
 
 /// Trucking-system events in lifecycle order. Washing and returns are deliberately not modelled.
@@ -535,7 +537,8 @@ mod tests {
                 "discharge_window": {
                     "start": "2026-11-09T06:25:00Z",
                     "end": "2026-11-09T07:30:00Z"
-                }
+                },
+                "frozen": false
             }]
         }));
     }

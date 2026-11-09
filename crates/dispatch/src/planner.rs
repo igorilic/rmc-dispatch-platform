@@ -15,11 +15,16 @@
 //! The slot arriving earliest wins, and fewer empty kilometres break ties. If one of an order's loads
 //! can't be placed, none are: the order is unplanned, with the reason.
 //!
+//! Frozen loads (batching has started) are facts. They keep their bay and truck busy, count towards
+//! their order's volume, and leave their sequence numbers to themselves. An order's remaining loads
+//! follow on after its last frozen one finishes discharging. Trucks start from their last reported
+//! position, or from their home plant until the first GPS fix.
+//!
 //! [`crate::verify`] re-checks the hard constraints on the finished plan, independently of this code.
 //! [`Metrics`] measures the soft objectives (pour gaps, lateness, empty km); M5's local search
 //! optimises them.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, NaiveDate, NaiveTime, TimeDelta, TimeZone, Utc};
 use chrono_tz::Europe::Berlin;
@@ -123,20 +128,30 @@ fn minutes(d: TimeDelta) -> f64 {
     d.num_milliseconds() as f64 / 60_000.0
 }
 
-/// Whether an order is planned at all: open (not cancelled, not started) and starting inside the horizon.
-pub fn plannable(order: &Order, now: DateTime<Utc>, horizon_end: DateTime<Utc>) -> bool {
-    // ponytail: an order whose start passed over an hour ago is left alone; M5's re-dispatch owns late orders.
-    matches!(
-        order.status,
-        OrderStatus::Unconfirmed | OrderStatus::Pending | OrderStatus::Confirmed
-    ) && order.requested_start >= now - TimeDelta::hours(1)
-        && order.requested_start < horizon_end
+/// Whether an order gets loads at all: not cancelled, and either already batching (it has frozen
+/// loads) or open and starting inside the horizon.
+pub fn plannable(
+    order: &Order,
+    batching: bool,
+    now: DateTime<Utc>,
+    horizon_end: DateTime<Utc>,
+) -> bool {
+    // ponytail: an order whose start passed over an hour ago without batching is left alone.
+    order.status != OrderStatus::Cancelled
+        && (batching
+            || matches!(
+                order.status,
+                OrderStatus::Unconfirmed | OrderStatus::Pending | OrderStatus::Confirmed
+            ) && order.requested_start >= now - TimeDelta::hours(1)
+                && order.requested_start < horizon_end)
 }
 
-/// Plans every open order starting before `now + horizon`.
+/// Plans every open order starting before `now + horizon` around the `frozen` loads, which stay
+/// exactly as they are.
 pub fn plan(
     world: &World,
     orders: &[Order],
+    frozen: &[Load],
     now: DateTime<Utc>,
     horizon: TimeDelta,
     travel: &dyn TravelTimeProvider,
@@ -165,29 +180,59 @@ pub fn plan(
             .filter_map(|truck| {
                 Some(TruckState {
                     truck,
-                    home: *homes.get(&truck.home_plant)?,
+                    start: truck
+                        .last_position
+                        .or_else(|| homes.get(&truck.home_plant).copied())?,
                     trips: Vec::new(),
                 })
             })
             .collect(),
         empty_km: 0.0,
     };
+    let frozen: Vec<Load> = frozen
+        .iter()
+        .map(|l| Load {
+            frozen: true,
+            ..l.clone()
+        })
+        .collect();
+    let by_id: HashMap<&OrderId, &Order> = orders.iter().map(|o| (&o.id, o)).collect();
+    for load in &frozen {
+        planner.fix(load, by_id.get(&load.order).copied());
+    }
+    let batching: HashSet<&OrderId> = frozen.iter().map(|l| &l.order).collect();
     let mut open: Vec<&Order> = orders
         .iter()
-        .filter(|o| plannable(o, now, horizon_end))
+        .filter(|o| plannable(o, batching.contains(&o.id), now, horizon_end))
         .collect();
     open.sort_by(|a, b| (a.requested_start, &a.id.0).cmp(&(b.requested_start, &b.id.0)));
 
     let (mut loads, mut unplanned) = (Vec::new(), Vec::new());
+    let mut handled = HashSet::new();
     for order in open {
-        match planner.plan_order(order) {
-            Ok(order_loads) => loads.extend(order_loads),
+        handled.insert(&order.id);
+        let mut order_loads: Vec<Load> = frozen
+            .iter()
+            .filter(|l| l.order == order.id)
+            .cloned()
+            .collect();
+        match planner.plan_order(order, &order_loads) {
+            Ok(new) => order_loads.extend(new),
             Err(reason) => unplanned.push(Unplanned {
                 order: order.id.clone(),
                 reason,
             }),
         }
+        order_loads.sort_by_key(|l| l.sequence);
+        loads.extend(order_loads);
     }
+    // Frozen loads of orders that get nothing more, such as cancelled ones, stay as they are.
+    let mut rest: Vec<Load> = frozen
+        .into_iter()
+        .filter(|l| !handled.contains(&l.order))
+        .collect();
+    rest.sort_by(|a, b| (&a.order.0, a.sequence).cmp(&(&b.order.0, b.sequence)));
+    loads.extend(rest);
     let metrics = measure(&loads, &unplanned, orders, planner.empty_km);
     Plan {
         created_at: now,
@@ -209,7 +254,8 @@ struct Trip {
 #[derive(Debug, Clone)]
 struct TruckState<'a> {
     truck: &'a Truck,
-    home: Location,
+    /// Where the truck is when planning starts.
+    start: Location,
     /// Sorted by batch time.
     trips: Vec<Trip>,
 }
@@ -221,7 +267,7 @@ impl TruckState<'_> {
             .iter()
             .rev()
             .find(|t| t.batch_at <= at)
-            .map_or((self.home, now), |t| (t.site, t.discharge_end))
+            .map_or((self.start, now), |t| (t.site, t.discharge_end))
     }
 
     fn next_after(&self, at: DateTime<Utc>) -> Option<&Trip> {
@@ -326,7 +372,43 @@ struct Planner<'a> {
 }
 
 impl Planner<'_> {
-    fn plan_order(&mut self, order: &Order) -> Result<Vec<Load>, String> {
+    /// Keeps a bay and the truck busy for a load that is already decided.
+    fn fix(&mut self, load: &Load, order: Option<&Order>) {
+        let world = self.world;
+        let Some(plant) = world.plants.iter().find(|p| p.id == load.planned_plant) else {
+            return;
+        };
+        let batch_at = load.planned_batch_at;
+        if let Some(state) = self.plants.iter_mut().find(|s| s.plant.id == plant.id) {
+            state
+                .bays
+                .push((batch_at, batch_at + plant_time(load.volume_m3, plant)));
+        }
+        // Without its order or site, a load's discharge can't be timed. The store never sends one.
+        let Some(order) = order else { return };
+        let Some(&site) = world.sites.get(&order.site) else {
+            return;
+        };
+        if let Some(truck) = self
+            .trucks
+            .iter_mut()
+            .find(|t| t.truck.id == load.planned_truck)
+        {
+            truck.add(Trip {
+                batch_at,
+                plant: plant.location,
+                site,
+                discharge_end: discharge_end(load, order),
+            });
+        }
+    }
+
+    /// Plans what `fixed`, the order's frozen loads, leave of its volume.
+    fn plan_order(&mut self, order: &Order, fixed: &[Load]) -> Result<Vec<Load>, String> {
+        let frozen_m3: f64 = fixed.iter().map(|l| l.volume_m3).sum();
+        if order.total_volume_m3 - frozen_m3 <= VOLUME_EPSILON {
+            return Ok(Vec::new());
+        }
         let site = *self.world.sites.get(&order.site).ok_or_else(|| {
             format!(
                 "ship-to {} has neither coordinates nor a known postal code",
@@ -348,7 +430,13 @@ impl Planner<'_> {
         // An order is planned whole or not at all, so keep the state to roll back to.
         let saved = (self.plants.clone(), self.trucks.clone());
         let (mut loads, mut empty_km) = (Vec::new(), 0.0);
-        let (mut remaining, mut target) = (order.total_volume_m3, order.requested_start);
+        let mut remaining = order.total_volume_m3 - frozen_m3;
+        let mut target = fixed
+            .iter()
+            .map(|l| discharge_end(l, order))
+            .fold(order.requested_start, DateTime::max);
+        let taken: HashSet<u32> = fixed.iter().map(|l| l.sequence).collect();
+        let mut sequences = (1..).filter(|s| !taken.contains(s));
         while remaining > VOLUME_EPSILON {
             let mut best: Option<Candidate> = None;
             let mut too_far_everywhere = true;
@@ -397,7 +485,7 @@ impl Planner<'_> {
             });
             loads.push(Load {
                 order: order.id.clone(),
-                sequence: loads.len() as u32 + 1,
+                sequence: sequences.next().unwrap_or_default(),
                 volume_m3: c.volume,
                 planned_plant: plant.plant.id.clone(),
                 planned_truck: self.trucks[c.truck].truck.id.clone(),
@@ -407,6 +495,7 @@ impl Planner<'_> {
                     start: c.eta,
                     end: c.batch_at + TimeDelta::minutes(i64::from(max_minutes)),
                 },
+                frozen: false,
             });
             empty_km += c.empty_km;
             remaining -= c.volume;
@@ -499,6 +588,9 @@ fn measure(loads: &[Load], unplanned: &[Unplanned], orders: &[Order], empty_km: 
         let Some(order) = by_id.get(&order_loads[0].order) else {
             continue;
         };
+        // Sequence numbers aren't arrival order once a plant batches loads out of turn.
+        let mut order_loads = order_loads.to_vec();
+        order_loads.sort_by_key(|l| l.eta_on_site);
         m.planned_orders += 1;
         m.lateness_minutes +=
             minutes((order_loads[0].eta_on_site - order.requested_start).max(TimeDelta::zero()));
@@ -599,11 +691,33 @@ mod tests {
     }
 
     fn run(world: &World, orders: &[Order], now: DateTime<Utc>) -> Plan {
+        run_frozen(world, orders, &[], now)
+    }
+
+    /// Plans around `frozen`, checks the hard constraints, and checks that no frozen load moved.
+    fn run_frozen(world: &World, orders: &[Order], frozen: &[Load], now: DateTime<Utc>) -> Plan {
         let travel = HaversineTravelTime::default();
-        let plan = plan(world, orders, now, TimeDelta::hours(48), &travel);
-        let broken = violations(&plan, world, orders, &travel);
+        let plan = plan(world, orders, frozen, now, TimeDelta::hours(48), &travel);
+        let broken = violations(&plan, world, orders, frozen, &travel);
         assert!(broken.is_empty(), "{broken:#?}");
         plan
+    }
+
+    /// The loads as the plant reports them once batching has started.
+    fn batched(loads: &[Load]) -> Vec<Load> {
+        loads
+            .iter()
+            .map(|l| Load {
+                frozen: true,
+                ..l.clone()
+            })
+            .collect()
+    }
+
+    fn five_trucks() -> Vec<Truck> {
+        (1..=5)
+            .map(|i| truck(&format!("t{i}"), "p", 9.0, TruckStatus::Available))
+            .collect()
     }
 
     fn volumes(plan: &Plan) -> Vec<f64> {
@@ -781,6 +895,206 @@ mod tests {
         assert!(plan.metrics.lateness_minutes > 0.0);
     }
 
+    fn sequences(plan: &Plan) -> Vec<(u32, bool)> {
+        let mut seen: Vec<_> = plan.loads.iter().map(|l| (l.sequence, l.frozen)).collect();
+        seen.sort_unstable();
+        seen
+    }
+
+    #[test]
+    fn a_pour_frozen_halfway_keeps_its_loads_and_plans_the_rest() {
+        let w = world(
+            vec![plant("p", WALLDORF, 2, PlantStatus::Online)],
+            five_trucks(),
+            &[("s", HEIDELBERG)],
+        );
+        let o = order("o", "s", 42.5, at(7, 0));
+        let first = run(&w, std::slice::from_ref(&o), at(5, 0));
+        let frozen = batched(&first.loads[..2]);
+
+        let second = run_frozen(&w, std::slice::from_ref(&o), &frozen, at(6, 50));
+        assert_eq!(&second.loads[..2], frozen.as_slice());
+        assert_eq!(volumes(&second), [9.0, 9.0, 9.0, 9.0, 6.5]);
+        assert_eq!(
+            sequences(&second),
+            [(1, true), (2, true), (3, false), (4, false), (5, false)]
+        );
+        assert!(
+            second.loads[2].eta_on_site >= discharge_end(&frozen[1], &o),
+            "the rest follows the frozen loads"
+        );
+    }
+
+    #[test]
+    fn a_volume_cut_below_what_is_batched_plans_nothing_more() {
+        let w = world(
+            vec![plant("p", WALLDORF, 2, PlantStatus::Online)],
+            five_trucks(),
+            &[("s", HEIDELBERG)],
+        );
+        let o = order("o", "s", 42.5, at(7, 0));
+        let frozen = batched(&run(&w, std::slice::from_ref(&o), at(5, 0)).loads[..2]);
+        let cut = Order {
+            total_volume_m3: 10.0,
+            ..o
+        };
+        let second = run_frozen(&w, &[cut], &frozen, at(6, 50));
+        assert_eq!(second.loads, frozen, "18 m³ already batched covers 10 m³");
+        assert!(second.unplanned.is_empty());
+    }
+
+    #[test]
+    fn a_cancelled_order_keeps_only_its_frozen_loads() {
+        let w = world(
+            vec![plant("p", WALLDORF, 2, PlantStatus::Online)],
+            five_trucks(),
+            &[("s", HEIDELBERG)],
+        );
+        let o = order("o", "s", 42.5, at(7, 0));
+        let frozen = batched(&run(&w, std::slice::from_ref(&o), at(5, 0)).loads[..1]);
+        let cancelled = Order {
+            status: OrderStatus::Cancelled,
+            ..o
+        };
+        let second = run_frozen(&w, &[cancelled], &frozen, at(6, 50));
+        assert_eq!(
+            second.loads, frozen,
+            "no returns: the batched load is delivered"
+        );
+        assert!(second.unplanned.is_empty());
+    }
+
+    #[test]
+    fn a_frozen_load_stays_although_its_truck_breaks_down_and_its_plant_goes_offline() {
+        let mut w = world(
+            vec![
+                plant("leimen", LEIMEN, 2, PlantStatus::Online),
+                plant("walldorf", WALLDORF, 2, PlantStatus::Online),
+            ],
+            (1..=5)
+                .map(|i| truck(&format!("t{i}"), "walldorf", 9.0, TruckStatus::Available))
+                .collect(),
+            &[("s", HEIDELBERG)],
+        );
+        let o = order("o", "s", 27.0, at(7, 0));
+        let frozen = batched(&run(&w, std::slice::from_ref(&o), at(5, 0)).loads[..1]);
+        let (broken, offline) = (&frozen[0].planned_truck, &frozen[0].planned_plant);
+        for t in w.trucks.iter_mut().filter(|t| &t.id == broken) {
+            t.status = TruckStatus::OutOfService;
+        }
+        for p in w.plants.iter_mut().filter(|p| &p.id == offline) {
+            p.status = PlantStatus::Offline;
+        }
+
+        let second = run_frozen(&w, std::slice::from_ref(&o), &frozen, at(6, 40));
+        assert_eq!(second.loads[0], frozen[0]);
+        assert_eq!(second.loads.len(), 3);
+        assert!(
+            second.loads[1..]
+                .iter()
+                .all(|l| &l.planned_truck != broken && &l.planned_plant != offline)
+        );
+
+        let travel = HaversineTravelTime::default();
+        let mut placed_on_broken = second.clone();
+        placed_on_broken.loads[2].planned_truck = broken.clone();
+        let found = violations(&placed_on_broken, &w, &[o], &frozen, &travel);
+        assert!(
+            found.iter().any(|v| v.contains("out of service")),
+            "{found:#?}"
+        );
+    }
+
+    #[test]
+    fn an_order_in_progress_is_planned_even_after_its_start_passed() {
+        let w = world(
+            vec![plant("p", WALLDORF, 2, PlantStatus::Online)],
+            five_trucks(),
+            &[("s", HEIDELBERG)],
+        );
+        let o = order("o", "s", 42.5, at(7, 0));
+        let frozen = batched(&run(&w, std::slice::from_ref(&o), at(5, 0)).loads[..2]);
+        let second = run_frozen(&w, std::slice::from_ref(&o), &frozen, at(8, 30));
+        assert_eq!(volumes(&second), [9.0, 9.0, 9.0, 9.0, 6.5]);
+        assert!(second.unplanned.is_empty());
+    }
+
+    #[test]
+    fn new_loads_take_the_sequence_numbers_frozen_ones_leave_free() {
+        let w = world(
+            vec![plant("p", WALLDORF, 2, PlantStatus::Online)],
+            five_trucks(),
+            &[("s", HEIDELBERG)],
+        );
+        let o = order("o", "s", 42.5, at(7, 0));
+        let first = run(&w, std::slice::from_ref(&o), at(5, 0));
+        // The plant batched load 3 and skipped load 2.
+        let frozen = batched(&[first.loads[0].clone(), first.loads[2].clone()]);
+        let second = run_frozen(&w, std::slice::from_ref(&o), &frozen, at(7, 5));
+        assert_eq!(
+            sequences(&second),
+            [(1, true), (2, false), (3, true), (4, false), (5, false)]
+        );
+        let total: f64 = second.loads.iter().map(|l| l.volume_m3).sum();
+        assert_eq!(total, 42.5);
+    }
+
+    #[test]
+    fn trucks_start_from_their_last_reported_position() {
+        let mut far = truck("t", "p", 9.0, TruckStatus::Available);
+        far.last_position = Some(FRANKFURT);
+        let w = world(
+            vec![plant("p", WALLDORF, 2, PlantStatus::Online)],
+            vec![far],
+            &[("s", HEIDELBERG)],
+        );
+        let plan = run(&w, &[order("o", "s", 9.0, at(6, 0))], at(5, 0));
+        let drive = HaversineTravelTime::default().travel(FRANKFURT, WALLDORF, at(5, 0));
+        assert!(plan.loads[0].planned_batch_at >= at(5, 0) + drive);
+        assert!(plan.metrics.lateness_minutes > 0.0);
+        assert!(plan.metrics.empty_km > 80.0, "{}", plan.metrics.empty_km);
+    }
+
+    #[test]
+    fn the_checker_catches_moved_dropped_and_made_up_frozen_loads() {
+        let w = world(
+            vec![plant("p", WALLDORF, 1, PlantStatus::Online)],
+            five_trucks(),
+            &[("s", HEIDELBERG)],
+        );
+        let o = order("o", "s", 42.5, at(7, 0));
+        let frozen = batched(&run(&w, std::slice::from_ref(&o), at(5, 0)).loads[..2]);
+        let second = run_frozen(&w, std::slice::from_ref(&o), &frozen, at(6, 50));
+        let travel = HaversineTravelTime::default();
+        let check = |plan: &Plan| violations(plan, &w, std::slice::from_ref(&o), &frozen, &travel);
+
+        let mut moved = second.clone();
+        moved.loads[0].planned_batch_at += TimeDelta::minutes(1);
+        assert!(check(&moved).iter().any(|v| v.contains("frozen")), "moved");
+
+        let mut dropped = second.clone();
+        dropped.loads.remove(0);
+        assert!(
+            check(&dropped).iter().any(|v| v.contains("frozen")),
+            "dropped"
+        );
+
+        let mut made_up = second.clone();
+        made_up.loads[3].frozen = true;
+        assert!(
+            check(&made_up).iter().any(|v| v.contains("frozen")),
+            "made up"
+        );
+
+        // A placed load batching alongside a frozen one in the only bay.
+        let mut crowded = second.clone();
+        crowded.loads[2].planned_batch_at = frozen[1].planned_batch_at;
+        assert!(
+            check(&crowded).iter().any(|v| v.contains("bays")),
+            "crowded"
+        );
+    }
+
     fn place(rng: &mut StdRng, spread: f64) -> Location {
         Location {
             lat: 49.35 + rng.random_range(-spread..spread),
@@ -887,8 +1201,8 @@ mod tests {
         fn plans_never_break_a_hard_constraint(seed in any::<u64>()) {
             let (world, orders, now) = random_world(seed);
             let travel = HaversineTravelTime::default();
-            let plan = plan(&world, &orders, now, TimeDelta::hours(48), &travel);
-            let broken = violations(&plan, &world, &orders, &travel);
+            let plan = plan(&world, &orders, &[], now, TimeDelta::hours(48), &travel);
+            let broken = violations(&plan, &world, &orders, &[], &travel);
             prop_assert!(broken.is_empty(), "seed {seed}: {broken:#?}");
         }
 
@@ -909,8 +1223,43 @@ mod tests {
                 o
             }).collect();
             let travel = HaversineTravelTime::default();
-            let plan = plan(&world, &orders, now, TimeDelta::hours(48), &travel);
-            let broken = violations(&plan, &world, &orders, &travel);
+            let plan = plan(&world, &orders, &[], now, TimeDelta::hours(48), &travel);
+            let broken = violations(&plan, &world, &orders, &[], &travel);
+            prop_assert!(broken.is_empty(), "seed {seed}: {broken:#?}");
+        }
+
+        /// Plan, let the plants batch everything up to a random moment, then let reality change:
+        /// trucks break down, plants go offline, orders change volume or are cancelled. Planning
+        /// again from that moment keeps every frozen load and every hard constraint.
+        #[test]
+        fn replanning_around_frozen_loads_never_breaks_a_hard_constraint(seed in any::<u64>()) {
+            let (mut world, mut orders, now) = random_world(seed);
+            let travel = HaversineTravelTime::default();
+            let first = plan(&world, &orders, &[], now, TimeDelta::hours(48), &travel);
+            let mut rng = StdRng::seed_from_u64(seed.wrapping_add(1));
+            let later = now + TimeDelta::minutes(rng.random_range(0..720));
+            let frozen = batched(
+                &first.loads.iter().filter(|l| l.planned_batch_at < later).cloned().collect::<Vec<_>>(),
+            );
+            for t in &mut world.trucks {
+                if rng.random_bool(0.2) {
+                    t.status = TruckStatus::OutOfService;
+                }
+            }
+            for p in &mut world.plants {
+                if rng.random_bool(0.2) {
+                    p.status = PlantStatus::Offline;
+                }
+            }
+            for o in &mut orders {
+                match rng.random_range(0..10) {
+                    0 => o.status = OrderStatus::Cancelled,
+                    1 | 2 => o.total_volume_m3 = (o.total_volume_m3 * rng.random_range(0.3..1.5) * 2.0).round().max(1.0) / 2.0,
+                    _ => {}
+                }
+            }
+            let second = plan(&world, &orders, &frozen, later, TimeDelta::hours(48), &travel);
+            let broken = violations(&second, &world, &orders, &frozen, &travel);
             prop_assert!(broken.is_empty(), "seed {seed}: {broken:#?}");
         }
     }

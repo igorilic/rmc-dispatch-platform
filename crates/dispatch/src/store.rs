@@ -109,6 +109,8 @@ impl TryFrom<LoadRow> for Load {
                 start: r.window_start,
                 end: r.window_end,
             },
+            // ponytail: not stored until M5 step 5 adds deliveries and the column.
+            frozen: false,
         })
     }
 }

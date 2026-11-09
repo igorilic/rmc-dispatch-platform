@@ -151,6 +151,7 @@ async fn every_plan_is_stored_as_a_new_version() {
     let mut made = plan(
         &world,
         &open,
+        &[],
         now,
         TimeDelta::hours(48),
         &HaversineTravelTime::default(),

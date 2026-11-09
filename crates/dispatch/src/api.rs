@@ -123,6 +123,7 @@ async fn create_plan(State(s): State<AppState>) -> Result<impl IntoResponse, Sta
     let plan = planner::plan(
         &world,
         &orders,
+        &[],
         now,
         HORIZON,
         &HaversineTravelTime::default(),

@@ -112,7 +112,7 @@ async fn a_plan_from_stored_orders_keeps_every_hard_constraint() {
     let stored = s.store.orders(None, None, None).await.unwrap();
     let travel = HaversineTravelTime::default();
     assert_eq!(
-        violations(&first.plan, &world, &stored, &travel),
+        violations(&first.plan, &world, &stored, &[], &travel),
         Vec::<String>::new()
     );
 
