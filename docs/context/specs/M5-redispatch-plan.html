@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Milestone 5 plan</title>
+<link rel="stylesheet" href="../../.design/styles.css">
+<style>
+/* Diagram styles: Spotlight tokens only (zinc greys, one teal accent). */
+.dg{display:block;width:100%;height:auto}
+.dg text{font-family:var(--font-sans);font-size:12px;fill:var(--text-body)}
+.dg .t{fill:var(--text-strong);font-weight:600;font-size:13px}
+.dg .s{fill:var(--text-muted);font-size:11px}
+.dg .m{font-family:var(--font-mono);font-size:10.5px;fill:var(--text-body)}
+.dg .bl{font-size:10.5px;fill:var(--text-strong)}
+.dg .bd{font-size:10.5px;fill:var(--zinc-900);font-weight:600}
+.dg .c{text-anchor:middle}
+.dg .end{text-anchor:end}
+.dg .halo{paint-order:stroke;stroke:var(--surface-column);stroke-width:3px;stroke-linejoin:round}
+.dg .b-done{fill:var(--surface-solid);stroke:var(--zinc-500);stroke-width:1}
+.dg .b-now{fill:color-mix(in oklab,var(--accent) 14%,var(--surface-column));stroke:var(--accent);stroke-width:1.5}
+.dg .b-later{fill:none;stroke:var(--zinc-500);stroke-width:1;stroke-dasharray:4 3}
+.dg .g-now{fill:none;stroke:var(--accent);stroke-width:1}
+.dg .hdr{fill:color-mix(in oklab,var(--accent) 30%,var(--surface-column))}
+.dg .e-now{fill:none;stroke:var(--accent);stroke-width:1.5}
+.dg .e-done{fill:none;stroke:var(--zinc-400);stroke-width:1.5}
+.dg .e-later{fill:none;stroke:var(--zinc-500);stroke-width:1.5;stroke-dasharray:4 3}
+.dg .axis{fill:none;stroke:var(--zinc-600);stroke-width:1}
+.dg .guide{fill:none;stroke:var(--zinc-700);stroke-width:1;stroke-dasharray:2 3}
+.dg .p-load{fill:var(--zinc-300)}
+.dg .p-drive{fill:var(--zinc-600)}
+.dg .p-dis{fill:var(--accent)}
+.dg .p-back{fill:var(--zinc-800);stroke:var(--zinc-600);stroke-width:1;stroke-dasharray:3 2}
+.dg .p-wait{fill:none;stroke:var(--zinc-500);stroke-width:1}
+.dg .lim{fill:none;stroke:var(--accent);stroke-width:1.5}
+.dg .brk{fill:none;stroke:var(--zinc-400);stroke-width:1.2}
+.ah{fill:var(--zinc-400)}
+.ah-now{fill:var(--accent)}
+.ah-later{fill:var(--zinc-500)}
+.sp-prose figure{margin-left:0;margin-right:0}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+<defs>
+<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0 1 L9 5 L0 9 z"/></marker>
+<marker id="ah-now" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-now" d="M0 1 L9 5 L0 9 z"/></marker>
+<marker id="ah-later" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-later" d="M0 1 L9 5 L0 9 z"/></marker>
+</defs>
+</svg>
+<div class="sp-layout__bg"><div><div></div></div></div>
+<div class="sp-layout__fg">
+<main class="sp-layout__main">
+<div class="sp-container-outer sp-article"><div class="sp-container-outer__in">
+<div class="sp-container-inner"><div class="sp-container-inner__in">
+<div class="sp-article__col">
+<article>
+<header class="sp-article__header">
+<h1 class="sp-h1">Milestone 5 plan: re-dispatch</h1>
+<time class="sp-article__date" datetime="2026-11-10"><span class="sp-bar"></span><span style="margin-left:.75rem">November 10, 2026</span></time>
+</header>
+<div class="sp-prose" style="margin-top:2rem">
+
+<p>In milestone 4, dispatch only planned when someone called <code>POST /plans</code>, and the plan was greedy. Milestone 5 makes dispatch react on its own. A new or changed order, a truck that breaks down, a plant going offline or a site running late each trigger a <strong>re-dispatch</strong>. A re-dispatch freezes the loads that are already batching, repairs only the part of the plan the event touched, and improves the result with a time-boxed local search. It stores the outcome as a new plan version, with a diff that gives a reason for every change. Benchmarks measure all of this at 50, 200 and 1,000 loads, and <code>make demo</code> plays the whole story end to end.</p>
+
+<p><strong>Done when:</strong></p>
+<ul>
+<li>In <code>make up</code>, dispatch re-plans by itself on every trigger in SPEC §4: a new order, a volume change, a cancellation, a truck out of service, a plant offline, a site delay. Each re-dispatch that changes the plan becomes a new version with a diff.</li>
+<li>Loads with a delivery, meaning batching has started, never move. Property tests check this together with every hard constraint.</li>
+<li>Local search lowers the weighted soft objectives of the greedy plan within its 500 ms budget, and never breaks a hard constraint.</li>
+<li><code>make demo</code> seeds orders through the customer webhooks, plays the plant for one load, breaks a truck down, delays a site by 30 minutes and prints the plan diffs.</li>
+<li><code>criterion</code> benchmarks run at 50, 200 and 1,000 loads, and the README shows the results.</li>
+<li><code>make test</code>, <code>make audit</code> and CI are green.</li>
+</ul>
+
+<h2 id="where">Where re-dispatch sits</h2>
+
+<figure>
+<svg class="dg" viewBox="0 0 680 330" role="img" aria-labelledby="f1t f1d">
+<title id="f1t">Re-dispatch architecture</title>
+<desc id="f1d">Three sources feed dispatch. Order events from EVENTS go to the order intake, which now also emits triggers. Truck and plant events from EVENTS go to a new fleet intake, which records truck status, truck positions and batch tickets as deliveries, and emits a trigger when a truck goes out of service. The demo and a dispatcher use the REST API, which can set a plant offline, report a site delay or ask for a full re-plan. All triggers go to the re-dispatch worker, which runs one re-dispatch at a time, merges triggers that arrive meanwhile, and stores each new plan version and its diff in Postgres. The plant-agent from milestone 7 will read plans from the API.</desc>
+<rect class="b-done" x="10" y="8" width="16" height="12" rx="3"/><text class="s" x="32" y="18">exists (M1–M4)</text>
+<rect class="b-now" x="140" y="8" width="16" height="12" rx="3"/><text class="s" x="162" y="18">built or extended in M5</text>
+<rect class="b-later" x="300" y="8" width="16" height="12" rx="3"/><text class="s" x="322" y="18">later milestone</text>
+
+<rect class="b-done" x="10" y="70" width="120" height="46" rx="8"/><text class="t c" x="70" y="90">EVENTS</text><text class="s c" x="70" y="106">events.orders.*</text>
+<rect class="b-done" x="10" y="140" width="120" height="46" rx="8"/><text class="t c" x="70" y="160">EVENTS</text><text class="s c" x="70" y="176">events.trucks/plants.*</text>
+<rect class="b-now" x="10" y="230" width="120" height="46" rx="8"/><text class="t c" x="70" y="250">make demo</text><text class="s c" x="70" y="266">or a dispatcher</text>
+
+<rect class="g-now" x="152" y="40" width="318" height="270" rx="12"/>
+<text class="t" x="164" y="60">dispatch</text>
+<g><title>The M4 consumer on events.orders.*. It now also emits a trigger when an order is new, changed or cancelled.</title>
+<rect class="b-now" x="164" y="70" width="138" height="46" rx="8"/><text class="t c" x="233" y="90">Order intake</text><text class="s c" x="233" y="106">+ triggers</text></g>
+<g><title>A second durable consumer on events.trucks.* and events.plants.*: truck status and position, and batch tickets that create deliveries</title>
+<rect class="b-now" x="164" y="140" width="138" height="46" rx="8"/><text class="t c" x="233" y="160">Fleet intake</text><text class="s c" x="233" y="176">status, GPS, tickets</text></g>
+<g><title>New: PUT /plants/{id}/status, POST /sites/{id}/delays, GET /plans/{version}/diff. POST /plans becomes a full re-plan through the worker.</title>
+<rect class="b-now" x="164" y="230" width="138" height="46" rx="8"/><text class="t c" x="233" y="250">REST API</text><text class="s c" x="233" y="266">+ plant, delay, diff</text></g>
+<g><title>One re-dispatch at a time. Triggers that arrive while one runs are merged into the next run.</title>
+<rect class="b-now" x="322" y="110" width="136" height="110" rx="8"/><text class="t c" x="390" y="140">Re-dispatch</text><text class="s c" x="390" y="160">freeze, repair,</text><text class="s c" x="390" y="176">local search,</text><text class="s c" x="390" y="192">verify, diff</text></g>
+
+<rect class="b-done" x="500" y="100" width="170" height="110" rx="8"/><text class="t c" x="585" y="135">Postgres</text><text class="s c" x="585" y="153">plan versions + diffs</text><text class="s c" x="585" y="169">deliveries</text><text class="s c" x="585" y="185">truck status, position</text>
+<rect class="b-later" x="500" y="240" width="170" height="46" rx="8"/><text class="t c" x="585" y="260">plant-agent</text><text class="s c" x="585" y="276">reads plans, M7</text>
+
+<path class="e-done" d="M130 93 H160" marker-end="url(#ah)"/>
+<path class="e-done" d="M130 163 H160" marker-end="url(#ah)"/>
+<path class="e-now" d="M130 253 H160" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M302 93 H340 V106" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M302 163 H318" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M302 253 H340 V224" marker-end="url(#ah-now)"/>
+<text class="s halo" x="306" y="86">triggers</text>
+<path class="e-now" d="M458 165 H496" marker-end="url(#ah-now)"/>
+<path class="e-later" d="M585 210 V236" marker-end="url(#ah-later)"/>
+</svg>
+<figcaption>Figure 1. Every trigger, whatever its source, goes through one worker. Only one re-dispatch runs at a time, so versions never race. Triggers that arrive during a run are merged into the next one. A burst, such as an SFTP snapshot with twenty changed orders, becomes one version instead of twenty. Hover a box for details.</figcaption>
+</figure>
+
+<h2 id="triggers">What triggers a re-dispatch</h2>
+<table>
+<thead><tr><th>SPEC §4 trigger</th><th>Where it comes from</th><th>Which loads it affects</th></tr></thead>
+<tbody>
+<tr><td><code>NewOrder</code></td><td>Order intake: an <code>order_upserted</code> for an unknown order</td><td>The new order</td></tr>
+<tr><td><code>OrderVolumeChanged</code></td><td>Order intake: an <code>order_upserted</code> that changes the volume. Changes to start, pour rate, site or mix trigger it as well, with their own reason.</td><td>That order’s loads that aren’t frozen</td></tr>
+<tr><td><code>OrderCancelled</code></td><td>Order intake: <code>order_cancelled</code></td><td>That order’s loads that aren’t frozen. They are removed.</td></tr>
+<tr><td><code>TruckOutOfService</code></td><td>Fleet intake: a <code>truck_status_reported</code> with <code>out_of_service</code></td><td>Every order with a load on that truck that isn’t frozen</td></tr>
+<tr><td><code>PlantOffline</code></td><td>REST: <code>PUT /plants/{id}/status</code>. Telematics has no plant status, and the plant-agent can report it in M7.</td><td>Every order with a load at that plant that isn’t frozen</td></tr>
+<tr><td><code>SiteDelayed{minutes}</code></td><td>REST: <code>POST /sites/{id}/delays</code>. The site foreman calls the dispatch centre.</td><td>The site’s orders that are in progress or start today</td></tr>
+</tbody>
+</table>
+<p>Three more cases are always repaired as well, whatever the trigger: orders that weren’t in the previous plan yet, orders that were unplanned, and loads whose planned batch time has passed without batching. <code>POST /plans</code> is a full re-plan: every load that isn’t frozen counts as affected.</p>
+
+<h2 id="repair">How a re-dispatch repairs the plan</h2>
+<ol>
+<li><strong>Freeze.</strong> Every load with a delivery stays exactly as it is. A delivery exists once the plant has reported <code>batching</code> for that load. Frozen loads keep their trucks and bays busy for the rest of the run. An order’s frozen volume counts towards its total, and its new loads continue the sequence numbers.</li>
+<li><strong>Keep.</strong> Loads of orders the triggers didn’t touch stay where they were in the previous version.</li>
+<li><strong>Construct.</strong> The M4 heuristic plans the affected orders around the frozen and kept loads. Trucks now start from their last reported GPS position instead of their home plant.</li>
+<li><strong>Improve.</strong> Local search runs for up to 500 ms over every load that isn’t frozen. A churn penalty keeps it from reshuffling the fleet over one late pump.</li>
+<li><strong>Verify.</strong> The independent checker from M4 runs on the result. If it finds a violation, dispatch falls back to a full re-plan. If that fails too, it keeps the previous version and logs an error. An invalid plan is never stored.</li>
+<li><strong>Diff and store.</strong> If anything changed, the plan is stored as the next version with its triggers and its diff. A re-dispatch that changes nothing stores nothing.</li>
+</ol>
+
+<figure>
+<svg class="dg" viewBox="0 0 680 400" role="img" aria-labelledby="f2t f2d">
+<title id="f2t">A truck breaks down mid-pour</title>
+<desc id="f2d">Two timelines for one order of 40 cubic metres at a Heidelberg site, starting at 07:00. In version 7, trucks 18 to 22 from Walldorf carry loads 1 to 5 back to back. Truck 24 is idle at Mannheim. At 06:40, truck 19 reports out of service. Load 1 on truck 18 has been batching since 06:27, so it is frozen and stays. In version 8, load 2 moves to truck 24 from Mannheim and arrives at 07:26, 8 minutes after load 1 finishes, within the 20-minute gap limit. Loads 3, 4 and 5 keep their trucks and shift 8 minutes later, so the pour stays continuous.</desc>
+<rect class="p-load" x="10" y="8" width="16" height="10" rx="2"/><text class="s" x="32" y="17">batch + load</text>
+<rect class="p-drive" x="120" y="8" width="16" height="10" rx="2"/><text class="s" x="142" y="17">drive loaded</text>
+<rect class="p-dis" x="230" y="8" width="16" height="10" rx="2"/><text class="s" x="252" y="17">discharge</text>
+
+<text class="t" x="12" y="44">v7: before</text>
+<text class="m" x="12" y="66">truck-18</text><text class="m" x="12" y="88">truck-19</text><text class="m" x="12" y="110">truck-20</text><text class="m" x="12" y="132">truck-21</text><text class="m" x="12" y="154">truck-22</text><text class="m" x="12" y="176">truck-24</text>
+<rect class="p-load" x="147" y="56" width="31" height="12"/><rect class="p-drive" x="178" y="56" width="96" height="12"/><rect class="p-dis" x="274" y="56" width="70" height="12"/><text class="bd c" x="309" y="66">L1</text>
+<rect class="p-load" x="216" y="78" width="31" height="12"/><rect class="p-drive" x="247" y="78" width="97" height="12"/><rect class="p-dis" x="344" y="78" width="69" height="12"/><text class="bd c" x="378" y="88">L2</text>
+<rect class="p-load" x="286" y="100" width="31" height="12"/><rect class="p-drive" x="317" y="100" width="96" height="12"/><rect class="p-dis" x="413" y="100" width="70" height="12"/><text class="bd c" x="448" y="110">L3</text>
+<rect class="p-load" x="355" y="122" width="31" height="12"/><rect class="p-drive" x="386" y="122" width="97" height="12"/><rect class="p-dis" x="483" y="122" width="69" height="12"/><text class="bd c" x="517" y="132">L4</text>
+<rect class="p-load" x="436" y="144" width="20" height="12"/><rect class="p-drive" x="456" y="144" width="96" height="12"/><rect class="p-dis" x="552" y="144" width="31" height="12"/><text class="bd c" x="567" y="154">L5</text>
+<text class="s" x="120" y="176">idle at plant-mannheim</text>
+
+<text class="t" x="12" y="210">v8: after truck-19 reports out of service at 06:40</text>
+<text class="m" x="12" y="232">truck-18</text><text class="m" x="12" y="254">truck-19</text><text class="m" x="12" y="276">truck-20</text><text class="m" x="12" y="298">truck-21</text><text class="m" x="12" y="320">truck-22</text><text class="m" x="12" y="342">truck-24</text>
+<rect class="p-load" x="147" y="222" width="31" height="12"/><rect class="p-drive" x="178" y="222" width="96" height="12"/><rect class="p-dis" x="274" y="222" width="70" height="12"/><text class="bd c" x="309" y="232">L1</text>
+<rect class="lim" x="145" y="220" width="201" height="16" rx="2"/>
+<text class="s" x="354" y="232">frozen: batching started 06:27</text>
+<path class="guide" d="M120 248 H660"/><text class="s halo" x="210" y="252">out of service since 06:40</text>
+<rect class="p-load" x="317" y="266" width="31" height="12"/><rect class="p-drive" x="348" y="266" width="96" height="12"/><rect class="p-dis" x="444" y="266" width="69" height="12"/><text class="bd c" x="479" y="276">L3</text>
+<rect class="p-load" x="386" y="288" width="31" height="12"/><rect class="p-drive" x="417" y="288" width="96" height="12"/><rect class="p-dis" x="513" y="288" width="70" height="12"/><text class="bd c" x="548" y="298">L4</text>
+<rect class="p-load" x="467" y="310" width="19" height="12"/><rect class="p-drive" x="486" y="310" width="97" height="12"/><rect class="p-dis" x="583" y="310" width="31" height="12"/><text class="bd c" x="598" y="320">L5</text>
+<rect class="p-load" x="228" y="332" width="31" height="12"/><rect class="p-drive" x="259" y="332" width="116" height="12"/><rect class="p-dis" x="375" y="332" width="69" height="12"/><text class="bd c" x="409" y="342">L2</text>
+<text class="s" x="452" y="342">from Mannheim, 8 min gap</text>
+
+<path class="guide" d="M197 30 V352"/><text class="s c halo" x="197" y="364">06:40</text>
+<path class="axis" d="M120 372 H660"/>
+<text class="s c" x="159" y="388">06:30</text><text class="s c" x="274" y="388">07:00</text><text class="s c" x="390" y="388">07:30</text><text class="s c" x="506" y="388">08:00</text><text class="s c" x="621" y="388">08:30</text>
+</svg>
+<figcaption>Figure 2. One order of 40 m³ for 07:00 at a Heidelberg site. Truck 19 breaks down at 06:40. Load 1 is frozen because Walldorf has been batching it since 06:27. Load 2 moves to the idle truck 24 at Mannheim and arrives 8 minutes after load 1 finishes, within the 20-minute limit. Loads 3 to 5 keep their trucks and shift 8 minutes later, so the pour stays continuous.</figcaption>
+</figure>
+
+<p>The diff for that re-dispatch, as <code>make demo</code> prints it:</p>
+<pre><code>v8 (was v7) · truck-19 out of service, reported 06:40
+order            load  truck                plant                ETA            reason
+10001001/DEMO-1  #2    truck-19 → truck-24  walldorf → mannheim  07:18 → 07:26  truck-19 is out of service
+10001001/DEMO-1  #3    truck-20             walldorf             07:36 → 07:44  follows #2, so the pour stays continuous
+10001001/DEMO-1  #4    truck-21             walldorf             07:54 → 08:02  follows #2, so the pour stays continuous
+10001001/DEMO-1  #5    truck-22             walldorf             08:12 → 08:20  follows #2, so the pour stays continuous
+#1 unchanged: frozen, batching started 06:27
+max gap 0 → 8 min · gaps over limit 0 → 0 · empty km +11.2 · 4 loads moved</code></pre>
+<p>Every change gets a reason. If a trigger touched the load, the reason names the trigger. If the load only follows an earlier load of its order, the reason says so. If local search moved it to make room, the reason names the order it made room for.</p>
+
+<h2 id="search">Local search</h2>
+<p>The construction heuristic places one load at a time and never looks back. Local search fixes what that misses, using the two moves SPEC §4 names:</p>
+<ul>
+<li><strong>Relocate.</strong> Move one load to another truck or plant, then re-time the rest of its order so the pour stays continuous.</li>
+<li><strong>Swap.</strong> Exchange the trucks of two loads that batch within an hour of each other, then re-time both orders.</li>
+</ul>
+<p>Re-timing reuses the heuristic’s slot search, so every candidate meets the hard constraints by construction. A move that can’t place a whole order is rejected. A move is kept only if it lowers the weighted cost. Moves are random, with a seeded RNG, until the budget runs out. At the end, orders that are still unplanned get one more try, because the moves may have freed capacity.</p>
+<table>
+<thead><tr><th>Cost term</th><th>Default weight</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>Minute beyond an order’s maximum gap</td><td>20</td><td>Cold joints: the heaviest weight, as SPEC §4 asks</td></tr>
+<tr><td>Minute of any gap between loads</td><td>1</td><td>A continuous pour, even inside the limit</td></tr>
+<tr><td>Minute the first load arrives late</td><td>2</td><td>Lateness against the requested start, or the delayed start after a site delay</td></tr>
+<tr><td>Empty kilometre</td><td>0.5</td><td>Now measured on the finished plan, truck by truck</td></tr>
+<tr><td>Load moved compared with the previous version</td><td>10</td><td>Churn, re-dispatch only. A load has moved when its truck, plant or batch time differs.</td></tr>
+</tbody>
+</table>
+<p>In other words, one minute over an order’s gap limit costs as much as 10 minutes of lateness, and moving a load costs as much as 5. Every weight is an environment variable. Tests stop after a fixed number of moves instead of after a time budget, so their results are reproducible.</p>
+
+<h2 id="frozen">Frozen loads and the hard constraints</h2>
+<p>A frozen load is a fact: the plant is batching it, or already has. Our model has no returns, so the load gets delivered, even if its truck reports a breakdown or its plant goes offline afterwards. The planner never decides anything about a frozen load. The hard constraints apply to what the planner decides:</p>
+<table>
+<thead><tr><th>Check</th><th>Loads the planner placed</th><th>Frozen loads</th></tr></thead>
+<tbody>
+<tr><td>Truck in service, plant online</td><td>Yes</td><td>No: they were placed while both were fine</td></tr>
+<tr><td>Load ≤ drum, discharge within the mix limit, opening hours</td><td>Yes</td><td>No: these are facts the plant reported, not decisions</td></tr>
+<tr><td>One load per truck at a time, bays ≤ loading bays</td><td>Yes</td><td>They count as occupied time. A violation is reported whenever a placed load is involved.</td></tr>
+<tr><td>Unchanged</td><td>n/a</td><td>Yes: every frozen load must appear exactly as it went in</td></tr>
+</tbody>
+</table>
+<p>This is the one place where M5 needs your explicit OK (decision 1). CLAUDE.md says never to weaken a hard constraint, and I read the constraints as rules for the planner’s decisions. I don’t read them as a demand that the past should never have happened.</p>
+
+<h2 id="versions">Plan versions and diffs</h2>
+<p>Each version now records the version it replaced, its triggers in words, and its diff. A diff lists added, removed and moved loads by order and sequence, with before and after values for truck, plant, batch time, ETA and volume. It also lists orders that became unplanned or planned, the reason for each change, and the metrics before and after. Each load also carries <code>frozen</code>, so readers can tell a fact from a plan.</p>
+
+<h3 id="schema">Schema changes (one new migration)</h3>
+<table>
+<thead><tr><th>Table</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td><code>plans</code></td><td><code>previous_version</code>, <code>triggers</code>, <code>diff</code></td></tr>
+<tr><td><code>loads</code></td><td><code>frozen</code></td></tr>
+<tr><td><code>deliveries</code> (new)</td><td>Key: order and sequence. Also plant, truck, volume, ticket number, and the time of each ticket event. The status is the furthest event, as in <code>domain::Delivery</code>.</td></tr>
+<tr><td><code>trucks</code></td><td><code>status_at</code>, and the last position with its time. Both are stale-safe: an older report never overwrites a newer one.</td></tr>
+<tr><td><code>orders</code></td><td><code>delayed_until</code>, written only by site delays, so a customer’s next revision doesn’t erase it</td></tr>
+</tbody>
+</table>
+
+<h3 id="tickets">Tying a batch ticket to a load</h3>
+<p>The plant’s ticket gets two optional fields, <code>order</code> and <code>load_no</code>, and <code>BatchTicketIssued</code> gets an optional load reference. A real batch computer knows the order it batches for, because dispatch sends it. In M7 that is the plant-agent’s job. A ticket with a reference creates or advances a delivery, and a ticket without one is ignored. The simulated plants keep sending tickets without a reference, because their trucks still make random trips.</p>
+
+<h2 id="api">REST API changes</h2>
+<table>
+<thead><tr><th>Endpoint</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><code>PUT /plants/{id}/status</code></td><td><code>{"status": "offline"}</code> or <code>"online"</code>. Re-dispatches and returns the diff.</td></tr>
+<tr><td><code>POST /sites/{id}/delays</code></td><td><code>{"minutes": 30}</code>. Re-dispatches and returns the diff.</td></tr>
+<tr><td><code>GET /plans/{version}/diff</code></td><td>What changed from the previous version, and why</td></tr>
+<tr><td><code>POST /plans</code></td><td>Now a full re-plan through the worker. It keeps frozen loads and is diffed against the previous version.</td></tr>
+<tr><td><code>GET /plans/latest</code>, <code>/plans/{version}</code></td><td>Also return <code>previous_version</code>, <code>triggers</code> and <code>frozen</code> on each load</td></tr>
+<tr><td><code>GET /orders</code>, <code>/orders/{…}</code></td><td>Show <code>in_progress</code> once a delivery exists. That status is derived at read time, so a customer’s next snapshot can’t reset it.</td></tr>
+</tbody>
+</table>
+
+<h2 id="demo"><code>make demo</code></h2>
+<p>The demo is a small binary in the simulators crate, so it can send orders in the customers’ own formats with the code that already renders them. It runs in a container, so <code>make demo</code> needs only Docker, like <code>make up</code>. It goes like this:</p>
+<ol>
+<li>Start a fresh stack with slower order generation, so the scenario stays readable. The demo restarts it with the normal settings at the end.</li>
+<li>Seed two orders through the real channels: a bauwerk-ag JSON webhook and a neckar-infra XML webhook. Both start in about 45 minutes, at different ship-tos. Wait until a plan version includes them, and print their loads.</li>
+<li>Play the plant for load #1 of the first order: publish <code>batching</code>, <code>loading</code> and <code>loaded</code> tickets with the load reference over MQTT. Wait until the order shows <code>in_progress</code>.</li>
+<li>Break down the truck that carries load #2. The demo publishes to <code>sim/trucks/{id}/breakdown</code>, and the simulated truck reports <code>out_of_service</code> through its normal flaky modem. Wait for the version this triggers, and print its diff.</li>
+<li>Delay the second order’s site by 30 minutes through the API, and print the diff.</li>
+<li>Print a summary: load #1 never moved, and every stored version passed the hard-constraint checker.</li>
+</ol>
+<p>Diffs only list the demo orders in full. Knock-on changes to other orders are counted on one line.</p>
+
+<h2 id="bench">Benchmarks</h2>
+<p><code>crates/dispatch/benches/planner.rs</code> uses <code>criterion</code> at 50, 200 and 1,000 loads. The world is the seeded Rhine-Neckar one, with the fleet scaled to the load count (one truck per 8 loads) so the plans stay feasible, and with seeded random orders. It measures:</p>
+<ul>
+<li><strong>construct</strong>: the greedy plan from scratch;</li>
+<li><strong>improve</strong>: a fixed number of local search moves, reporting moves per second and how far the cost drops;</li>
+<li><strong>repair</strong>: one truck out of service on a full plan, end to end, with the 500 ms budget.</li>
+</ul>
+<p>The target is a repair at 1,000 loads in under 1 s. If it misses, I’ll fix the hotspot M4 already flagged: the bay check rescans every interval. <code>make bench</code> runs the benchmarks, and the README gets a results table. CI compiles the benchmarks through <code>clippy --all-targets</code> but doesn’t run them, because shared runners are too noisy.</p>
+
+<h2 id="layout">Code layout</h2>
+<pre><code>crates/dispatch/
+├── migrations/…_redispatch.sql
+├── src/planner.rs     + frozen loads, truck positions, delayed starts
+├── src/search.rs      cost and local search (new)
+├── src/redispatch.rs  affected loads, repair, fallback, diff (new, pure)
+├── src/worker.rs      one re-dispatch at a time, merged triggers (new)
+├── src/verify.rs      + frozen loads as facts
+├── src/intake.rs      + fleet consumer, triggers
+├── src/store.rs       + deliveries, versions with diffs
+├── src/api.rs         + plant status, site delays, diffs
+└── benches/planner.rs criterion
+crates/simulators/
+├── src/lib.rs         modules shared with the demo (moved out of main.rs)
+├── src/bin/demo.rs    the make demo scenario (new)
+└── src/fleet.rs       + breakdowns on command
+crates/domain, crates/ingest   load reference on batch tickets</code></pre>
+
+<h2 id="config">Configuration</h2>
+<table>
+<thead><tr><th>Variable</th><th>Default</th></tr></thead>
+<tbody>
+<tr><td><code>LOCAL_SEARCH_BUDGET_MS</code></td><td>500</td></tr>
+<tr><td><code>WEIGHT_COLD_JOINT_MINUTE</code>, <code>WEIGHT_GAP_MINUTE</code></td><td>20, 1</td></tr>
+<tr><td><code>WEIGHT_LATE_MINUTE</code>, <code>WEIGHT_EMPTY_KM</code>, <code>WEIGHT_CHURN_LOAD</code></td><td>2, 0.5, 10</td></tr>
+<tr><td><code>TRUCK_REPAIR_MINUTES</code> (simulators)</td><td>60: how long a broken-down simulated truck stays out of service</td></tr>
+</tbody>
+</table>
+
+<h2 id="steps">Steps</h2>
+<p>Each step ends green and becomes its own commit, as in M4.</p>
+
+<h3 id="step-1">Step 1</h3>
+<p><strong>Frozen loads in the planner, as pure code.</strong> First, check <code>rust-toolchain.toml</code> and the crate versions. The planner then takes frozen loads, starts trucks from their last position, plans in-progress orders whatever their start, and uses delayed starts. The checker treats frozen loads as facts. Hand-made scenarios cover:</p>
+<ul>
+<li>a pour frozen halfway;</li>
+<li>a volume cut below what is already batched;</li>
+<li>a cancellation with frozen loads;</li>
+<li>a truck breaking down while it carries a frozen load.</li>
+</ul>
+<p>Property tests freeze random prefixes of random plans.</p>
+
+<h3 id="step-2">Step 2</h3>
+<p><strong>Cost and local search, as pure code.</strong> Tests check that:</p>
+<ul>
+<li>the cost never goes up;</li>
+<li>no hard constraint breaks on random worlds;</li>
+<li>a fixed seed with a fixed number of moves always gives the same plan;</li>
+<li>a hand-made case where the greedy plan leaves a cold-joint gap gets it closed by local search.</li>
+</ul>
+
+<h3 id="step-3">Step 3</h3>
+<p><strong>Repair and diffs, as pure code.</strong> There is one scenario per trigger, plus the fallback to a full re-plan. Property tests apply a random trigger to a random plan and check that:</p>
+<ul>
+<li>the plan stays valid;</li>
+<li>frozen loads stay unchanged;</li>
+<li>with local search off, orders the trigger didn’t touch keep exactly the loads they had;</li>
+<li>every change has a reason.</li>
+</ul>
+
+<h3 id="step-4">Step 4</h3>
+<p><strong>Benchmarks.</strong> Add the <code>criterion</code> benches and <code>make bench</code>, then optimise only what misses the 1 s target.</p>
+
+<h3 id="step-5">Step 5</h3>
+<p><strong>Events into dispatch.</strong> This step adds:</p>
+<ul>
+<li>the migration;</li>
+<li>the load reference on tickets (domain, ingest and a sample);</li>
+<li>the fleet consumer;</li>
+<li>triggers from the order intake;</li>
+<li>the worker, with versions that store triggers and diffs.</li>
+</ul>
+<p>Integration tests use Postgres and NATS containers and check four cases:</p>
+<ul>
+<li>a truck’s <code>out_of_service</code> event produces a version that moves that truck’s loads;</li>
+<li>a ticket freezes its load;</li>
+<li>a cancellation removes loads;</li>
+<li>a stale truck status is ignored.</li>
+</ul>
+
+<h3 id="step-6">Step 6</h3>
+<p><strong>REST API.</strong> Add plant status, site delays, diffs, the derived <code>in_progress</code> and the OpenAPI document. Router tests check each endpoint and run the checker on every version.</p>
+
+<h3 id="step-7">Step 7</h3>
+<p><strong>Simulator breakdowns and <code>make demo</code>.</strong> Simulated trucks break down on command, and a test covers it. Then:</p>
+<ul>
+<li>add the demo binary and its compose service and image to CI;</li>
+<li>add <code>make demo</code> and <code>make bench</code>;</li>
+<li>update the README section “Re-dispatch” and <code>.env.example</code>.</li>
+</ul>
+<p>Finally, run <code>make demo</code> end to end on a fresh stack and commit.</p>
+
+<h2 id="decisions">Decisions I need from you</h2>
+<p>I’ll use the default unless you say otherwise. Decisions 1 to 3 are domain questions, and decision 5 changes something the M4 plan promised.</p>
+<table>
+<thead><tr><th>#</th><th>Question</th><th>My default</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>What happens to a frozen load whose truck breaks down or whose plant goes offline afterwards?</td><td>It stays in the plan as a fact, and the checker exempts it from the per-load checks, as in the table above. The alternative is to drop the load and plan its volume again. That needs a “lost load” state, which our model deliberately doesn’t have.</td></tr>
+<tr><td>2</td><td>What does “site delayed 30 min” mean?</td><td>It applies to the site’s orders that are in progress or start today, in Berlin time. Each gets a delayed start: the later of its start and now, plus 30 minutes. The delay survives customer revisions, and lateness is measured against the delayed start. The alternative is a delay per order.</td></tr>
+<tr><td>3</td><td>When is a broken truck back in service?</td><td>When its telematics reports any other status. The simulated truck does that after <code>TRUCK_REPAIR_MINUTES</code>. Its return triggers no re-dispatch, and the next trigger uses it.</td></tr>
+<tr><td>4</td><td>How is a ticket tied to a load?</td><td>Through the optional order and load number on the ticket. Tickets without them are ignored. Matching by truck, plant and time would guess wrong whenever the simulated trucks make their random trips.</td></tr>
+<tr><td>5</td><td>Do the simulated trucks follow the plan in M5?</td><td>No, that moves to M7. The M4 plan said M5 would do it. But following the plan in real time would make the demo wait 20 minutes or more for batching. The plant-agent in M7 pulls the plan anyway, so plan-following belongs there. Until then, the demo plays the plant for its own loads.</td></tr>
+<tr><td>6</td><td>Does <code>make demo</code> reset the stack?</td><td>Yes. It runs <code>make down</code> (deleting the local volumes) and then <code>make up</code> with slower order generation. Only then is the outcome predictable. On a stack that has run for hours, simulator orders have booked the fleet, and the demo orders may end up late or unplanned.</td></tr>
+<tr><td>7</td><td>What about an order whose start passed over an hour ago and that was never batched?</td><td>It leaves the plan, and the diff says why. That keeps M4’s rule. Orders in progress are always planned.</td></tr>
+<tr><td>8</td><td>Are the cost weights right?</td><td>The defaults are in the local search table. Churn counts loads whose truck, plant or batch time changed.</td></tr>
+<tr><td>9</td><td>Do deliveries follow the truck’s statuses after <code>loaded</code> (<code>left_plant</code> to <code>unloaded</code>)?</td><td>Not yet. Freezing only needs <code>batching</code>, so orders reach <code>in_progress</code> but not <code>shipped</code> or <code>delivered</code>. Tying truck statuses to deliveries fits M7, once the trucks follow the plan.</td></tr>
+</tbody>
+</table>
+
+<h2 id="later">Heads-up</h2>
+<ul>
+<li>In the live stack, plan and reality still diverge: the simulated trucks make random trips (decision 5). In the live stack, loads only freeze in the demo.</li>
+<li>Local search is time-boxed, so the live service doesn’t reproduce a plan bit for bit. The tests do.</li>
+<li>Re-dispatch latency, pour-gap distributions and traces of a trigger through to its diff are milestone 6. M5 only logs them.</li>
+</ul>
+
+<h2 id="deps">New dependencies</h2>
+<table>
+<thead><tr><th>Crate</th><th>Version</th><th>For</th></tr></thead>
+<tbody>
+<tr><td><code>criterion</code></td><td>0.8.2</td><td>Benchmarks, as a dev-dependency of <code>dispatch</code></td></tr>
+</tbody>
+</table>
+<p>Reused: <code>rand</code> moves from a dev-dependency to a dependency of <code>dispatch</code>, for local search. The demo uses <code>reqwest</code> and <code>rumqttc</code>, which the simulators already have. I’ll check RustSec in step 1.</p>
+
+</div>
+</article>
+</div></div></div></div></div>
+</main>
+</div>
+</body>
+</html>
