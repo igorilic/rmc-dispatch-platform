@@ -17,6 +17,7 @@ chrono-tz = "0.10.4"
 clap = { version = "4.6.7", features = ["derive", "env"] }
 csv = "1.4.0"
 domain = { path = "crates/domain" }
+futures = "0.3.34"
 proptest = "1.12.0"
 quick-xml = { version = "0.42.0", features = ["serialize"] }
 rand = "0.10.3"
@@ -28,12 +29,15 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde-saphyr = "2.1.1"
 serde_json = "1.0.154"
 sha2 = "0.11.1"
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono", "json"] } # no TLS: local Postgres
 testcontainers = "0.28.0"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tower = { version = "0.5.3", features = ["util"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+utoipa = { version = "6.0.0", features = ["chrono", "axum_extras"] }
+utoipa-swagger-ui = { version = "10.0.2", default-features = false, features = ["axum", "vendored"] } # vendored: no download at build
 
 [workspace.lints.clippy]
 # SPEC §15: no unwrap()/expect() outside tests (allowed in tests via clippy.toml).
