@@ -48,6 +48,26 @@ services:
       interval: 2s
       retries: 30
 
+  ingest:
+    build:
+      context: ../..
+      args: { BIN: ingest }
+    env_file: [{ path: ../../.env, required: false }]
+    environment:
+      NATS_URL: nats://nats:4222
+      MQTT_URL: mqtt://mosquitto:1883
+      SFTP_HOST: sftp
+      SFTP_PORT: "2222"
+      MAPPINGS_DIR: /customers
+    # Mapping configs are files, not code: edit, then `docker compose restart ingest`.
+    volumes: ["../../customers:/customers:ro"]
+    ports: ["127.0.0.1:8080:8080"]
+    depends_on:
+      nats: { condition: service_healthy }
+      mosquitto: { condition: service_healthy }
+      sftp: { condition: service_healthy }
+    restart: unless-stopped
+
   simulators:
     build:
       context: ../..
@@ -57,9 +77,12 @@ services:
       MQTT_URL: mqtt://mosquitto:1883
       SFTP_HOST: sftp
       SFTP_PORT: "2222"
+      BAUWERK_WEBHOOK_URL: http://ingest:8080/webhooks/bauwerk-ag
+      NECKAR_WEBHOOK_URL: http://ingest:8080/webhooks/neckar-infra
     depends_on:
       mosquitto: { condition: service_healthy }
       sftp: { condition: service_healthy }
+      ingest: { condition: service_started }
     restart: unless-stopped
 
   prometheus:

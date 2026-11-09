@@ -338,12 +338,13 @@ versions:
 
 <pre><code>$ ingest-cli validate --customer rheinbau-gmbh \
     --file customers/rheinbau-gmbh/samples/broken.csv
-broken.csv: 3 rows, 2 valid, 1 invalid
-  row 3 (RB-7790) Menge:
-    "12.5" is not a decimal-comma number (e.g. 12,5)
-  row 3 (RB-7790) Warenempfänger:
-    ship-to 50001007 belongs to customer 10001001,
-    not 10001002
+broken.csv: 3 records, 2 valid, 1 invalid
+  line 4 (RB-7790)
+    Warenempfänger: ship-to 50001007 belongs to
+      customer 10001001, not 10001002
+    Menge: "12.5" is not a decimal-comma number (e.g. 12,5)
+    Liefertermin: "29.03.2026 02:30" does not exist in
+      Europe/Berlin (clocks change)
 $ echo $status
 1
 

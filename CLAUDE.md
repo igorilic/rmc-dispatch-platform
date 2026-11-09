@@ -18,7 +18,11 @@ edge node at each plant with store-and-forward.
   one load per truck at a time, load ≤ drum capacity, parallel loads at a plant ≤ its loading bays,
   discharge within the mix design's time limit, and no out-of-service trucks or offline plants.
 - If the spec is ambiguous or looks wrong, ask. Don't guess.
-- Verification is `make test` (fmt, clippy `-D warnings`, unit/property/integration tests).
+- Verification is `make test` (fmt, clippy `-D warnings`, unit/property/integration tests). Integration
+  tests start containers with testcontainers, so Docker must be running. The Makefile sets `DOCKER_HOST`
+  from the current Docker context.
+- Customer formats live in `customers/<name>/mapping.yaml`. Never add customer-specific Rust (SPEC §5).
+  Check a format change with `cargo run -p ingest-cli -- validate --customer <name> --file <sample>`.
 - Use the latest stable versions of crates, container images and GitHub Actions. Pin images to exact
   tags, never `latest`. `make audit` (cargo-audit) must be clean. Check `rust-toolchain.toml` at each milestone.
 - The repo is public (`igorilic/rmc-dispatch-platform`). Never commit credentials, internal hostnames or personal data.
@@ -62,7 +66,7 @@ Each one ends with a runnable repo, green CI and a commit.
 
 1. [x] **Skeleton**: workspace, `domain` crate, compose stack with infra only, Makefile, CI with fmt/clippy/test, README stub.
 2. [x] **Simulators**: truck fleet over MQTT, three fake customer systems, fake plant. Visible in logs.
-3. [ ] **Ingest**: mapping configs, canonical events, idempotency, DLQ + replay, `ingest-cli validate`. Integration tests.
+3. [x] **Ingest**: mapping configs, canonical events, idempotency, DLQ + replay, `ingest-cli validate`. Integration tests.
 4. [ ] **Dispatch v1**: data model + migrations, construction heuristic, REST API with OpenAPI, property tests.
 5. [ ] **Re-dispatch**: event handling, local search, frozen loads, plan versions + diffs, benchmarks. `make demo` works end to end.
 6. [ ] **Observability**: traces end to end, metrics, Grafana dashboard.
