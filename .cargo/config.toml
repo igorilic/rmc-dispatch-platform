@@ -1,0 +1,4 @@
+[env]
+# sqlx checks queries at compile time against .sqlx/ (committed), so builds need no database.
+# Refresh it with `make sqlx-prepare` after changing a query or a migration.
+SQLX_OFFLINE = "true"

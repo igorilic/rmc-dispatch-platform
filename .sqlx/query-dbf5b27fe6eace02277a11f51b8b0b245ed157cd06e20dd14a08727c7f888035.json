@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT code, max_minutes_from_batching FROM mix_designs",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mix_designs",
+            "name": "code"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "max_minutes_from_batching",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "mix_designs",
+            "name": "max_minutes_from_batching"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "dbf5b27fe6eace02277a11f51b8b0b245ed157cd06e20dd14a08727c7f888035"
+}

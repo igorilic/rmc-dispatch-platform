@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO trucks (id, home_plant, drum_capacity_m3, status) VALUES ($1, $2, $3, $4)\n                 ON CONFLICT (id) DO UPDATE SET home_plant = EXCLUDED.home_plant,\n                     drum_capacity_m3 = EXCLUDED.drum_capacity_m3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Float8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a6a7b28e20dbe36c87a3db34c35970efc034d60a25a6996b238c9f13076f611d"
+}

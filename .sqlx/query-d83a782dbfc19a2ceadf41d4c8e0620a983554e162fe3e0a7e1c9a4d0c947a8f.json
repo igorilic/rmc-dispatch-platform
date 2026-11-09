@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT version, created_at, horizon_end, metrics AS \"metrics: Json<Metrics>\",\n                   unplanned AS \"unplanned: Json<Vec<Unplanned>>\"\n               FROM plans WHERE version = COALESCE($1, (SELECT max(version) FROM plans))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "version",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "plans",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "plans",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "horizon_end",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "plans",
+            "name": "horizon_end"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "metrics: Json<Metrics>",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "plans",
+            "name": "metrics"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "unplanned: Json<Vec<Unplanned>>",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "plans",
+            "name": "unplanned"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d83a782dbfc19a2ceadf41d4c8e0620a983554e162fe3e0a7e1c9a4d0c947a8f"
+}

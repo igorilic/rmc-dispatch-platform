@@ -153,6 +153,11 @@ impl PostalCodeGeocoder {
         PostalCodeGeocoder { centroids }
     }
 
+    /// Every postal code with its centroid.
+    pub fn centroids(&self) -> impl Iterator<Item = (&str, Location)> {
+        self.centroids.iter().map(|(code, at)| (code.as_str(), *at))
+    }
+
     pub fn locate(&self, site: &Site) -> Option<Location> {
         site.location.or_else(|| {
             self.centroids

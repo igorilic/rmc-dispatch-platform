@@ -1,0 +1,124 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT order_id, sequence, volume_m3, plant_id, truck_id, batch_at, eta_on_site, window_start, window_end\n             FROM loads WHERE plan_version = $1 ORDER BY order_id, sequence",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "order_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "loads",
+            "name": "order_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "sequence",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "loads",
+            "name": "sequence"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "volume_m3",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "loads",
+            "name": "volume_m3"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "plant_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "loads",
+            "name": "plant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "truck_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "loads",
+            "name": "truck_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "batch_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "loads",
+            "name": "batch_at"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "eta_on_site",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "loads",
+            "name": "eta_on_site"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "window_start",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "loads",
+            "name": "window_start"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "window_end",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "loads",
+            "name": "window_end"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "4f87bc1150f8258ba73967a18da0cb304ffb96b61b90c9af5e9d957ba223f942"
+}

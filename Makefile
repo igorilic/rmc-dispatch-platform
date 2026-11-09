@@ -5,7 +5,7 @@
 export DOCKER_HOST ?= $(shell docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)
 COMPOSE := docker compose -f deploy/compose/compose.yaml $(if $(wildcard .env),--env-file .env)
 
-.PHONY: up down logs test audit
+.PHONY: up down logs test audit sqlx-prepare
 
 up: ## Build and start the local stack, and wait until it is up
 	$(COMPOSE) up -d --wait --build
@@ -23,3 +23,9 @@ test: ## fmt, clippy, unit/property/integration tests
 
 audit: ## Check dependencies against the RustSec advisory DB (needs cargo-audit)
 	cargo audit
+
+# Compile-time-checked queries (sqlx) read .sqlx/ offline; this refreshes it from the compose Postgres.
+DATABASE_URL ?= postgres://pourline:pourline@localhost:5432/pourline
+sqlx-prepare: ## Refresh .sqlx/ after changing a query or migration (needs make up and sqlx-cli)
+	sqlx migrate run --source crates/dispatch/migrations --database-url $(DATABASE_URL)
+	DATABASE_URL=$(DATABASE_URL) SQLX_OFFLINE=false cargo sqlx prepare --workspace -- --all-targets

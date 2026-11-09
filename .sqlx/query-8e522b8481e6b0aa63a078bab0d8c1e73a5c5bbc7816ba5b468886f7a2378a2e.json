@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO mix_designs (code, max_minutes_from_batching) VALUES ($1, $2)\n                 ON CONFLICT (code) DO UPDATE SET max_minutes_from_batching = EXCLUDED.max_minutes_from_batching",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8e522b8481e6b0aa63a078bab0d8c1e73a5c5bbc7816ba5b468886f7a2378a2e"
+}
