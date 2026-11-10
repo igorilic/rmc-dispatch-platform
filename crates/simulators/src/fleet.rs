@@ -12,8 +12,11 @@
 //!
 //! GPS is sent every 10 s while moving and every 60 s while parked. Drum state is sent on change
 //! and every 30 s, and status on change. Travel time is haversine distance × [`ROAD_FACTOR`] ÷
-//! [`AVG_SPEED_KMH`], ±10 %. A share of trips crosses a dead zone. Until dispatch exists (M5),
-//! every trip goes to a random site.
+//! [`AVG_SPEED_KMH`], ±10 %. A share of trips crosses a dead zone. Every trip goes to a random
+//! site: the trucks don't follow dispatch's plan yet (M7).
+//!
+//! A truck breaks down on command ([`TruckSim::breakdown`]), wherever it is: it reports
+//! `out_of_service`, stays put for [`FleetConfig::repair`], then drives back to its home plant.
 
 use std::future::Future;
 use std::ops::Range;
@@ -25,7 +28,7 @@ use domain::{DrumRotation, Location, Truck, TruckStatus};
 use rand::seq::IndexedRandom;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use serde::Serialize;
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use tokio::time::{Instant, sleep};
 use tracing::{debug, info};
 
@@ -43,6 +46,8 @@ pub struct FleetConfig {
     pub chaos: Chaos,
     /// Share of trips (`0.0..=1.0`) that cross a 30–120 s dead zone.
     pub dead_zone_trip_share: f64,
+    /// How long a broken-down truck stays out of service.
+    pub repair: Duration,
 }
 
 fn rpm(rotation: DrumRotation) -> f64 {
@@ -135,6 +140,10 @@ pub struct TruckSim {
     seq: u64,
     status: Option<TruckStatus>,
     rotation: Option<DrumRotation>,
+    /// The last reported position.
+    at: Location,
+    breakdown: Arc<Notify>,
+    repair: Duration,
 }
 
 impl TruckSim {
@@ -149,7 +158,6 @@ impl TruckSim {
     ) -> Self {
         TruckSim {
             truck,
-            home,
             world,
             out,
             clock,
@@ -159,7 +167,16 @@ impl TruckSim {
             seq: 0,
             status: None,
             rotation: None,
+            at: home.plant.location,
+            breakdown: Arc::new(Notify::new()),
+            repair: config.repair,
+            home,
         }
+    }
+
+    /// Notify it to break this truck down.
+    pub fn breakdown(&self) -> Arc<Notify> {
+        Arc::clone(&self.breakdown)
     }
 
     pub async fn run(mut self) -> anyhow::Result<()> {
@@ -174,8 +191,35 @@ impl TruckSim {
         )
         .await?;
         loop {
-            self.trip().await?;
+            let breakdown = Arc::clone(&self.breakdown);
+            // A breakdown abandons the trip wherever it is; a bay it held is freed with it.
+            tokio::select! {
+                trip = self.trip() => trip?,
+                () = breakdown.notified() => self.break_down().await?,
+            }
         }
+    }
+
+    /// Out of service where it stands, for the repair, then back to the home plant.
+    async fn break_down(&mut self) -> anyhow::Result<()> {
+        info!(truck = %self.truck.id.0, "broke down");
+        let (here, repair) = (self.at, self.repair);
+        self.phase(
+            TruckStatus::OutOfService,
+            DrumRotation::Idle,
+            Motion::Parked(here),
+            sleep(repair),
+        )
+        .await?;
+        info!(truck = %self.truck.id.0, "repaired, driving home");
+        let back = self.drive(here, self.home.plant.location);
+        self.phase(
+            TruckStatus::Returning,
+            DrumRotation::Idle,
+            back.0,
+            sleep(back.1),
+        )
+        .await
     }
 
     async fn trip(&mut self) -> anyhow::Result<()> {
@@ -345,8 +389,9 @@ impl TruckSim {
             } else {
                 self.flush_dead_zone().await?;
             }
+            self.at = motion.position(elapsed);
             if moving || tick.is_multiple_of(6) {
-                let at = motion.position(elapsed);
+                let at = self.at;
                 let gps = Gps {
                     lat: round(at.lat, 6),
                     lon: round(at.lon, 6),
@@ -432,6 +477,7 @@ mod tests {
         let config = FleetConfig {
             chaos: Chaos::NONE,
             dead_zone_trip_share,
+            repair: Duration::from_secs(3600),
         };
         let sim = TruckSim::new(truck, plant, Arc::clone(&world), tx, clock, config, 7);
         let task = tokio::spawn(sim.run());
@@ -589,6 +635,59 @@ mod tests {
                 .iter()
                 .any(|c| (c.lat - lat).abs() < 1e-6 && (c.lon - lon).abs() < 1e-6),
             "parked at {lat},{lon}; expected one of {centroids:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_truck_breaks_down_on_command_and_is_back_after_the_repair() {
+        let world = Arc::new(Seed::rhine_neckar().unwrap());
+        let (tx, mut rx) = mpsc::channel(100_000);
+        let clock = Clock::start(Utc.with_ymd_and_hms(2026, 11, 9, 6, 0, 0).unwrap());
+        let truck = world.trucks[0].clone();
+        let home = world.plant(&truck.home_plant.0).unwrap().clone();
+        let plant = Arc::new(PlantSim::new(home, tx.clone(), clock, Chaos::NONE, 1));
+        let config = FleetConfig {
+            chaos: Chaos::NONE,
+            dead_zone_trip_share: 0.0,
+            repair: Duration::from_secs(3600),
+        };
+        let sim = TruckSim::new(truck, plant, Arc::clone(&world), tx, clock, config, 7);
+        let breakdown = sim.breakdown();
+        let task = tokio::spawn(sim.run());
+
+        // (status, ts_ms) as reported, from the moment it heads out.
+        let mut reported: Vec<(String, i64)> = Vec::new();
+        let mut ordered_at = 0;
+        loop {
+            let msg = rx.recv().await.unwrap();
+            let body: Value = serde_json::from_slice(&msg.payload).unwrap();
+            let Some(status) = body["status"].as_str() else {
+                continue;
+            };
+            let ts = body["ts_ms"].as_i64().unwrap();
+            if status == "en_route" && ordered_at == 0 {
+                breakdown.notify_one();
+                ordered_at = clock.now().timestamp_millis();
+            }
+            if ordered_at > 0 {
+                reported.push((status.to_owned(), ts));
+            }
+            if ordered_at > 0 && status == "available" {
+                break;
+            }
+        }
+        task.abort();
+
+        let statuses: Vec<&str> = reported.iter().map(|(s, _)| s.as_str()).collect();
+        assert_eq!(
+            statuses,
+            ["en_route", "out_of_service", "returning", "available"]
+        );
+        let (broke, repaired) = (reported[1].1, reported[2].1);
+        assert!(broke - ordered_at < 1_000, "breaks down at once, mid-drive");
+        assert!(
+            repaired - broke >= 3_600_000,
+            "stays out of service for the repair"
         );
     }
 }

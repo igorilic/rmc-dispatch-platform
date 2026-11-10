@@ -4,12 +4,17 @@
 //! does this on purpose. Some messages are sent twice, some are held back behind their successor,
 //! and in a dead zone everything is buffered and then flushed in one late burst. Nothing is lost.
 
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use rumqttc::{AsyncClient, Event, EventLoop, Packet, QoS};
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use tracing::{info, warn};
+
+/// Breaks a simulated truck down: publish anything to `sim/trucks/{id}/breakdown`.
+pub const BREAKDOWN_TOPIC: &str = "sim/trucks/+/breakdown";
 
 /// One MQTT message on its way to the broker.
 #[derive(Debug, Clone, PartialEq)]
@@ -93,11 +98,31 @@ pub async fn publish(mut rx: mpsc::Receiver<Outgoing>, client: AsyncClient) -> a
     Ok(())
 }
 
-/// Drives the MQTT connection. rumqttc reconnects on the next poll after an error.
-pub async fn drive(mut eventloop: EventLoop) -> anyhow::Result<()> {
+/// Drives the MQTT connection and hands breakdown commands to the trucks in `breakdowns`.
+/// rumqttc reconnects on the next poll after an error.
+pub async fn drive(
+    mut eventloop: EventLoop,
+    client: AsyncClient,
+    breakdowns: HashMap<String, Arc<Notify>>,
+) -> anyhow::Result<()> {
     loop {
         match eventloop.poll().await {
-            Ok(Event::Incoming(Packet::ConnAck(_))) => info!("connected to the MQTT broker"),
+            Ok(Event::Incoming(Packet::ConnAck(_))) => {
+                info!("connected to the MQTT broker");
+                // A clean session forgets its subscriptions, so subscribe on every connect.
+                if let Err(error) = client.try_subscribe(BREAKDOWN_TOPIC, QoS::AtLeastOnce) {
+                    warn!(%error, "can't subscribe to breakdown commands");
+                }
+            }
+            Ok(Event::Incoming(Packet::Publish(command))) => {
+                match commanded_truck(&command.topic).and_then(|t| breakdowns.get(t)) {
+                    Some(truck) => {
+                        info!(topic = %command.topic, "breakdown ordered");
+                        truck.notify_one();
+                    }
+                    None => warn!(topic = %command.topic, "breakdown for an unknown truck"),
+                }
+            }
             Ok(_) => {}
             Err(error) => {
                 warn!(%error, "MQTT connection failed, retrying in 2 s");
@@ -107,9 +132,28 @@ pub async fn drive(mut eventloop: EventLoop) -> anyhow::Result<()> {
     }
 }
 
+/// The truck a `sim/trucks/{id}/breakdown` command is for.
+fn commanded_truck(topic: &str) -> Option<&str> {
+    topic
+        .strip_prefix("sim/trucks/")?
+        .strip_suffix("/breakdown")
+        .filter(|truck| !truck.is_empty() && !truck.contains('/'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn breakdown_commands_name_their_truck() {
+        assert_eq!(
+            commanded_truck("sim/trucks/truck-07/breakdown"),
+            Some("truck-07")
+        );
+        assert_eq!(commanded_truck("sim/trucks//breakdown"), None);
+        assert_eq!(commanded_truck("sim/trucks/a/b/breakdown"), None);
+        assert_eq!(commanded_truck("trucks/truck-07/status"), None);
+    }
 
     fn msg(i: u32) -> Outgoing {
         Outgoing {

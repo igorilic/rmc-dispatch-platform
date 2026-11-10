@@ -184,7 +184,7 @@ order            load  truck                plant                ETA            
 10001001/DEMO-1  #5    truck-22             walldorf             08:12 → 08:20  follows #2, so the pour stays continuous
 #1 unchanged: frozen, batching started 06:27
 max gap 0 → 8 min · gaps over limit 0 → 0 · empty km +11.2 · 4 loads moved</code></pre>
-<p>Every change gets a reason. If a trigger touched the load, the reason names the trigger. If the load only follows an earlier load of its order, the reason says so. If local search moved it to make room, the reason names the order it made room for.</p>
+<p>Every change gets a reason. If a trigger touched the load, the reason names the trigger. If the load only follows an earlier load of its order, the reason says so. If local search moved a load of another order, the reason says so and names the triggers of that re-dispatch.</p>
 
 <h2 id="search">Local search</h2>
 <p>The construction heuristic places one load at a time and never looks back. Local search fixes what that misses, using the two moves SPEC §4 names:</p>

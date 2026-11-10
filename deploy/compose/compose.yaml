@@ -93,11 +93,29 @@ services:
       SFTP_PORT: "2222"
       BAUWERK_WEBHOOK_URL: http://ingest:8080/webhooks/bauwerk-ag
       NECKAR_WEBHOOK_URL: http://ingest:8080/webhooks/neckar-infra
+      # make demo slows order generation down, so its scenario stays readable.
+      ORDER_INTERVAL_SECS: ${ORDER_INTERVAL_SECS:-180}
     depends_on:
       mosquitto: { condition: service_healthy }
       sftp: { condition: service_healthy }
       ingest: { condition: service_started }
     restart: unless-stopped
+
+  # make demo's scripted scenario; runs once, only with --profile demo.
+  demo:
+    profiles: [demo]
+    build:
+      context: ../..
+      args: { BIN: demo }
+    env_file: [{ path: ../../.env, required: false }]
+    environment:
+      DISPATCH_URL: http://dispatch:8081
+      INGEST_URL: http://ingest:8080
+      MQTT_URL: mqtt://mosquitto:1883
+    depends_on:
+      dispatch: { condition: service_started }
+      ingest: { condition: service_started }
+      mosquitto: { condition: service_healthy }
 
   prometheus:
     image: prom/prometheus:v3.16.0

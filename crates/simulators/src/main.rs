@@ -1,14 +1,9 @@
 //! Fake trucks, plants and customers, so Pourline runs locally with no real data (SPEC §2, M2).
 //!
 //! One process runs everything as tokio tasks: 25 trucks, 3 plants and 3 customers. Truck and
-//! plant messages go to Mosquitto. Customer orders go to webhooks, which are logged until M3,
-//! and to the SFTP server. All settings come from environment variables; see `Config`.
-
-mod customers;
-mod fleet;
-mod link;
-mod orders;
-mod plant;
+//! plant messages go to Mosquitto. Customer orders go to ingest's webhooks and to the SFTP server.
+//! Trucks break down on command (`sim/trucks/{id}/breakdown`). All settings come from environment
+//! variables; see `Config`.
 
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -17,42 +12,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, ensure};
-use chrono::{DateTime, TimeDelta, Utc};
-use domain::PlantId;
+use chrono::Utc;
+use domain::{PlantId, Seed};
 use rand::{SeedableRng, rngs::StdRng};
 use rumqttc::{AsyncClient, MqttOptions};
+use simulators::Clock;
+use simulators::customers::{self, SftpDrop, Webhook};
+use simulators::fleet::{FleetConfig, TruckSim};
+use simulators::link::{self, Chaos};
+use simulators::orders::{OrderBook, OrderNumbers};
+use simulators::plant::PlantSim;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
-use tokio::time::Instant;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
-
-use crate::customers::{SftpDrop, Webhook};
-use crate::fleet::{FleetConfig, TruckSim};
-use crate::link::Chaos;
-use crate::orders::{OrderBook, OrderNumbers};
-use crate::plant::PlantSim;
-use domain::Seed;
-
-/// Wall-clock time that follows tokio's clock, so payload timestamps stay right in paused-time tests.
-#[derive(Debug, Clone, Copy)]
-pub struct Clock {
-    wall0: DateTime<Utc>,
-    t0: Instant,
-}
-
-impl Clock {
-    pub fn start(wall0: DateTime<Utc>) -> Self {
-        Clock {
-            wall0,
-            t0: Instant::now(),
-        }
-    }
-
-    pub fn now(&self) -> DateTime<Utc> {
-        self.wall0 + TimeDelta::from_std(self.t0.elapsed()).unwrap_or_default()
-    }
-}
 
 /// Settings from the environment. Every variable is optional; `.env.example` lists the defaults.
 struct Config {
@@ -104,6 +77,7 @@ impl Config {
                     reorder_rate: rate("TELEMATICS_REORDER_RATE", "0.03")?,
                 },
                 dead_zone_trip_share: rate("DEAD_ZONE_TRIP_SHARE", "0.2")?,
+                repair: secs("TRUCK_REPAIR_MINUTES", "60").map(|minutes| minutes * 60)?,
             },
             seed: parsed("SIM_SEED", &parse("SIM_SEED", "42"))?,
         })
@@ -139,8 +113,6 @@ async fn main() -> anyhow::Result<()> {
     ))?;
     let (client, eventloop) = AsyncClient::new(mqtt, 1024);
     let mut tasks = JoinSet::new();
-    tasks.spawn(link::drive(eventloop));
-    tasks.spawn(link::publish(rx, client));
 
     let mut plants: HashMap<PlantId, Arc<PlantSim>> = HashMap::new();
     for (i, plant) in world.plants.iter().enumerate() {
@@ -153,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
         );
         plants.insert(plant.id.clone(), Arc::new(sim));
     }
+    let mut breakdowns = HashMap::new();
     for (i, truck) in world.trucks.iter().enumerate() {
         let home = plants
             .get(&truck.home_plant)
@@ -167,9 +140,12 @@ async fn main() -> anyhow::Result<()> {
             config.fleet,
             config.seed.wrapping_add(i as u64),
         );
+        breakdowns.insert(truck.id.0.clone(), sim.breakdown());
         tasks.spawn(sim.run());
     }
     drop(tx);
+    tasks.spawn(link::drive(eventloop, client.clone(), breakdowns));
+    tasks.spawn(link::publish(rx, client));
 
     let mixes: Vec<String> = world.mixes.iter().map(|m| m.code.0.clone()).collect();
     // Each integration orders for one customer from our master data, to that customer's ship-tos.
@@ -303,6 +279,7 @@ mod tests {
         assert_eq!(config.order_interval, Duration::from_secs(180));
         assert_eq!(config.fleet.chaos.duplicate_rate, 0.03);
         assert_eq!(config.fleet.dead_zone_trip_share, 0.2);
+        assert_eq!(config.fleet.repair, Duration::from_secs(3600));
         assert_eq!(config.seed, 42);
         // Throwaway dev tokens, the same defaults ingest uses.
         assert_eq!(config.bauwerk_webhook_token, "dev-token-bauwerk-ag");

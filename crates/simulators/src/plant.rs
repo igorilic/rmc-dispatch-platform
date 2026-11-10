@@ -28,15 +28,22 @@ pub struct PlantSim {
     clock: Clock,
 }
 
-#[derive(Serialize)]
-struct Ticket<'a> {
-    plant: &'a str,
-    ticket_no: &'a str,
-    vehicle: &'a str,
-    ts_ms: i64,
-    event: DeliveryStatus,
-    mix: &'a str,
-    volume_m3: f64,
+/// A batch ticket as the plant's batch computer sends it on `plants/{id}/tickets`.
+#[derive(Debug, Serialize)]
+pub struct Ticket<'a> {
+    pub plant: &'a str,
+    pub ticket_no: &'a str,
+    pub vehicle: &'a str,
+    pub ts_ms: i64,
+    pub event: DeliveryStatus,
+    pub mix: &'a str,
+    pub volume_m3: f64,
+    /// The order and load number dispatch planned. The simulated plants batch for random trips,
+    /// so they leave both out; `make demo` sends them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load_no: Option<u32>,
 }
 
 impl PlantSim {
@@ -113,6 +120,8 @@ impl PlantSim {
             event,
             mix: &mix.0,
             volume_m3,
+            order: None,
+            load_no: None,
         };
         let msg = Outgoing {
             topic: format!("plants/{}/tickets", self.plant.id.0),

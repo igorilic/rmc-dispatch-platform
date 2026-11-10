@@ -5,13 +5,20 @@
 export DOCKER_HOST ?= $(shell docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)
 COMPOSE := docker compose -f deploy/compose/compose.yaml $(if $(wildcard .env),--env-file .env)
 
-.PHONY: up down logs test bench audit sqlx-prepare
+.PHONY: up down demo logs test bench audit sqlx-prepare
 
 up: ## Build and start the local stack, and wait until it is up
 	$(COMPOSE) up -d --wait --build
 
 down: ## Stop the stack and delete its volumes
 	$(COMPOSE) down -v --remove-orphans
+
+demo: ## Fresh stack, then a scripted scenario: two orders, a batching load, a breakdown, a site delay
+	$(COMPOSE) down -v --remove-orphans
+	ORDER_INTERVAL_SECS=3600 $(COMPOSE) up -d --wait --build
+	$(COMPOSE) --profile demo run --rm --build demo
+	@# Back to the normal order rate.
+	$(COMPOSE) up -d --wait simulators
 
 logs: ## Follow the simulators' logs
 	$(COMPOSE) logs -f simulators

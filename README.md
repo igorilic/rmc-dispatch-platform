@@ -6,11 +6,13 @@ A ready-mix concrete dispatch platform in Rust. It plans which truck carries whi
 which batching plant, so every pour stays continuous and every load is discharged before it
 sets. When a truck breaks down or a site runs late, it re-plans. The full design is in [SPEC.md](SPEC.md).
 
-> **Status: milestone 4 of 9 (dispatch v1).** A simulated world of 25 trucks, three batching plants and
-> three contractors sends orders and telematics. Ingest turns all of it into canonical events on
-> NATS JetStream, with no duplicates, and keeps a dead-letter queue for anything it can't map.
-> Dispatch keeps every order in Postgres and plans truck loads on request, never breaking a hard
-> constraint. Re-dispatch arrives in milestone 5.
+> **Status: milestone 5 of 9 (re-dispatch).** A simulated world of 25 trucks, three batching
+> plants and three contractors sends orders and telematics. Ingest turns all of it into canonical
+> events on NATS JetStream, with no duplicates, and keeps a dead-letter queue for anything it can't
+> map. Dispatch keeps every order in Postgres and re-plans by itself when something changes: a new
+> or changed order, a truck breaking down, a plant going offline, a site running late. Loads that
+> are already batching never move, every plan version passes a hard-constraint checker, and every
+> diff says why each load moved. `make demo` shows it end to end.
 
 ## Prerequisites
 
@@ -26,13 +28,15 @@ Kubernetes tooling (k3d, kubectl, Helm) is only needed from milestone 7 onwards.
 | Command | What it does |
 |---|---|
 | `make up` | Builds and starts the local stack, and waits until it is up |
+| `make demo` | Starts a fresh stack (deleting the volumes) and plays a re-dispatch scenario: see [Re-dispatch](#re-dispatch) |
 | `make logs` | Follows the simulators’ logs |
 | `make test` | Runs the fmt check, clippy (`-D warnings`) and all tests |
+| `make bench` | Runs the planner benchmarks at 50, 200 and 1,000 loads (a few minutes) |
 | `make audit` | Checks the dependencies against the RustSec advisory database |
 | `make sqlx-prepare` | Refreshes `.sqlx/` after a query or migration changes (needs `make up` and `cargo install sqlx-cli --locked`) |
 | `make down` | Stops everything and deletes the volumes |
 
-`make demo` arrives with milestone 5. `make k8s` and `make chaos` arrive with milestone 7.
+`make k8s` and `make chaos` arrive with milestone 7.
 
 ## Local services
 
@@ -90,6 +94,7 @@ and the tests check the simulators against them.
 | `RHEINBAU_DROP_INTERVAL_SECS` | `300` | Time between SFTP drops |
 | `TELEMATICS_DUPLICATE_RATE`, `TELEMATICS_REORDER_RATE` | `0.03`, `0.03` | Share of messages duplicated or held back |
 | `DEAD_ZONE_TRIP_SHARE` | `0.2` | Share of trips that cross a dead zone |
+| `TRUCK_REPAIR_MINUTES` | `60` | How long a truck stays out of service after a breakdown (`sim/trucks/{id}/breakdown`) |
 | `SIM_SEED` | `42` | Seed for every random choice |
 | `RUST_LOG` | `info` | Log filter. Use `simulators=debug` to see every telematics message |
 
@@ -142,8 +147,10 @@ To see a replay end to end, break a mapping, let orders fail, fix it, and replay
 
 Dispatch keeps a Postgres copy of the master data and of every order, read from `events.orders.*`
 on the `EVENTS` stream. Its durable consumer resumes after a restart, and an older revision of an
-order never overwrites a newer one. `POST /plans` plans every open order (unconfirmed, pending or
-confirmed) that starts in the next 48 hours, and stores the plan as a new version.
+order never overwrites a newer one. A plan covers every open order (unconfirmed, pending or
+confirmed) that starts in the next 48 hours, plus orders already being batched. Dispatch plans by
+itself whenever something changes (see [Re-dispatch](#re-dispatch)). `POST /plans` plans
+everything that isn't batching yet from scratch and stores the result as a new version.
 
 ```sh
 curl -s 'localhost:8081/orders?status=pending' | jq length
@@ -158,22 +165,116 @@ drum capacity, no more parallel loads than a plant has bays, discharge finished 
 time limit, no out-of-service trucks or offline plants, and batching only during opening hours.
 An order is planned whole, or listed in `unplanned` with the reason.
 
-`crates/dispatch/src/verify.rs` re-checks those constraints independently of the planner. The
-property tests run it on 300 random worlds, and the API tests run it on plans made from stored
-orders. `metrics` measures the soft objectives: lateness, pour gaps and empty kilometres.
+`crates/dispatch/src/verify.rs` re-checks those constraints independently of the planner, and
+dispatch stores no plan that fails it. The property tests run it on random worlds, and the API
+tests run it on plans made from stored orders. `metrics` measures the soft objectives: lateness,
+pour gaps and empty kilometres.
 
-This first plan is greedy: correct, but not good. At the simulators' default order rate, demand
-outgrows 25 trucks within hours, so most orders are planned to start late. Milestone 5's local
-search improves it. The milestone 4 plan in `docs/context/specs/` has diagrams.
+The greedy plan is then improved by local search for up to 500 ms (`crates/dispatch/src/search.rs`).
+It relocates single loads to other trucks and plants, and swaps the trucks of two loads, keeping
+only moves that lower a weighted cost. That cost counts minutes beyond an order's gap limit (cold
+joints, weighted heaviest), every gap minute, lateness and empty kilometres. Every candidate is
+built with the heuristic's own slot search, so local search never breaks a hard constraint. At the
+simulators' default order rate, demand still outgrows 25 trucks within hours, so most orders end up
+planned late. The milestone 4 plan in `docs/context/specs/` has diagrams.
 
 | Variable | Default | Effect |
 |---|---|---|
 | `DISPATCH_HTTP_ADDR` | `0.0.0.0:8081` | API server |
 | `DATABASE_URL` | `postgres://pourline:pourline@localhost:5432/pourline` | Postgres (compose sets the container address) |
 | `NATS_URL` | `nats://localhost:4222` | JetStream, shared with ingest |
+| `LOCAL_SEARCH_BUDGET_MS` | `500` | Time local search gets per plan |
+| `WEIGHT_COLD_JOINT_MINUTE` | `20` | Cost of a minute beyond an order's maximum gap |
+| `WEIGHT_GAP_MINUTE` | `1` | Cost of any minute between two loads at a site |
+| `WEIGHT_LATE_MINUTE` | `2` | Cost of a minute the first load arrives late |
+| `WEIGHT_EMPTY_KM` | `0.5` | Cost of an empty kilometre |
+| `WEIGHT_CHURN_LOAD` | `10` | Cost of moving a load during a re-dispatch |
 
 Queries are checked at compile time against `.sqlx/`, so building needs no database. After you
 change a query or a migration, run `make up` and then `make sqlx-prepare`.
+
+## Re-dispatch
+
+When reality changes, dispatch repairs the plan instead of starting over. Each of these is a
+trigger:
+
+| Trigger | Where it comes from |
+|---|---|
+| New order, changed order, cancellation | `events.orders.*`. A change counts if it touches volume, start, pour rate, gap, ship-to or mix |
+| Truck out of service | `events.trucks.*`: the truck's telematics reports `out_of_service` |
+| Plant offline or back online | `PUT /plants/{id}/status` with `{"status": "offline"}` or `"online"` |
+| Site delayed | `POST /sites/{id}/delays` with `{"minutes": 30}`: the site's pours of the day start later |
+
+Every trigger goes to one worker, which runs one re-dispatch at a time. Triggers that arrive in
+the meantime are merged into the next run, so a burst becomes one version. A re-dispatch:
+
+1. **Freezes** every load the plant has started batching. A batch ticket that names its order and
+   load number (`order`, `load_no`) creates a delivery, and from then on the load is a fact. It
+   stays even if its truck breaks down later: there are no returns.
+2. **Keeps** the loads of every order no trigger touched, if they still fit at the same plant,
+   truck and time. A load whose batch time has passed without batching sends its order to step 3.
+3. **Plans** the touched, new and unplanned orders around them, then runs local search with a
+   churn penalty, so one late pump doesn't reshuffle the fleet.
+4. **Checks** the result against every hard constraint. If the repair fails the check, it plans
+   everything again. If that fails too, the previous version stays.
+5. **Stores** a new version, unless nothing changed, with the triggers and a diff that gives a
+   reason for every added, removed or moved load.
+
+```sh
+curl -s localhost:8081/plans/latest | jq '.version, .previous_version, .triggers'
+curl -s localhost:8081/plans/latest | jq -r '.version' | xargs -I{} curl -s localhost:8081/plans/{}/diff | jq '.changes[] | {order, sequence, kind, reason}'
+curl -s -X PUT localhost:8081/plants/plant-walldorf/status -H 'content-type: application/json' -d '{"status":"offline"}' | jq '.diff.triggers'
+docker exec pourline-mosquitto-1 mosquitto_pub -t sim/trucks/truck-07/breakdown -m ''   # a simulated truck breaks down
+```
+
+An order with a delivery reads as `in_progress`. The simulated trucks still make random trips,
+and the simulated plants batch for them without naming a load. In the live stack, loads only
+freeze when `make demo` plays the plant. Trucks following the plan arrive with milestone 7's
+plant-agent. The milestone 5 plan in `docs/context/specs/` has diagrams.
+
+### `make demo`
+
+`make demo` deletes the local volumes and starts a fresh stack, with order generation slowed so
+the scenario stays readable. It then runs `crates/simulators/src/bin/demo.rs` in a container:
+
+1. Two orders arrive through the customers' own channels: a bauwerk-ag JSON webhook and a
+   neckar-infra XML webhook. Both start in about 45 minutes. The demo prints their plan.
+2. It plays the plant: batch tickets for load #1 of the first order, which freezes.
+3. The truck of a later load breaks down. The simulated truck reports `out_of_service` over MQTT,
+   and dispatch re-dispatches.
+4. The second order's site is delayed 30 minutes through the API.
+
+Each diff is printed with a reason per load, for example:
+
+```text
+3. truck-08, which carries load #2 of 10001001/DEMO-073613-A, breaks down.
+   v5 · truck-08 out of service
+   order                    load  truck                  plant                ETA             reason
+   10001001/DEMO-073613-A   #1    truck-07               mannheim             08:25 → 08:23   batching started
+   10001001/DEMO-073613-A   #2    truck-08 → truck-09    mannheim             08:41 → 08:39   truck-08 is out of service
+   10001001/DEMO-073613-A   #3    truck-09 → truck-17    mannheim → weinheim  08:59 → 09:03   re-planned along with #2
+```
+
+When it's done, the simulators go back to the normal order rate. A broken-down simulated truck is
+back in service after `TRUCK_REPAIR_MINUTES` (default 60). Each step waits at most
+`DEMO_TIMEOUT_SECS` (default 120) for the stack.
+
+### Benchmarks
+
+`make bench` runs criterion on the seeded world, with one truck per 8 loads:
+
+| Loads (trucks) | Greedy plan | Greedy plan + 100 local search moves | Repair, end to end |
+|---|---|---|---|
+| 56 (6) | 0.5 ms | 6.3 ms | 501 ms |
+| 205 (25) | 7.8 ms | 33 ms | 504 ms |
+| 1,084 (125) | 824 ms | 2.09 s | 916 ms |
+
+Measured on a developer laptop; yours will differ.
+
+A repair re-dispatches after the busiest truck breaks down, with the full 500 ms local search
+budget, so 500 ms of each repair is search time. At 1,000 loads one local search move takes about
+13 ms, because the bay check rescans every interval. That's fast enough for the 1 s target, and it
+is the first thing to index if plans grow.
 
 ## Dependencies and security
 
