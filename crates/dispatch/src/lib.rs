@@ -10,3 +10,4 @@ pub mod store;
 mod testkit;
 pub mod travel;
 pub mod verify;
+pub mod worker;

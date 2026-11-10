@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT order_id, sequence, volume_m3, plant_id, truck_id, batch_at, eta_on_site, window_start, window_end\n             FROM loads WHERE plan_version = $1 ORDER BY order_id, sequence",
+  "query": "SELECT order_id, sequence, volume_m3, plant_id, truck_id, batch_at, eta_on_site, window_start, window_end,\n                 frozen FROM loads WHERE plan_version = $1 ORDER BY order_id, sequence",
   "describe": {
     "columns": [
       {
@@ -101,6 +101,17 @@
             "name": "window_end"
           }
         }
+      },
+      {
+        "ordinal": 9,
+        "name": "frozen",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "loads",
+            "name": "frozen"
+          }
+        }
       }
     ],
     "parameters": {
@@ -117,8 +128,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "4f87bc1150f8258ba73967a18da0cb304ffb96b61b90c9af5e9d957ba223f942"
+  "hash": "860aa020c15528e795bab1d9aa57e9cc81e819d92a53e1e114f58054d7634064"
 }

@@ -9,7 +9,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CustomerId, DeliveryStatus, Location, MixCode, Order, OrderId, PlantId, TruckId, TruckStatus,
+    CustomerId, DeliveryStatus, LoadRef, Location, MixCode, Order, OrderId, PlantId, TruckId,
+    TruckStatus,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +89,9 @@ pub enum Event {
         event: DeliveryStatus,
         mix: MixCode,
         volume_m3: f64,
+        /// The load the plant batches for, when its batch computer knows it (from the plan).
+        #[serde(default)]
+        load: Option<LoadRef>,
     },
 }
 
@@ -189,8 +193,32 @@ mod tests {
             "truck": "truck-25",
             "event": "loaded",
             "mix": "C30/37-XC4",
-            "volume_m3": 8.0
+            "volume_m3": 8.0,
+            "load": null
         })));
+        assert_wire_format::<EventEnvelope>(envelope(json!({
+            "type": "batch_ticket_issued",
+            "plant": "plant-walldorf",
+            "ticket_no": "WAL-000003",
+            "truck": "truck-25",
+            "event": "batching",
+            "mix": "C30/37-XC4",
+            "volume_m3": 9.0,
+            "load": { "order": "10001001/BW-4711", "sequence": 2 }
+        })));
+    }
+
+    #[test]
+    fn tickets_from_before_load_references_still_read() {
+        let old = envelope(json!({
+            "type": "batch_ticket_issued", "plant": "plant-walldorf", "ticket_no": "WAL-000002",
+            "truck": "truck-25", "event": "loaded", "mix": "C30/37-XC4", "volume_m3": 8.0
+        }));
+        let parsed: EventEnvelope = serde_json::from_value(old).unwrap();
+        assert!(matches!(
+            parsed.event,
+            Event::BatchTicketIssued { load: None, .. }
+        ));
     }
 
     #[test]

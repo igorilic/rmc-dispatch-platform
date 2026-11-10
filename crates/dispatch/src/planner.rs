@@ -29,8 +29,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use chrono::{DateTime, NaiveDate, NaiveTime, TimeDelta, TimeZone, Utc};
 use chrono_tz::Europe::Berlin;
 use domain::{
-    Load, Location, MixCode, Order, OrderId, OrderStatus, Plant, PlantId, PlantStatus, Seed,
-    SiteId, TimeWindow, Truck, TruckStatus,
+    Delivery, DeliveryStatus, Load, Location, MixCode, Order, OrderId, OrderStatus, Plant, PlantId,
+    PlantStatus, Seed, SiteId, TimeWindow, Truck, TruckStatus,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -131,6 +131,42 @@ fn hours(h: f64) -> TimeDelta {
 
 fn minutes(d: TimeDelta) -> f64 {
     d.num_milliseconds() as f64 / 60_000.0
+}
+
+/// The frozen load a delivery stands for, as the plant reported it: its plant, truck and volume,
+/// batched when batching started, and timed like any other load. `None` if its plant, ship-to or
+/// mix is unknown.
+pub fn delivered_load(
+    delivery: &Delivery,
+    order: &Order,
+    world: &World,
+    travel: &dyn TravelTimeProvider,
+) -> Option<Load> {
+    // Without a `batching` ticket, the earliest one is the closest we know.
+    let batch_at = delivery
+        .events
+        .get(&DeliveryStatus::Batching)
+        .or_else(|| delivery.events.values().min())
+        .copied()?;
+    let plant = world.plants.iter().find(|p| p.id == delivery.plant)?;
+    let site = *world.sites.get(&order.site)?;
+    let max_minutes = *world.mixes.get(&order.mix)?;
+    let loaded = batch_at + plant_time(delivery.volume_m3, plant);
+    let eta = loaded + travel.travel(plant.location, site, loaded);
+    Some(Load {
+        order: delivery.order.clone(),
+        sequence: delivery.sequence,
+        volume_m3: delivery.volume_m3,
+        planned_plant: delivery.plant.clone(),
+        planned_truck: delivery.truck.clone(),
+        planned_batch_at: batch_at,
+        eta_on_site: eta,
+        discharge_window: TimeWindow {
+            start: eta,
+            end: batch_at + TimeDelta::minutes(i64::from(max_minutes)),
+        },
+        frozen: true,
+    })
 }
 
 /// Whether an order gets loads at all: not cancelled, and either already batching (it has frozen
@@ -1209,6 +1245,54 @@ mod tests {
         assert!(plan.loads[0].planned_batch_at >= at(5, 0) + drive);
         assert!(plan.metrics.lateness_minutes > 0.0);
         assert!(plan.metrics.empty_km > 80.0, "{}", plan.metrics.empty_km);
+    }
+
+    #[test]
+    fn a_delivery_batched_as_planned_freezes_the_planned_load() {
+        let w = world(
+            vec![plant("p", WALLDORF, 2, PlantStatus::Online)],
+            five_trucks(),
+            &[("s", HEIDELBERG)],
+        );
+        let o = order("o", "s", 18.0, at(7, 0));
+        let planned = run(&w, std::slice::from_ref(&o), at(5, 0)).loads[0].clone();
+        let delivery = Delivery {
+            order: o.id.clone(),
+            sequence: 1,
+            plant: planned.planned_plant.clone(),
+            truck: planned.planned_truck.clone(),
+            volume_m3: planned.volume_m3,
+            events: [
+                (
+                    DeliveryStatus::Loading,
+                    planned.planned_batch_at + TimeDelta::minutes(5),
+                ),
+                (DeliveryStatus::Batching, planned.planned_batch_at),
+            ]
+            .into(),
+        };
+        let travel = HaversineTravelTime::default();
+        let frozen = delivered_load(&delivery, &o, &w, &travel).unwrap();
+        assert_eq!(
+            frozen,
+            Load {
+                frozen: true,
+                ..planned.clone()
+            }
+        );
+
+        // The batching ticket got lost and loading started 4 minutes late: the earliest ticket counts.
+        let mut late = delivery.clone();
+        late.events = [(
+            DeliveryStatus::Loading,
+            planned.planned_batch_at + TimeDelta::minutes(4),
+        )]
+        .into();
+        let frozen = delivered_load(&late, &o, &w, &travel).unwrap();
+        assert_eq!(
+            frozen.planned_batch_at,
+            planned.planned_batch_at + TimeDelta::minutes(4)
+        );
     }
 
     #[test]

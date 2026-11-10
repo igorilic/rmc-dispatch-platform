@@ -9,8 +9,8 @@
 
 use chrono::{DateTime, Utc};
 use domain::{
-    Channel, DeliveryStatus, DrumRotation, Event, EventEnvelope, EventSource, Location, MixCode,
-    PlantId, Seed, TruckId, TruckStatus,
+    Channel, DeliveryStatus, DrumRotation, Event, EventEnvelope, EventSource, LoadRef, Location,
+    MixCode, OrderId, PlantId, Seed, TruckId, TruckStatus,
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -49,6 +49,12 @@ struct Ticket {
     event: DeliveryStatus,
     mix: String,
     volume_m3: f64,
+    /// The order and load number the plan gave the batch computer. Tickets for trips that
+    /// aren't in the plan have neither.
+    #[serde(default)]
+    order: Option<String>,
+    #[serde(default)]
+    load_no: Option<u32>,
 }
 
 fn parse<T: DeserializeOwned>(payload: &[u8]) -> Result<T, Vec<String>> {
@@ -150,6 +156,17 @@ pub fn map(
             if seed.mix(&ticket.mix).is_none() {
                 errors.push(format!("unknown mix {}", ticket.mix));
             }
+            let load = match (ticket.order, ticket.load_no) {
+                (Some(order), Some(sequence)) => Some(LoadRef {
+                    order: OrderId(order),
+                    sequence,
+                }),
+                (None, None) => None,
+                _ => {
+                    errors.push("a ticket names its order and load_no together, or neither".into());
+                    None
+                }
+            };
             if !errors.is_empty() {
                 return Err(errors);
             }
@@ -171,6 +188,7 @@ pub fn map(
                     event: ticket.event,
                     mix: MixCode(ticket.mix),
                     volume_m3: ticket.volume_m3,
+                    load,
                 },
             })
         }
@@ -272,6 +290,36 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn a_ticket_names_the_load_it_batches_for() {
+        let ticket = event(
+            "plants/plant-walldorf/tickets",
+            json!({"plant": "plant-walldorf", "ticket_no": "WAL-000003", "vehicle": "truck-25", "ts_ms": 1794240261843_i64,
+                   "event": "batching", "mix": "C30/37-XC4", "volume_m3": 9.0, "order": "10001001/BW-4711", "load_no": 2}),
+        )
+        .unwrap();
+        let Event::BatchTicketIssued { load, .. } = ticket.event else {
+            panic!("{:?}", ticket.event);
+        };
+        assert_eq!(
+            load,
+            Some(LoadRef {
+                order: OrderId("10001001/BW-4711".into()),
+                sequence: 2
+            })
+        );
+
+        let half = event(
+            "plants/plant-walldorf/tickets",
+            json!({"plant": "plant-walldorf", "ticket_no": "WAL-000004", "vehicle": "truck-25", "ts_ms": 1,
+                   "event": "batching", "mix": "C30/37-XC4", "volume_m3": 9.0, "order": "10001001/BW-4711"}),
+        );
+        assert_eq!(
+            half.unwrap_err(),
+            ["a ticket names its order and load_no together, or neither"]
+        );
     }
 
     #[test]

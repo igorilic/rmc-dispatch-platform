@@ -11,9 +11,12 @@ use axum::http::{Request, StatusCode, header};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use common::{at, order, postgres};
 use dispatch::api::{self, VersionedPlan};
+use dispatch::redispatch::Settings;
+use dispatch::search::Budget;
 use dispatch::store::Store;
 use dispatch::travel::HaversineTravelTime;
 use dispatch::verify::violations;
+use dispatch::worker;
 use domain::{Order, OrderStatus, Seed};
 use serde_json::Value;
 use tower::ServiceExt;
@@ -39,7 +42,13 @@ async fn setup(orders: &[Order]) -> Setup {
     for o in orders {
         store.upsert_order(o, at(5, 0), None).await.unwrap();
     }
-    let router = api::router(store.clone(), clock);
+    let (jobs, queue) = worker::channel();
+    let settings = Settings {
+        budget: Budget::moves(50),
+        ..Settings::default()
+    };
+    tokio::spawn(worker::run(store.clone(), queue, settings, clock));
+    let router = api::router(store.clone(), jobs);
     Setup {
         _pg: pg,
         store,

@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO deliveries (order_id, sequence, plant_id, truck_id, volume_m3, ticket_no, started_at, events)\n               VALUES ($1, $2, $3, $4, $5, $6, $7, jsonb_build_object($8::text, $7::timestamptz))\n               ON CONFLICT (order_id, sequence) DO UPDATE SET\n                   started_at = LEAST(deliveries.started_at, EXCLUDED.started_at),\n                   events = EXCLUDED.events || deliveries.events\n               RETURNING (xmax = 0) AS \"inserted!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "inserted!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4",
+        "Text",
+        "Text",
+        "Float8",
+        "Text",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "e9ca3d98aabaf9de0a8b7eb5b1d52e690c40491f219c0aa8b478d49795fefafd"
+}

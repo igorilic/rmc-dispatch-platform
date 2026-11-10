@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT order_id, sequence, plant_id, truck_id, volume_m3,\n                   events AS \"events: Json<BTreeMap<DeliveryStatus, DateTime<Utc>>>\"\n               FROM deliveries WHERE started_at >= $1 ORDER BY order_id, sequence",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "order_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "deliveries",
+            "name": "order_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "sequence",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "deliveries",
+            "name": "sequence"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "plant_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "deliveries",
+            "name": "plant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "truck_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "deliveries",
+            "name": "truck_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "volume_m3",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "deliveries",
+            "name": "volume_m3"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "events: Json<BTreeMap<DeliveryStatus, DateTime<Utc>>>",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "deliveries",
+            "name": "events"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "fd316649dc4a50a3f9559a3ad01e980bc9a140e7712bcd9acee179a6e350a32a"
+}

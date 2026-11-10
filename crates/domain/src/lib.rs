@@ -234,6 +234,13 @@ pub struct Load {
     pub frozen: bool,
 }
 
+/// Names a planned load: its order and its sequence within that order.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+pub struct LoadRef {
+    pub order: OrderId,
+    pub sequence: u32,
+}
+
 /// Trucking-system events in lifecycle order. Washing and returns are deliberately not modelled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

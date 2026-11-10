@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO plans (created_at, horizon_end, metrics, unplanned) VALUES ($1, $2, $3, $4) RETURNING version",
+  "query": "INSERT INTO plans (created_at, horizon_end, metrics, unplanned, previous_version, triggers, diff)\n             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING version",
   "describe": {
     "columns": [
       {
@@ -20,6 +20,9 @@
         "Timestamptz",
         "Timestamptz",
         "Jsonb",
+        "Jsonb",
+        "Int8",
+        "Jsonb",
         "Jsonb"
       ]
     },
@@ -27,5 +30,5 @@
       false
     ]
   },
-  "hash": "425259ea4cc0e2404d5f42d53896996c8850ebe9fede7cd0abea2f5dc960e80c"
+  "hash": "111603cb4b04e0a8f800ef363fe2b54afaa03e78858be8f49133f62f6d468776"
 }

@@ -6,32 +6,22 @@ use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use chrono::{DateTime, SubsecRound, TimeDelta, Utc};
+use chrono::{DateTime, Utc};
 use domain::{Order, OrderStatus};
-use serde::{Deserialize, Serialize};
-use tracing::{error, info};
-use utoipa::{IntoParams, OpenApi, ToSchema};
+use serde::Deserialize;
+use tracing::error;
+use utoipa::{IntoParams, OpenApi};
 use utoipa_swagger_ui::SwaggerUi;
 
-use crate::planner::{self, Plan};
+use crate::redispatch::Trigger;
+pub use crate::store::VersionedPlan;
 use crate::store::{Store, StoreError};
-use crate::travel::HaversineTravelTime;
-
-/// How far ahead `POST /plans` plans.
-pub const HORIZON: TimeDelta = TimeDelta::hours(48);
+use crate::worker::Jobs;
 
 #[derive(Clone)]
 struct AppState {
     store: Store,
-    clock: fn() -> DateTime<Utc>,
-}
-
-/// A stored plan and its version number.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-pub struct VersionedPlan {
-    pub version: i64,
-    #[serde(flatten)]
-    pub plan: Plan,
+    jobs: Jobs,
 }
 
 #[derive(OpenApi)]
@@ -44,8 +34,8 @@ pub struct VersionedPlan {
 )]
 struct ApiDoc;
 
-/// The API's routes. `clock` gives the planning time; the service passes `Utc::now`.
-pub fn router(store: Store, clock: fn() -> DateTime<Utc>) -> Router {
+/// The API's routes. Planning goes through the re-dispatch worker behind `jobs`.
+pub fn router(store: Store, jobs: Jobs) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/orders", get(list_orders))
@@ -53,7 +43,7 @@ pub fn router(store: Store, clock: fn() -> DateTime<Utc>) -> Router {
         .route("/plans", post(create_plan))
         .route("/plans/latest", get(latest_plan))
         .route("/plans/{version}", get(get_plan))
-        .with_state(AppState { store, clock })
+        .with_state(AppState { store, jobs })
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
 }
 
@@ -107,40 +97,20 @@ async fn get_order(
         .ok_or(StatusCode::NOT_FOUND)
 }
 
-/// Plans every open order starting in the next 48 hours and stores the plan as a new version.
+/// Plans everything that isn't frozen again and stores it as a new version.
 #[utoipa::path(post, path = "/plans", responses(
     (status = 201, body = VersionedPlan, headers(("location" = String))),
 ))]
 async fn create_plan(State(s): State<AppState>) -> Result<impl IntoResponse, StatusCode> {
-    // Whole seconds, so the stored plan reads back exactly as it was made.
-    let now = (s.clock)().trunc_subsecs(0);
-    let world = s.store.world().await.map_err(internal)?;
-    let orders = s
-        .store
-        .open_orders(now - TimeDelta::hours(1), now + HORIZON);
-    let orders = orders.await.map_err(internal)?;
-    // ponytail: plans on the async runtime; move to spawn_blocking if M5's bigger plans take long.
-    let plan = planner::plan(
-        &world,
-        &orders,
-        &[],
-        now,
-        HORIZON,
-        &HaversineTravelTime::default(),
-    );
-    let version = s.store.save_plan(&plan).await.map_err(internal)?;
-    info!(
-        version,
-        planned = plan.metrics.planned_orders,
-        unplanned = plan.metrics.unplanned_orders,
-        "plan saved"
-    );
-    let location = [(header::LOCATION, format!("/plans/{version}"))];
-    Ok((
-        StatusCode::CREATED,
-        location,
-        Json(VersionedPlan { version, plan }),
-    ))
+    let version = s.jobs.run(Trigger::FullReplan).await.map_err(|e| {
+        error!(error = %e, "full re-plan failed");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    // A full re-plan always stores a version, so `None` can't happen.
+    let found = s.store.plan(version).await.map_err(internal)?;
+    let plan = found.ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let location = [(header::LOCATION, format!("/plans/{}", plan.version))];
+    Ok((StatusCode::CREATED, location, Json(plan)))
 }
 
 #[utoipa::path(get, path = "/plans/latest", responses((status = 200, body = VersionedPlan), (status = 404)))]
@@ -162,6 +132,5 @@ async fn stored_plan(
     version: Option<i64>,
 ) -> Result<Json<VersionedPlan>, StatusCode> {
     let found = store.plan(version).await.map_err(internal)?;
-    let (version, plan) = found.ok_or(StatusCode::NOT_FOUND)?;
-    Ok(Json(VersionedPlan { version, plan }))
+    Ok(Json(found.ok_or(StatusCode::NOT_FOUND)?))
 }

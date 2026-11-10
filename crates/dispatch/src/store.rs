@@ -4,21 +4,59 @@
 //! and Docker builds need no database; `make sqlx-prepare` refreshes it after a query changes.
 //! Migrations in `migrations/` run on connect.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use domain::{
-    Address, CustomerId, Load, Location, MixCode, OperatingHours, Order, OrderId, OrderStatus,
-    Plant, PlantId, PostalCodeGeocoder, Seed, Site, SiteId, TimeWindow, Truck, TruckId,
+    Address, CustomerId, Delivery, DeliveryStatus, Load, LoadRef, Location, MixCode,
+    OperatingHours, Order, OrderId, OrderStatus, Plant, PlantId, PostalCodeGeocoder, Seed, Site,
+    SiteId, TimeWindow, Truck, TruckId, TruckStatus,
 };
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::types::Json;
 use tracing::warn;
+use utoipa::ToSchema;
 
 use crate::planner::{Metrics, Plan, Unplanned, World};
+use crate::redispatch::{Diff, Trigger};
+
+/// A stored plan: its version, what it replaced, and why.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct VersionedPlan {
+    pub version: i64,
+    /// The version this one replaced; `None` for the first.
+    pub previous_version: Option<i64>,
+    /// What made dispatch plan again.
+    pub triggers: Vec<Trigger>,
+    #[serde(flatten)]
+    pub plan: Plan,
+}
+
+/// What [`Store::upsert_order`] did.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Upsert {
+    New,
+    /// Replaced; holds the order as it was.
+    Changed(Order),
+    /// What is stored is newer, so nothing changed.
+    Stale,
+}
+
+/// A batch ticket for a planned load, as the fleet intake records it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ticket<'a> {
+    pub load: &'a LoadRef,
+    pub plant: &'a PlantId,
+    pub truck: &'a TruckId,
+    pub volume_m3: f64,
+    pub ticket_no: &'a str,
+    pub event: DeliveryStatus,
+    pub at: DateTime<Utc>,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -91,6 +129,7 @@ struct LoadRow {
     eta_on_site: DateTime<Utc>,
     window_start: DateTime<Utc>,
     window_end: DateTime<Utc>,
+    frozen: bool,
 }
 
 impl TryFrom<LoadRow> for Load {
@@ -109,8 +148,7 @@ impl TryFrom<LoadRow> for Load {
                 start: r.window_start,
                 end: r.window_end,
             },
-            // ponytail: not stored until M5 step 5 adds deliveries and the column.
-            frozen: false,
+            frozen: r.frozen,
         })
     }
 }
@@ -248,21 +286,22 @@ impl Store {
             })
         })
         .collect::<Result<Vec<_>, StoreError>>()?;
-        let trucks =
-            sqlx::query!("SELECT id, home_plant, drum_capacity_m3, status FROM trucks ORDER BY id")
-                .fetch_all(&self.pool)
-                .await?
-                .into_iter()
-                .map(|r| {
-                    Ok(Truck {
-                        id: TruckId(r.id),
-                        home_plant: PlantId(r.home_plant),
-                        drum_capacity_m3: r.drum_capacity_m3,
-                        status: parse(&r.status)?,
-                        last_position: None,
-                    })
-                })
-                .collect::<Result<Vec<_>, StoreError>>()?;
+        let trucks = sqlx::query!(
+            "SELECT id, home_plant, drum_capacity_m3, status, lat, lon FROM trucks ORDER BY id"
+        )
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|r| {
+            Ok(Truck {
+                id: TruckId(r.id),
+                home_plant: PlantId(r.home_plant),
+                drum_capacity_m3: r.drum_capacity_m3,
+                status: parse(&r.status)?,
+                last_position: r.lat.zip(r.lon).map(|(lat, lon)| Location { lat, lon }),
+            })
+        })
+        .collect::<Result<Vec<_>, StoreError>>()?;
         let geocoder = PostalCodeGeocoder::new(
             sqlx::query!("SELECT code, lat, lon FROM postal_codes")
                 .fetch_all(&self.pool)
@@ -311,13 +350,24 @@ impl Store {
         })
     }
 
-    /// Inserts or replaces an order, unless what is stored is newer. Returns whether it was applied.
+    /// Inserts or replaces an order, unless what is stored is newer.
     pub async fn upsert_order(
         &self,
         order: &Order,
         occurred_at: DateTime<Utc>,
         source_revision: Option<&str>,
-    ) -> Result<bool, StoreError> {
+    ) -> Result<Upsert, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let before = sqlx::query_as!(
+            OrderRow,
+            "SELECT id, customer_id, site_id, mix, total_volume_m3, requested_start, pour_rate_m3_per_h,
+                 max_gap_minutes, status FROM orders WHERE id = $1 FOR UPDATE",
+            order.id.0,
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        .map(Order::try_from)
+        .transpose()?;
         let result = sqlx::query!(
             "INSERT INTO orders (id, customer_id, site_id, mix, total_volume_m3, requested_start,
                  pour_rate_m3_per_h, max_gap_minutes, status, occurred_at, source_revision)
@@ -340,9 +390,104 @@ impl Store {
             occurred_at,
             source_revision,
         )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(match (result.rows_affected(), before) {
+            (0, _) => Upsert::Stale,
+            (_, None) => Upsert::New,
+            (_, Some(before)) => Upsert::Changed(before),
+        })
+    }
+
+    /// Records a truck's reported status, unless a newer report is stored. Returns the status it
+    /// replaced, if it applied.
+    pub async fn report_truck_status(
+        &self,
+        truck: &TruckId,
+        status: TruckStatus,
+        at: DateTime<Utc>,
+    ) -> Result<Option<TruckStatus>, StoreError> {
+        let previous = sqlx::query_scalar!(
+            r#"WITH before AS (SELECT id, status FROM trucks WHERE id = $1 FOR UPDATE)
+               UPDATE trucks SET status = $2, status_at = $3 FROM before
+               WHERE trucks.id = before.id AND (trucks.status_at IS NULL OR trucks.status_at < $3)
+               RETURNING before.status AS "previous!""#,
+            truck.0,
+            text(&status),
+            at,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        previous.as_deref().map(parse).transpose()
+    }
+
+    /// Records a truck's reported position, unless a newer one is stored.
+    pub async fn report_truck_position(
+        &self,
+        truck: &TruckId,
+        at_location: Location,
+        at: DateTime<Utc>,
+    ) -> Result<bool, StoreError> {
+        let result = sqlx::query!(
+            "UPDATE trucks SET lat = $2, lon = $3, position_at = $4
+             WHERE id = $1 AND (position_at IS NULL OR position_at < $4)",
+            truck.0,
+            at_location.lat,
+            at_location.lon,
+            at,
+        )
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() == 1)
+    }
+
+    /// Creates or advances the delivery for a ticket's load. The first report of each status
+    /// wins, so duplicates and late arrivals change nothing. Returns whether the delivery is new.
+    pub async fn record_ticket(&self, t: &Ticket<'_>) -> Result<bool, StoreError> {
+        let inserted = sqlx::query_scalar!(
+            r#"INSERT INTO deliveries (order_id, sequence, plant_id, truck_id, volume_m3, ticket_no, started_at, events)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, jsonb_build_object($8::text, $7::timestamptz))
+               ON CONFLICT (order_id, sequence) DO UPDATE SET
+                   started_at = LEAST(deliveries.started_at, EXCLUDED.started_at),
+                   events = EXCLUDED.events || deliveries.events
+               RETURNING (xmax = 0) AS "inserted!""#,
+            t.load.order.0,
+            signed(t.load.sequence)?,
+            t.plant.0,
+            t.truck.0,
+            t.volume_m3,
+            t.ticket_no,
+            t.at,
+            text(&t.event),
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(inserted)
+    }
+
+    /// Deliveries whose batching started at or after `since`.
+    pub async fn deliveries(&self, since: DateTime<Utc>) -> Result<Vec<Delivery>, StoreError> {
+        sqlx::query!(
+            r#"SELECT order_id, sequence, plant_id, truck_id, volume_m3,
+                   events AS "events: Json<BTreeMap<DeliveryStatus, DateTime<Utc>>>"
+               FROM deliveries WHERE started_at >= $1 ORDER BY order_id, sequence"#,
+            since,
+        )
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|r| {
+            Ok(Delivery {
+                order: OrderId(r.order_id),
+                sequence: unsigned(r.sequence)?,
+                plant: PlantId(r.plant_id),
+                truck: TruckId(r.truck_id),
+                volume_m3: r.volume_m3,
+                events: r.events.0,
+            })
+        })
+        .collect()
     }
 
     /// Cancels an order, unless what is stored is newer. An unknown order has nothing to cancel.
@@ -400,20 +545,26 @@ impl Store {
         .collect()
     }
 
-    /// Orders that may still be planned (not cancelled, not started) starting in `[from, to)`.
-    pub async fn open_orders(
+    /// The orders a planning run needs: open ones starting in `[from, to)`, plus those in `also`
+    /// (orders with deliveries or in the previous plan). A site delay moves an order's start: the
+    /// planner sees the delayed start.
+    pub async fn planning_orders(
         &self,
         from: DateTime<Utc>,
         to: DateTime<Utc>,
+        also: &[String],
     ) -> Result<Vec<Order>, StoreError> {
         sqlx::query_as!(
             OrderRow,
-            "SELECT id, customer_id, site_id, mix, total_volume_m3, requested_start, pour_rate_m3_per_h,
-                 max_gap_minutes, status FROM orders
-             WHERE status IN ('unconfirmed', 'pending', 'confirmed') AND requested_start >= $1 AND requested_start < $2
-             ORDER BY requested_start, id",
+            r#"SELECT id, customer_id, site_id, mix, total_volume_m3, starts AS "requested_start!",
+                   pour_rate_m3_per_h, max_gap_minutes, status
+               FROM (SELECT *, GREATEST(requested_start, delayed_until) AS starts FROM orders) o
+               WHERE (status IN ('unconfirmed', 'pending', 'confirmed') AND starts >= $1 AND starts < $2)
+                  OR id = ANY($3)
+               ORDER BY starts, id"#,
             from,
             to,
+            also,
         )
         .fetch_all(&self.pool)
         .await?
@@ -422,15 +573,26 @@ impl Store {
         .collect()
     }
 
-    /// Stores a plan as the next version and returns the version.
-    pub async fn save_plan(&self, plan: &Plan) -> Result<i64, StoreError> {
+    /// Stores a plan as the next version, with what it replaced, why, and the diff. Returns the
+    /// version.
+    pub async fn save_plan(
+        &self,
+        plan: &Plan,
+        previous: Option<i64>,
+        triggers: &[Trigger],
+        diff: &Diff,
+    ) -> Result<i64, StoreError> {
         let mut tx = self.pool.begin().await?;
         let version = sqlx::query_scalar!(
-            "INSERT INTO plans (created_at, horizon_end, metrics, unplanned) VALUES ($1, $2, $3, $4) RETURNING version",
+            "INSERT INTO plans (created_at, horizon_end, metrics, unplanned, previous_version, triggers, diff)
+             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING version",
             plan.created_at,
             plan.horizon_end,
             Json(&plan.metrics) as _,
             Json(&plan.unplanned) as _,
+            previous,
+            Json(triggers) as _,
+            Json(diff) as _,
         )
         .fetch_one(&mut *tx)
         .await?;
@@ -438,7 +600,7 @@ impl Store {
         for l in &plan.loads {
             sqlx::query!(
                 "INSERT INTO loads (plan_version, order_id, sequence, volume_m3, plant_id, truck_id, batch_at,
-                     eta_on_site, window_start, window_end) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                     eta_on_site, window_start, window_end, frozen) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
                 version,
                 l.order.0,
                 signed(l.sequence)?,
@@ -449,6 +611,7 @@ impl Store {
                 l.eta_on_site,
                 l.discharge_window.start,
                 l.discharge_window.end,
+                l.frozen,
             )
             .execute(&mut *tx)
             .await?;
@@ -458,10 +621,11 @@ impl Store {
     }
 
     /// A plan version, or the latest when `version` is `None`. Loads come by order, then sequence.
-    pub async fn plan(&self, version: Option<i64>) -> Result<Option<(i64, Plan)>, StoreError> {
+    pub async fn plan(&self, version: Option<i64>) -> Result<Option<VersionedPlan>, StoreError> {
         let Some(row) = sqlx::query!(
             r#"SELECT version, created_at, horizon_end, metrics AS "metrics: Json<Metrics>",
-                   unplanned AS "unplanned: Json<Vec<Unplanned>>"
+                   unplanned AS "unplanned: Json<Vec<Unplanned>>", previous_version,
+                   triggers AS "triggers: Json<Vec<Trigger>>"
                FROM plans WHERE version = COALESCE($1, (SELECT max(version) FROM plans))"#,
             version,
         )
@@ -472,8 +636,8 @@ impl Store {
         };
         let loads = sqlx::query_as!(
             LoadRow,
-            "SELECT order_id, sequence, volume_m3, plant_id, truck_id, batch_at, eta_on_site, window_start, window_end
-             FROM loads WHERE plan_version = $1 ORDER BY order_id, sequence",
+            "SELECT order_id, sequence, volume_m3, plant_id, truck_id, batch_at, eta_on_site, window_start, window_end,
+                 frozen FROM loads WHERE plan_version = $1 ORDER BY order_id, sequence",
             row.version,
         )
         .fetch_all(&self.pool)
@@ -481,13 +645,17 @@ impl Store {
         .into_iter()
         .map(Load::try_from)
         .collect::<Result<_, _>>()?;
-        let plan = Plan {
-            created_at: row.created_at,
-            horizon_end: row.horizon_end,
-            loads,
-            unplanned: row.unplanned.0,
-            metrics: row.metrics.0,
-        };
-        Ok(Some((row.version, plan)))
+        Ok(Some(VersionedPlan {
+            version: row.version,
+            previous_version: row.previous_version,
+            triggers: row.triggers.0,
+            plan: Plan {
+                created_at: row.created_at,
+                horizon_end: row.horizon_end,
+                loads,
+                unplanned: row.unplanned.0,
+                metrics: row.metrics.0,
+            },
+        }))
     }
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, customer_id, site_id, mix, total_volume_m3, requested_start, pour_rate_m3_per_h,\n                 max_gap_minutes, status FROM orders\n             WHERE status IN ('unconfirmed', 'pending', 'confirmed') AND requested_start >= $1 AND requested_start < $2\n             ORDER BY requested_start, id",
+  "query": "SELECT id, customer_id, site_id, mix, total_volume_m3, starts AS \"requested_start!\",\n                   pour_rate_m3_per_h, max_gap_minutes, status\n               FROM (SELECT *, GREATEST(requested_start, delayed_until) AS starts FROM orders) o\n               WHERE (status IN ('unconfirmed', 'pending', 'confirmed') AND starts >= $1 AND starts < $2)\n                  OR id = ANY($3)\n               ORDER BY starts, id",
   "describe": {
     "columns": [
       {
@@ -60,14 +60,9 @@
       },
       {
         "ordinal": 5,
-        "name": "requested_start",
+        "name": "requested_start!",
         "type_info": "Timestamptz",
-        "origin": {
-          "Table": {
-            "table": "orders",
-            "name": "requested_start"
-          }
-        }
+        "origin": "Expression"
       },
       {
         "ordinal": 6,
@@ -106,7 +101,8 @@
     "parameters": {
       "Left": [
         "Timestamptz",
-        "Timestamptz"
+        "Timestamptz",
+        "TextArray"
       ]
     },
     "nullable": [
@@ -115,11 +111,11 @@
       false,
       false,
       false,
-      false,
+      null,
       false,
       false,
       false
     ]
   },
-  "hash": "98e0e05bc8a6ff70c37cd69e40e21679660b3e0e76e9be8119fe72eea8e0ea59"
+  "hash": "c9cdb2dd4bc0ce41c3a6b8329e2e1adf14e1cda4001a1e81af6b4fec8da1e42a"
 }
