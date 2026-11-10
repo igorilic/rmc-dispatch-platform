@@ -68,7 +68,7 @@ Each one ends with a runnable repo, green CI and a commit.
 2. [x] **Simulators**: truck fleet over MQTT, three fake customer systems, fake plant. Visible in logs.
 3. [x] **Ingest**: mapping configs, canonical events, idempotency, DLQ + replay, `ingest-cli validate`. Integration tests.
 4. [x] **Dispatch v1**: data model + migrations, construction heuristic, REST API with OpenAPI, property tests.
-5. [ ] **Re-dispatch**: event handling, local search, frozen loads, plan versions + diffs, benchmarks. `make demo` works end to end.
+5. [x] **Re-dispatch**: event handling, local search, frozen loads, plan versions + diffs, benchmarks. `make demo` works end to end.
 6. [ ] **Observability**: traces end to end, metrics, Grafana dashboard.
 7. [ ] **Edge**: `plant-agent` with SQLite outbox, two k3d clusters, `make chaos`.
 8. [ ] **Operator**: `CustomerIntegration` CRD + controller, Helm charts, e2e test in CI.
