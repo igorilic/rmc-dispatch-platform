@@ -78,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&http_addr).await?;
     info!(addr = %http_addr, "API listening, Swagger UI at /swagger-ui/");
-    axum::serve(listener, api::router(store, jobs))
+    axum::serve(listener, api::router(store, jobs, Utc::now))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     info!("shutting down");

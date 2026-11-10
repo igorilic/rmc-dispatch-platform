@@ -16,13 +16,11 @@ use tracing::{error, info};
 
 use crate::planner::delivered_load;
 use crate::redispatch::{Request, Settings, Trigger, redispatch};
-use crate::store::{Store, StoreError};
+use crate::store::{DELIVERY_WINDOW, Store, StoreError};
 use crate::travel::HaversineTravelTime;
 
 /// How many triggers can wait before senders have to.
 const QUEUE: usize = 1024;
-/// Deliveries older than this are long discharged and no longer freeze anything.
-const DELIVERY_WINDOW: TimeDelta = TimeDelta::hours(12);
 
 /// The new version, or `None` when the re-dispatch changed nothing. `Err` says why there is no
 /// new plan; the previous version stays.

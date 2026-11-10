@@ -56,18 +56,20 @@ pub enum Trigger {
     PlantOnline {
         plant: PlantId,
     },
-    /// The site's orders now start `minutes` later; the orders passed in already say so.
+    /// `orders` at the site now start `minutes` later; the orders passed in already say so.
     SiteDelayed {
         site: SiteId,
         minutes: u32,
+        /// The orders the delay applies to: the site's pours of the day, not tomorrow's.
+        orders: Vec<OrderId>,
     },
     /// Plan everything that isn't frozen again, as `POST /plans` asks.
     FullReplan,
 }
 
 impl Trigger {
-    /// Whether this trigger concerns `load` (of `order`).
-    fn touches(&self, load: &Load, order: Option<&Order>) -> bool {
+    /// Whether this trigger concerns `load`.
+    fn touches(&self, load: &Load) -> bool {
         match self {
             Trigger::NewOrder { order: id }
             | Trigger::OrderChanged { order: id, .. }
@@ -76,7 +78,7 @@ impl Trigger {
             Trigger::PlantOffline { plant } | Trigger::PlantOnline { plant } => {
                 &load.planned_plant == plant
             }
-            Trigger::SiteDelayed { site, .. } => order.is_some_and(|o| &o.site == site),
+            Trigger::SiteDelayed { orders, .. } => orders.contains(&load.order),
             Trigger::FullReplan => true,
         }
     }
@@ -90,7 +92,7 @@ impl Trigger {
             Trigger::TruckOutOfService { truck } => format!("{} is out of service", truck.0),
             Trigger::PlantOffline { plant } => format!("{} is offline", plant.0),
             Trigger::PlantOnline { plant } => format!("{} is back online", plant.0),
-            Trigger::SiteDelayed { site, minutes } => {
+            Trigger::SiteDelayed { site, minutes, .. } => {
                 format!("site {} is delayed {minutes} min", site.0)
             }
             Trigger::FullReplan => "full re-plan requested".into(),
@@ -109,7 +111,7 @@ impl fmt::Display for Trigger {
             Trigger::TruckOutOfService { truck } => write!(f, "{} out of service", truck.0),
             Trigger::PlantOffline { plant } => write!(f, "{} offline", plant.0),
             Trigger::PlantOnline { plant } => write!(f, "{} back online", plant.0),
-            Trigger::SiteDelayed { site, minutes } => {
+            Trigger::SiteDelayed { site, minutes, .. } => {
                 write!(f, "site {} delayed {minutes} min", site.0)
             }
             Trigger::FullReplan => write!(f, "full re-plan"),
@@ -256,7 +258,6 @@ fn attempt(
 /// Orders whose loads a trigger touched, orders a trigger names, and orders with a load that has
 /// started batching since the previous version.
 fn touched_orders<'a>(req: &Request<'a>) -> HashSet<&'a OrderId> {
-    let by_id: HashMap<&OrderId, &Order> = req.orders.iter().map(|o| (&o.id, o)).collect();
     let previous: &[Load] = req.previous.map_or(&[], |p| &p.loads);
     let was_frozen: HashSet<(&OrderId, u32)> = previous
         .iter()
@@ -266,10 +267,7 @@ fn touched_orders<'a>(req: &Request<'a>) -> HashSet<&'a OrderId> {
     let mut touched: HashSet<&OrderId> = previous
         .iter()
         .filter(|l| !l.frozen)
-        .filter(|l| {
-            let order = by_id.get(&l.order).copied();
-            req.triggers.iter().any(|t| t.touches(l, order))
-        })
+        .filter(|l| req.triggers.iter().any(|t| t.touches(l)))
         .map(|l| &l.order)
         .collect();
     for trigger in req.triggers {
@@ -482,7 +480,7 @@ fn direct_reason(
     }
     if let Some(t) = triggers
         .iter()
-        .find(|t| before.into_iter().chain(after).any(|l| t.touches(l, order)))
+        .find(|t| before.into_iter().chain(after).any(|l| t.touches(l)))
     {
         return Some(t.reason());
     }
@@ -657,6 +655,7 @@ mod tests {
         let trigger = Trigger::SiteDelayed {
             site: SiteId("s".into()),
             minutes: 30,
+            orders: vec![OrderId("a".into())],
         };
         let out = run(&w, &orders, &[], &v1, &[trigger], at(5, 30), 0);
         assert!(loads_of(&out.plan, "a")[0].eta_on_site >= at(7, 30));
@@ -824,10 +823,12 @@ mod tests {
                 _ => {
                     let o = rng.random_range(0..orders.len());
                     let site = orders[o].site.clone();
+                    let mut delayed = Vec::new();
                     for order in orders.iter_mut().filter(|x| x.site == site) {
                         order.requested_start += TimeDelta::minutes(30);
+                        delayed.push(order.id.clone());
                     }
-                    Trigger::SiteDelayed { site, minutes: 30 }
+                    Trigger::SiteDelayed { site, minutes: 30, orders: delayed }
                 }
             };
             let triggers = [trigger];

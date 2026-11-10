@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT diff AS \"diff: Json<Diff>\" FROM plans WHERE version = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "diff: Json<Diff>",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "plans",
+            "name": "diff"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "9c369d37fccdc4f39fbe12f8255342d7b4d16cb0846a0e497f6ee9909ea6e0c2"
+}

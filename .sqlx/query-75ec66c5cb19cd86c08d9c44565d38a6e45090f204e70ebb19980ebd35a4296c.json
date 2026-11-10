@@ -1,104 +1,104 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, customer_id, site_id, mix, total_volume_m3, requested_start, pour_rate_m3_per_h,\n                 max_gap_minutes, status FROM orders\n             WHERE ($1::text IS NULL OR status = $1)\n               AND ($2::timestamptz IS NULL OR requested_start >= $2)\n               AND ($3::timestamptz IS NULL OR requested_start < $3)\n             ORDER BY requested_start, id",
+  "query": "SELECT id AS \"id!\", customer_id AS \"customer_id!\", site_id AS \"site_id!\", mix AS \"mix!\",\n                   total_volume_m3 AS \"total_volume_m3!\", requested_start AS \"requested_start!\",\n                   pour_rate_m3_per_h AS \"pour_rate_m3_per_h!\", max_gap_minutes AS \"max_gap_minutes!\",\n                   shown AS \"status!\"\n               FROM shown_orders\n               WHERE ($1::text IS NULL OR shown = $1)\n                 AND ($2::timestamptz IS NULL OR requested_start >= $2)\n                 AND ($3::timestamptz IS NULL OR requested_start < $3)\n               ORDER BY requested_start, id",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "id",
+        "name": "id!",
         "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "orders",
+            "table": "shown_orders",
             "name": "id"
           }
         }
       },
       {
         "ordinal": 1,
-        "name": "customer_id",
+        "name": "customer_id!",
         "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "orders",
+            "table": "shown_orders",
             "name": "customer_id"
           }
         }
       },
       {
         "ordinal": 2,
-        "name": "site_id",
+        "name": "site_id!",
         "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "orders",
+            "table": "shown_orders",
             "name": "site_id"
           }
         }
       },
       {
         "ordinal": 3,
-        "name": "mix",
+        "name": "mix!",
         "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "orders",
+            "table": "shown_orders",
             "name": "mix"
           }
         }
       },
       {
         "ordinal": 4,
-        "name": "total_volume_m3",
+        "name": "total_volume_m3!",
         "type_info": "Float8",
         "origin": {
           "Table": {
-            "table": "orders",
+            "table": "shown_orders",
             "name": "total_volume_m3"
           }
         }
       },
       {
         "ordinal": 5,
-        "name": "requested_start",
+        "name": "requested_start!",
         "type_info": "Timestamptz",
         "origin": {
           "Table": {
-            "table": "orders",
+            "table": "shown_orders",
             "name": "requested_start"
           }
         }
       },
       {
         "ordinal": 6,
-        "name": "pour_rate_m3_per_h",
+        "name": "pour_rate_m3_per_h!",
         "type_info": "Float8",
         "origin": {
           "Table": {
-            "table": "orders",
+            "table": "shown_orders",
             "name": "pour_rate_m3_per_h"
           }
         }
       },
       {
         "ordinal": 7,
-        "name": "max_gap_minutes",
+        "name": "max_gap_minutes!",
         "type_info": "Int4",
         "origin": {
           "Table": {
-            "table": "orders",
+            "table": "shown_orders",
             "name": "max_gap_minutes"
           }
         }
       },
       {
         "ordinal": 8,
-        "name": "status",
+        "name": "status!",
         "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "orders",
-            "name": "status"
+            "table": "shown_orders",
+            "name": "shown"
           }
         }
       }
@@ -111,16 +111,16 @@
       ]
     },
     "nullable": [
-      false,
-      false,
-      false,
-      false,
-      false,
-      false,
-      false,
-      false,
-      false
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
     ]
   },
-  "hash": "99fb7fecf2cc63030b7c043f7a0d0bfde53f87ce3bf1cbf63a6287a39822125a"
+  "hash": "75ec66c5cb19cd86c08d9c44565d38a6e45090f204e70ebb19980ebd35a4296c"
 }

@@ -4,16 +4,17 @@
 use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
-use chrono::{DateTime, Utc};
-use domain::{Order, OrderStatus};
-use serde::Deserialize;
+use chrono::{DateTime, TimeDelta, TimeZone, Utc};
+use chrono_tz::Europe::Berlin;
+use domain::{Order, OrderStatus, PlantId, PlantStatus, SiteId};
+use serde::{Deserialize, Serialize};
 use tracing::error;
-use utoipa::{IntoParams, OpenApi};
+use utoipa::{IntoParams, OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
-use crate::redispatch::Trigger;
+use crate::redispatch::{Diff, Trigger};
 pub use crate::store::VersionedPlan;
 use crate::store::{Store, StoreError};
 use crate::worker::Jobs;
@@ -22,6 +23,26 @@ use crate::worker::Jobs;
 struct AppState {
     store: Store,
     jobs: Jobs,
+    clock: fn() -> DateTime<Utc>,
+}
+
+/// What a re-dispatch did: the new version and how it differs from the one before. Both are
+/// `null` when nothing changed, so no version was stored.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct Redispatched {
+    pub version: Option<i64>,
+    pub diff: Option<Diff>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct PlantStatusChange {
+    pub status: PlantStatus,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SiteDelay {
+    /// How many minutes later the site's pours start: 1 to 1,440.
+    pub minutes: u32,
 }
 
 #[derive(OpenApi)]
@@ -30,12 +51,23 @@ struct AppState {
         title = "Pourline dispatch",
         description = "Orders and truck-load plans."
     ),
-    paths(healthz, list_orders, get_order, create_plan, latest_plan, get_plan)
+    paths(
+        healthz,
+        list_orders,
+        get_order,
+        create_plan,
+        latest_plan,
+        get_plan,
+        get_diff,
+        set_plant_status,
+        delay_site
+    )
 )]
 struct ApiDoc;
 
-/// The API's routes. Planning goes through the re-dispatch worker behind `jobs`.
-pub fn router(store: Store, jobs: Jobs) -> Router {
+/// The API's routes. Planning goes through the re-dispatch worker behind `jobs`. `clock` says
+/// when "today" ends for site delays; the service passes `Utc::now`.
+pub fn router(store: Store, jobs: Jobs, clock: fn() -> DateTime<Utc>) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/orders", get(list_orders))
@@ -43,7 +75,10 @@ pub fn router(store: Store, jobs: Jobs) -> Router {
         .route("/plans", post(create_plan))
         .route("/plans/latest", get(latest_plan))
         .route("/plans/{version}", get(get_plan))
-        .with_state(AppState { store, jobs })
+        .route("/plans/{version}/diff", get(get_diff))
+        .route("/plants/{id}/status", put(set_plant_status))
+        .route("/sites/{id}/delays", post(delay_site))
+        .with_state(AppState { store, jobs, clock })
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
 }
 
@@ -133,4 +168,103 @@ async fn stored_plan(
 ) -> Result<Json<VersionedPlan>, StatusCode> {
     let found = store.plan(version).await.map_err(internal)?;
     Ok(Json(found.ok_or(StatusCode::NOT_FOUND)?))
+}
+
+/// What changed from the previous version, and why.
+#[utoipa::path(get, path = "/plans/{version}/diff", params(("version" = i64, Path)),
+    responses((status = 200, body = Diff), (status = 404)))]
+async fn get_diff(
+    State(s): State<AppState>,
+    Path(version): Path<i64>,
+) -> Result<Json<Diff>, StatusCode> {
+    let found = s.store.diff(version).await.map_err(internal)?;
+    found.flatten().map(Json).ok_or(StatusCode::NOT_FOUND)
+}
+
+/// Sets a plant online or offline, then re-dispatches.
+#[utoipa::path(put, path = "/plants/{id}/status", params(("id" = String, Path)),
+    request_body = PlantStatusChange,
+    responses((status = 200, body = Redispatched), (status = 404, description = "Unknown plant")))]
+async fn set_plant_status(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(change): Json<PlantStatusChange>,
+) -> Result<Json<Redispatched>, StatusCode> {
+    let plant = PlantId(id);
+    let before = s.store.set_plant_status(&plant, change.status).await;
+    let before = before.map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    if before == change.status {
+        return Ok(Json(Redispatched {
+            version: None,
+            diff: None,
+        }));
+    }
+    let trigger = match change.status {
+        PlantStatus::Offline => Trigger::PlantOffline { plant },
+        PlantStatus::Online => Trigger::PlantOnline { plant },
+    };
+    redispatch(&s, trigger).await
+}
+
+/// Starts a site's pours today some minutes later, as when the pump is late, then re-dispatches.
+/// It applies to the site's orders that are batching or start today (Berlin time).
+#[utoipa::path(post, path = "/sites/{id}/delays", params(("id" = String, Path, description = "Our ship-to number")),
+    request_body = SiteDelay,
+    responses(
+        (status = 200, body = Redispatched),
+        (status = 404, description = "Unknown site"),
+        (status = 422, description = "Minutes outside 1 to 1,440"),
+    ))]
+async fn delay_site(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(delay): Json<SiteDelay>,
+) -> Result<Json<Redispatched>, StatusCode> {
+    if !(1..=1440).contains(&delay.minutes) {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    let now = (s.clock)();
+    let site = SiteId(id);
+    let delayed = s
+        .store
+        .delay_site(&site, delay.minutes, now, day_end(now))
+        .await;
+    let delayed = delayed.map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    if delayed.is_empty() {
+        return Ok(Json(Redispatched {
+            version: None,
+            diff: None,
+        }));
+    }
+    let trigger = Trigger::SiteDelayed {
+        site,
+        minutes: delay.minutes,
+        orders: delayed,
+    };
+    redispatch(&s, trigger).await
+}
+
+/// The next midnight in Berlin.
+fn day_end(now: DateTime<Utc>) -> DateTime<Utc> {
+    now.with_timezone(&Berlin)
+        .date_naive()
+        .succ_opt()
+        .and_then(|day| {
+            Berlin
+                .from_local_datetime(&day.and_time(Default::default()))
+                .earliest()
+        })
+        .map_or(now + TimeDelta::days(1), |t| t.with_timezone(&Utc))
+}
+
+async fn redispatch(s: &AppState, trigger: Trigger) -> Result<Json<Redispatched>, StatusCode> {
+    let version = s.jobs.run(trigger).await.map_err(|e| {
+        error!(error = %e, "re-dispatch failed");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let diff = match version {
+        Some(v) => s.store.diff(v).await.map_err(internal)?.flatten(),
+        None => None,
+    };
+    Ok(Json(Redispatched { version, diff }))
 }

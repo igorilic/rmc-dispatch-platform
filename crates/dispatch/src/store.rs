@@ -7,11 +7,11 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use domain::{
     Address, CustomerId, Delivery, DeliveryStatus, Load, LoadRef, Location, MixCode,
-    OperatingHours, Order, OrderId, OrderStatus, Plant, PlantId, PostalCodeGeocoder, Seed, Site,
-    SiteId, TimeWindow, Truck, TruckId, TruckStatus,
+    OperatingHours, Order, OrderId, OrderStatus, Plant, PlantId, PlantStatus, PostalCodeGeocoder,
+    Seed, Site, SiteId, TimeWindow, Truck, TruckId, TruckStatus,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,9 @@ use utoipa::ToSchema;
 
 use crate::planner::{Metrics, Plan, Unplanned, World};
 use crate::redispatch::{Diff, Trigger};
+
+/// Deliveries older than this are long discharged: they freeze nothing and delay nothing.
+pub const DELIVERY_WINDOW: TimeDelta = TimeDelta::hours(12);
 
 /// A stored plan: its version, what it replaced, and why.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -400,6 +403,76 @@ impl Store {
         })
     }
 
+    /// Sets a plant online or offline. Returns the status it had, or `None` for an unknown plant.
+    pub async fn set_plant_status(
+        &self,
+        plant: &PlantId,
+        status: PlantStatus,
+    ) -> Result<Option<PlantStatus>, StoreError> {
+        let previous = sqlx::query_scalar!(
+            r#"WITH before AS (SELECT id, status FROM plants WHERE id = $1 FOR UPDATE)
+               UPDATE plants SET status = $2 FROM before WHERE plants.id = before.id
+               RETURNING before.status AS "previous!""#,
+            plant.0,
+            text(&status),
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        previous.as_deref().map(parse).transpose()
+    }
+
+    /// Delays the site's pours by `minutes`: orders that are batching, and open orders starting
+    /// between an hour ago and `day_end`, now start at the later of their start and `now`, plus
+    /// `minutes`. Returns the orders it delayed, or `None` for an unknown site.
+    pub async fn delay_site(
+        &self,
+        site: &SiteId,
+        minutes: u32,
+        now: DateTime<Utc>,
+        day_end: DateTime<Utc>,
+    ) -> Result<Option<Vec<OrderId>>, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let known = sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM sites WHERE id = $1) AS "known!""#,
+            site.0,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !known {
+            return Ok(None);
+        }
+        let delayed = sqlx::query_scalar!(
+            "UPDATE orders SET delayed_until = GREATEST(requested_start, delayed_until, $2) + make_interval(mins => $3)
+             WHERE site_id = $1 AND status <> 'cancelled' AND (
+                 (status IN ('unconfirmed', 'pending', 'confirmed')
+                     AND GREATEST(requested_start, delayed_until) >= $2::timestamptz - interval '1 hour'
+                     AND GREATEST(requested_start, delayed_until) < $4)
+                 OR id IN (SELECT order_id FROM deliveries WHERE started_at >= $5))
+             RETURNING id",
+            site.0,
+            now,
+            signed(minutes)?,
+            day_end,
+            now - DELIVERY_WINDOW,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(Some(delayed.into_iter().map(OrderId).collect()))
+    }
+
+    /// A version's diff from the one before. `None` without such a version, `Some(None)` for a
+    /// version stored before diffs existed.
+    pub async fn diff(&self, version: i64) -> Result<Option<Option<Diff>>, StoreError> {
+        let found = sqlx::query_scalar!(
+            r#"SELECT diff AS "diff: Json<Diff>" FROM plans WHERE version = $1"#,
+            version,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(found.map(|d| d.map(|d| d.0)))
+    }
+
     /// Records a truck's reported status, unless a newer report is stored. Returns the status it
     /// replaced, if it applied.
     pub async fn report_truck_status(
@@ -509,8 +582,11 @@ impl Store {
     pub async fn order(&self, id: &str) -> Result<Option<Order>, StoreError> {
         sqlx::query_as!(
             OrderRow,
-            "SELECT id, customer_id, site_id, mix, total_volume_m3, requested_start, pour_rate_m3_per_h,
-                 max_gap_minutes, status FROM orders WHERE id = $1",
+            r#"SELECT id AS "id!", customer_id AS "customer_id!", site_id AS "site_id!", mix AS "mix!",
+                   total_volume_m3 AS "total_volume_m3!", requested_start AS "requested_start!",
+                   pour_rate_m3_per_h AS "pour_rate_m3_per_h!", max_gap_minutes AS "max_gap_minutes!",
+                   shown AS "status!"
+               FROM shown_orders WHERE id = $1"#,
             id,
         )
         .fetch_optional(&self.pool)
@@ -528,12 +604,15 @@ impl Store {
     ) -> Result<Vec<Order>, StoreError> {
         sqlx::query_as!(
             OrderRow,
-            "SELECT id, customer_id, site_id, mix, total_volume_m3, requested_start, pour_rate_m3_per_h,
-                 max_gap_minutes, status FROM orders
-             WHERE ($1::text IS NULL OR status = $1)
-               AND ($2::timestamptz IS NULL OR requested_start >= $2)
-               AND ($3::timestamptz IS NULL OR requested_start < $3)
-             ORDER BY requested_start, id",
+            r#"SELECT id AS "id!", customer_id AS "customer_id!", site_id AS "site_id!", mix AS "mix!",
+                   total_volume_m3 AS "total_volume_m3!", requested_start AS "requested_start!",
+                   pour_rate_m3_per_h AS "pour_rate_m3_per_h!", max_gap_minutes AS "max_gap_minutes!",
+                   shown AS "status!"
+               FROM shown_orders
+               WHERE ($1::text IS NULL OR shown = $1)
+                 AND ($2::timestamptz IS NULL OR requested_start >= $2)
+                 AND ($3::timestamptz IS NULL OR requested_start < $3)
+               ORDER BY requested_start, id"#,
             status.as_ref().map(text),
             from,
             to,
