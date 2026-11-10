@@ -216,7 +216,8 @@ struct PlantState<'a> {
 
 impl PlantState<'_> {
     /// `None` if a bay is free for all of `[start, end)`. Otherwise the earliest moment one frees up.
-    // ponytail: rescans every interval, O(loads²) per plant; index by time if M5's 1,000-load benchmark needs it.
+    // ponytail: rescans every interval, O(loads²) per plant. At 1,000 loads (make bench) construction
+    // takes 0.8 s and a local search move 13 ms; index intervals by time if that ever matters.
     fn bay_conflict(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Option<DateTime<Utc>> {
         let overlapping: Vec<_> = self
             .bays

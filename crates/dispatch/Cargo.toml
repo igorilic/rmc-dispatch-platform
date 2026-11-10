@@ -25,10 +25,15 @@ utoipa.workspace = true
 utoipa-swagger-ui.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 ingest = { path = "../ingest" }
 proptest.workspace = true
 testcontainers.workspace = true
 tower.workspace = true
+
+[[bench]]
+name = "planner"
+harness = false
 
 [lints]
 workspace = true

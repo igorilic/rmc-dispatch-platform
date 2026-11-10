@@ -5,7 +5,7 @@
 export DOCKER_HOST ?= $(shell docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)
 COMPOSE := docker compose -f deploy/compose/compose.yaml $(if $(wildcard .env),--env-file .env)
 
-.PHONY: up down logs test audit sqlx-prepare
+.PHONY: up down logs test bench audit sqlx-prepare
 
 up: ## Build and start the local stack, and wait until it is up
 	$(COMPOSE) up -d --wait --build
@@ -20,6 +20,9 @@ test: ## fmt, clippy, unit/property/integration tests
 	cargo fmt --all --check
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo test --workspace
+
+bench: ## Planner benchmarks at 50, 200 and 1,000 loads (takes a few minutes)
+	cargo bench -p dispatch --bench planner
 
 audit: ## Check dependencies against the RustSec advisory DB (needs cargo-audit)
 	cargo audit
