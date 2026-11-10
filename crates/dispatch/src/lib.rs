@@ -3,6 +3,7 @@
 pub mod api;
 pub mod intake;
 pub mod planner;
+pub mod redispatch;
 pub mod search;
 pub mod store;
 #[cfg(test)]

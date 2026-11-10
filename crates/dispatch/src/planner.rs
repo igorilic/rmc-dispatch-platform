@@ -366,6 +366,67 @@ impl<'a> Planner<'a> {
         }
     }
 
+    /// Keeps `loads` from an earlier plan where they still fit every hard constraint at the same
+    /// plant, truck and time, and not in the past. Returns the orders that had a load that doesn't
+    /// fit; none of their loads are kept. Call it after keeping the frozen loads.
+    pub(crate) fn keep_fitting(&mut self, mut loads: Vec<Load>) -> HashSet<OrderId> {
+        loads.sort_by_key(|l| l.planned_batch_at);
+        let base = std::mem::take(&mut self.loads);
+        let mut dropped = HashSet::new();
+        loop {
+            // Dropping an order can change where a truck comes from for its next trip, so check
+            // the rest again until nothing more drops.
+            self.loads = base.clone();
+            self.rebuild();
+            let mut misfits = HashSet::new();
+            for load in loads.iter().filter(|l| !dropped.contains(&l.order)) {
+                if self.fits(load) {
+                    self.fix(load);
+                    self.loads.push(load.clone());
+                } else {
+                    misfits.insert(load.order.clone());
+                }
+            }
+            if misfits.is_empty() {
+                return dropped;
+            }
+            dropped.extend(misfits);
+        }
+    }
+
+    /// Whether a decided load still fits the plan as it stands: the checks of
+    /// [`Planner::earliest_slot`], at the load's own plant, truck and time.
+    fn fits(&self, load: &Load) -> bool {
+        let Some(order) = self.orders.get(&load.order) else {
+            return false;
+        };
+        let Some(&site) = self.world.sites.get(&order.site) else {
+            return false;
+        };
+        let plant = self
+            .plants
+            .iter()
+            .find(|p| p.plant.id == load.planned_plant);
+        let truck = self
+            .trucks
+            .iter()
+            .find(|t| t.truck.id == load.planned_truck);
+        let (Some(plant), Some(truck)) = (plant, truck) else {
+            return false;
+        };
+        let batch_at = load.planned_batch_at;
+        let loaded = batch_at + plant_time(load.volume_m3, plant.plant);
+        let end = discharge_end(load, order);
+        let (from, free_at) = truck.free_before(batch_at, self.now);
+        batch_at >= self.now
+            && plant.closed(batch_at, loaded).is_none()
+            && plant.bay_conflict(batch_at, loaded).is_none()
+            && free_at + self.travel.travel(from, plant.plant.location, free_at) <= batch_at
+            && truck
+                .next_after(batch_at)
+                .is_none_or(|next| end + self.travel.travel(site, next.plant, end) <= next.batch_at)
+    }
+
     /// Works out again which bays and trucks are busy, after loads were taken out.
     pub(crate) fn rebuild(&mut self) {
         for plant in &mut self.plants {

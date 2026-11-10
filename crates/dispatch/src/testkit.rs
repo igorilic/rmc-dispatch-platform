@@ -30,6 +30,11 @@ pub const FRANKFURT: Location = Location {
     lon: 8.6821,
 };
 
+pub const SCHWETZINGEN: Location = Location {
+    lat: 49.3833,
+    lon: 8.5667,
+};
+
 pub fn at(h: u32, m: u32) -> DateTime<Utc> {
     Berlin
         .with_ymd_and_hms(2026, 11, 10, h, m, 0)
