@@ -398,15 +398,26 @@ pub fn diff(
             .or(c.before.as_ref())
             .map(|l| l.eta_on_site)
     };
+    let hit = |c: &Change| {
+        triggers
+            .iter()
+            .any(|t| c.before.iter().chain(&c.after).any(|l| t.touches(l)))
+    };
     let mut done = Vec::with_capacity(changes.len());
     for (change, direct) in &changes {
         let reason = direct.clone().unwrap_or_else(|| {
             // Another load of the same order changed for a reason, so the order was planned
-            // again. A later load on the same truck and plant only follows it in time.
-            let cause = changes
-                .iter()
-                .filter(|(c, d)| c.order == change.order && d.is_some())
-                .min_by_key(|(c, _)| eta(c));
+            // again. A later load on the same truck and plant only follows it in time. A load a
+            // trigger hit explains more than one that merely started batching.
+            let explained = || {
+                changes
+                    .iter()
+                    .filter(|(c, d)| c.order == change.order && d.is_some())
+            };
+            let cause = explained()
+                .filter(|(c, _)| hit(c))
+                .min_by_key(|(c, _)| eta(c))
+                .or_else(|| explained().min_by_key(|(c, _)| eta(c)));
             match (cause, &change.before, &change.after) {
                 (Some((c, _)), Some(b), Some(a))
                     if eta(c) < eta(change)
@@ -601,7 +612,10 @@ mod tests {
         let (mut w, orders) = scene();
         let v1 = first(&w, &orders);
         let a = loads_of(&v1, "a");
-        let frozen = batched(&[a[0].clone()]);
+        // The plant started load 1 a minute late, so it is a change too ("batching started").
+        let mut started = a[0].clone();
+        started.planned_batch_at += TimeDelta::minutes(1);
+        let frozen = batched(&[started]);
         let broken = a[1].planned_truck.clone();
         for t in w.trucks.iter_mut().filter(|t| t.id == broken) {
             t.status = TruckStatus::OutOfService;
@@ -620,6 +634,19 @@ mod tests {
         );
         let moved = change(&out.diff, "a", 2).unwrap();
         assert_eq!(moved.reason, format!("{} is out of service", broken.0));
+        assert_eq!(
+            change(&out.diff, "a", 1).unwrap().reason,
+            "batching started"
+        );
+        // The rest of the order moved because of the breakdown, not because load 1 started.
+        for c in out
+            .diff
+            .changes
+            .iter()
+            .filter(|c| c.order.0 == "a" && c.sequence > 2)
+        {
+            assert!(c.reason.contains("#2"), "#{}: {}", c.sequence, c.reason);
+        }
         assert_eq!(out.diff.triggers, [format!("{} out of service", broken.0)]);
         if !loads_of(&v1, "b").iter().any(|l| l.planned_truck == broken) {
             assert_eq!(loads_of(&out.plan, "b"), loads_of(&v1, "b"), "b untouched");
