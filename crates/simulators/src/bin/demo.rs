@@ -37,6 +37,8 @@ fn env(key: &str, default: &str) -> String {
 struct Demo {
     http: reqwest::Client,
     dispatch: String,
+    /// Where a person reaches dispatch, for the closing hint.
+    dispatch_public: String,
     ingest: String,
     mqtt: AsyncClient,
     timeout: Duration,
@@ -60,6 +62,10 @@ async fn main() -> anyhow::Result<()> {
     let demo = Demo {
         http: reqwest::Client::new(),
         dispatch: env("DISPATCH_URL", "http://localhost:8081"),
+        dispatch_public: env(
+            "DISPATCH_PUBLIC_URL",
+            &env("DISPATCH_URL", "http://localhost:8081"),
+        ),
         ingest: env("INGEST_URL", "http://localhost:8080"),
         mqtt,
         timeout: Duration::from_secs(env("DEMO_TIMEOUT_SECS", "120").parse()?),
@@ -159,7 +165,8 @@ impl Demo {
             str_of(&first, "planned_truck"),
         );
         println!(
-            "\n2. {plant} starts batching load #1 of {id_a} on {truck}: from now on it's frozen."
+            "\n2. {plant} batches load #1 of {id_a} on {truck} at {}, as planned: from now on it's frozen.",
+            time_of(&first, "planned_batch_at")
         );
         self.play_the_plant(&first, &id_a).await?;
         self.wait_for("the order to be in progress", || async {
@@ -229,8 +236,8 @@ impl Demo {
         }
         println!(
             "✓ Every version passed dispatch's hard-constraint checker before it was stored.\n\n\
-             Explore: {}/plans/latest, {}/plans/{{version}}/diff, Swagger UI at {}/swagger-ui/",
-            self.dispatch, self.dispatch, self.dispatch
+             Explore: {0}/plans/latest, {0}/plans/{{version}}/diff, Swagger UI at {0}/swagger-ui/",
+            self.dispatch_public
         );
         Ok(())
     }
@@ -247,11 +254,16 @@ impl Demo {
         .await
     }
 
-    /// Batching, loading and loaded tickets for `load`, naming the order and load number.
+    /// Batching, loading and loaded tickets for `load`, naming the order and load number. The
+    /// plant batches on schedule, so the frozen load is the planned one.
     async fn play_the_plant(&self, load: &Value, order: &str) -> anyhow::Result<()> {
         let plant = str_of(load, "planned_plant");
-        let now = Utc::now().timestamp_millis();
-        let ticket_no = format!("DEMO-{now}");
+        let batch_at = load["planned_batch_at"]
+            .as_str()
+            .and_then(|s| s.parse::<DateTime<Utc>>().ok())
+            .unwrap_or_else(Utc::now)
+            .timestamp_millis();
+        let ticket_no = format!("DEMO-{batch_at}");
         let events = [
             DeliveryStatus::Batching,
             DeliveryStatus::Loading,
@@ -262,7 +274,7 @@ impl Demo {
                 plant,
                 ticket_no: &ticket_no,
                 vehicle: str_of(load, "planned_truck"),
-                ts_ms: now + i * 1000,
+                ts_ms: batch_at + i * 1000,
                 event,
                 mix: MIX,
                 volume_m3: load["volume_m3"].as_f64().unwrap_or_default(),
@@ -437,7 +449,7 @@ fn print_plan(plan: &Value, ours: &[&str]) {
     }
 }
 
-/// `before → after`, or just one side if the other is missing or the same.
+/// `before → after`, or one side when the other is the same or missing.
 fn change(
     before: Option<&Value>,
     after: Option<&Value>,
@@ -445,9 +457,18 @@ fn change(
 ) -> String {
     match (before.map(&show), after.map(&show)) {
         (Some(b), Some(a)) if b != a => format!("{b} → {a}"),
-        (_, Some(a)) => a,
-        (Some(b), None) => format!("{b} → removed"),
+        (_, Some(one)) | (Some(one), None) => one,
         (None, None) => String::new(),
+    }
+}
+
+/// The ETA column also says when a load was added or removed.
+fn eta_change(before: Option<&Value>, after: Option<&Value>) -> String {
+    let eta = |l: &Value| time_of(l, "eta_on_site");
+    match (before, after) {
+        (Some(b), None) => format!("{} → removed", eta(b)),
+        (None, Some(a)) => format!("new → {}", eta(a)),
+        _ => change(before, after, eta),
     }
 }
 
@@ -478,7 +499,7 @@ fn print_diff(version: i64, diff: &Value, ours: &[&str]) {
             c["sequence"].as_u64().unwrap_or_default(),
             change(b, a, |l| str_of(l, "planned_truck").to_owned()),
             change(b, a, |l| short(str_of(l, "planned_plant")).to_owned()),
-            change(b, a, |l| time_of(l, "eta_on_site")),
+            eta_change(b, a),
             str_of(c, "reason")
         );
     }
@@ -488,12 +509,12 @@ fn print_diff(version: i64, diff: &Value, ours: &[&str]) {
     let (mb, ma) = (&diff["metrics_before"], &diff["metrics_after"]);
     let num = |m: &Value, k: &str| m[k].as_f64().unwrap_or_default();
     println!(
-        "   max gap {:.0} → {:.0} min · gaps over limit {} → {} · empty km {:.1} → {:.1}",
+        "   max gap {:.0} → {:.0} min · gaps over limit {} → {} · lateness {:.0} → {:.0} min",
         num(mb, "max_gap_minutes"),
         num(ma, "max_gap_minutes"),
         mb["gaps_over_limit"],
         ma["gaps_over_limit"],
-        num(mb, "empty_km"),
-        num(ma, "empty_km")
+        num(mb, "lateness_minutes"),
+        num(ma, "lateness_minutes")
     );
 }

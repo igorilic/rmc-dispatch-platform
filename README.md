@@ -239,7 +239,7 @@ the scenario stays readable. It then runs `crates/simulators/src/bin/demo.rs` in
 
 1. Two orders arrive through the customers' own channels: a bauwerk-ag JSON webhook and a
    neckar-infra XML webhook. Both start in about 45 minutes. The demo prints their plan.
-2. It plays the plant: batch tickets for load #1 of the first order, which freezes.
+2. It plays the plant: batch tickets for load #1 of the first order, on schedule, so it freezes.
 3. The truck of a later load breaks down. The simulated truck reports `out_of_service` over MQTT,
    and dispatch re-dispatches.
 4. The second order's site is delayed 30 minutes through the API.
@@ -247,12 +247,12 @@ the scenario stays readable. It then runs `crates/simulators/src/bin/demo.rs` in
 Each diff is printed with a reason per load, for example:
 
 ```text
-3. truck-08, which carries load #2 of 10001001/DEMO-073613-A, breaks down.
-   v5 · truck-08 out of service
+3. truck-12, which carries load #2 of 10001001/DEMO-080657-A, breaks down.
+   v5 · truck-12 out of service
    order                    load  truck                  plant                ETA             reason
-   10001001/DEMO-073613-A   #1    truck-07               mannheim             08:25 → 08:23   batching started
-   10001001/DEMO-073613-A   #2    truck-08 → truck-09    mannheim             08:41 → 08:39   truck-08 is out of service
-   10001001/DEMO-073613-A   #3    truck-09 → truck-17    mannheim → weinheim  08:59 → 09:03   re-planned along with #2
+   10001001/DEMO-080657-A   #2    truck-12 → truck-16    weinheim             09:13           truck-12 is out of service
+   10001001/DEMO-080657-A   #3    truck-03               mannheim             09:31 → 09:29   follows #2, so the pour stays continuous
+   10001001/DEMO-080657-A   #4    truck-04               mannheim             09:45 → 09:43   follows #2, so the pour stays continuous
 ```
 
 When it's done, the simulators go back to the normal order rate. A broken-down simulated truck is
