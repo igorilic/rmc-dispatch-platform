@@ -21,16 +21,16 @@
 //! position, or from their home plant until the first GPS fix.
 //!
 //! [`crate::verify`] re-checks the hard constraints on the finished plan, independently of this code.
-//! [`Metrics`] measures the soft objectives (pour gaps, lateness, empty km); M5's local search
-//! optimises them.
+//! [`Metrics`] measures the soft objectives (pour gaps, lateness, empty km) on the finished plan;
+//! [`crate::search`] improves their weighted sum.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{DateTime, NaiveDate, NaiveTime, TimeDelta, TimeZone, Utc};
 use chrono_tz::Europe::Berlin;
 use domain::{
-    Load, Location, MixCode, Order, OrderId, OrderStatus, Plant, PlantStatus, Seed, SiteId,
-    TimeWindow, Truck, TruckStatus,
+    Load, Location, MixCode, Order, OrderId, OrderStatus, Plant, PlantId, PlantStatus, Seed,
+    SiteId, TimeWindow, Truck, TruckStatus,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -91,6 +91,7 @@ pub struct Unplanned {
 
 /// The soft objectives of SPEC §4, measured on a plan.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(default)] // plans stored before a field existed still read back
 pub struct Metrics {
     pub planned_orders: usize,
     pub unplanned_orders: usize,
@@ -101,6 +102,10 @@ pub struct Metrics {
     pub max_gap_minutes: f64,
     /// Waits longer than the order's maximum gap: a cold-joint risk.
     pub gaps_over_limit: usize,
+    /// Every wait at a site between one load finishing and the next arriving, summed.
+    pub gap_minutes: f64,
+    /// The part of each wait beyond the order's maximum gap, summed.
+    pub minutes_over_gap_limit: f64,
     /// Kilometres trucks drive empty to reach their loading plant.
     pub empty_km: f64,
 }
@@ -156,91 +161,13 @@ pub fn plan(
     horizon: TimeDelta,
     travel: &dyn TravelTimeProvider,
 ) -> Plan {
-    let horizon_end = now + horizon;
-    let homes: HashMap<_, _> = world.plants.iter().map(|p| (&p.id, p.location)).collect();
-    let mut planner = Planner {
-        world,
-        travel,
-        now,
-        // ponytail: loads may land up to a day past the horizon; a long pour that starts near the end still fits.
-        search_until: horizon_end + TimeDelta::days(1),
-        plants: world
-            .plants
-            .iter()
-            .filter(|p| p.status == PlantStatus::Online)
-            .map(|plant| PlantState {
-                plant,
-                bays: Vec::new(),
-            })
-            .collect(),
-        trucks: world
-            .trucks
-            .iter()
-            .filter(|t| t.status != TruckStatus::OutOfService)
-            .filter_map(|truck| {
-                Some(TruckState {
-                    truck,
-                    start: truck
-                        .last_position
-                        .or_else(|| homes.get(&truck.home_plant).copied())?,
-                    trips: Vec::new(),
-                })
-            })
-            .collect(),
-        empty_km: 0.0,
-    };
-    let frozen: Vec<Load> = frozen
-        .iter()
-        .map(|l| Load {
-            frozen: true,
-            ..l.clone()
-        })
-        .collect();
-    let by_id: HashMap<&OrderId, &Order> = orders.iter().map(|o| (&o.id, o)).collect();
-    for load in &frozen {
-        planner.fix(load, by_id.get(&load.order).copied());
-    }
-    let batching: HashSet<&OrderId> = frozen.iter().map(|l| &l.order).collect();
-    let mut open: Vec<&Order> = orders
-        .iter()
-        .filter(|o| plannable(o, batching.contains(&o.id), now, horizon_end))
-        .collect();
-    open.sort_by(|a, b| (a.requested_start, &a.id.0).cmp(&(b.requested_start, &b.id.0)));
-
-    let (mut loads, mut unplanned) = (Vec::new(), Vec::new());
-    let mut handled = HashSet::new();
-    for order in open {
-        handled.insert(&order.id);
-        let mut order_loads: Vec<Load> = frozen
-            .iter()
-            .filter(|l| l.order == order.id)
-            .cloned()
-            .collect();
-        match planner.plan_order(order, &order_loads) {
-            Ok(new) => order_loads.extend(new),
-            Err(reason) => unplanned.push(Unplanned {
-                order: order.id.clone(),
-                reason,
-            }),
-        }
-        order_loads.sort_by_key(|l| l.sequence);
-        loads.extend(order_loads);
-    }
-    // Frozen loads of orders that get nothing more, such as cancelled ones, stay as they are.
-    let mut rest: Vec<Load> = frozen
-        .into_iter()
-        .filter(|l| !handled.contains(&l.order))
-        .collect();
-    rest.sort_by(|a, b| (&a.order.0, a.sequence).cmp(&(&b.order.0, b.sequence)));
-    loads.extend(rest);
-    let metrics = measure(&loads, &unplanned, orders, planner.empty_km);
-    Plan {
-        created_at: now,
-        horizon_end,
-        loads,
-        unplanned,
-        metrics,
-    }
+    let mut planner = Planner::new(world, orders, now, now + horizon, travel);
+    planner.keep(frozen.iter().map(|l| Load {
+        frozen: true,
+        ..l.clone()
+    }));
+    planner.construct();
+    planner.into_plan()
 }
 
 #[derive(Debug, Clone)]
@@ -361,19 +288,296 @@ enum Slot {
     Busy,
 }
 
-struct Planner<'a> {
+/// The rest of an order's placed loads, from `from` (an ETA) on, to plan again with the first one
+/// on `forced`: indexes into the planner's online plants and trucks in service.
+pub(crate) struct Tail {
+    pub(crate) order: OrderId,
+    pub(crate) from: DateTime<Utc>,
+    pub(crate) forced: (usize, usize),
+}
+
+/// The plan being built: every load decided so far, and the bays and trucks they keep busy.
+pub(crate) struct Planner<'a> {
     world: &'a World,
     travel: &'a dyn TravelTimeProvider,
     now: DateTime<Utc>,
+    horizon_end: DateTime<Utc>,
     search_until: DateTime<Utc>,
+    orders: HashMap<&'a OrderId, &'a Order>,
+    /// Online plants only.
     plants: Vec<PlantState<'a>>,
+    /// Trucks in service only.
     trucks: Vec<TruckState<'a>>,
-    empty_km: f64,
+    /// Frozen loads included.
+    pub(crate) loads: Vec<Load>,
+    pub(crate) unplanned: Vec<Unplanned>,
 }
 
-impl Planner<'_> {
-    /// Keeps a bay and the truck busy for a load that is already decided.
-    fn fix(&mut self, load: &Load, order: Option<&Order>) {
+impl<'a> Planner<'a> {
+    pub(crate) fn new(
+        world: &'a World,
+        orders: &'a [Order],
+        now: DateTime<Utc>,
+        horizon_end: DateTime<Utc>,
+        travel: &'a dyn TravelTimeProvider,
+    ) -> Planner<'a> {
+        let homes: HashMap<_, _> = world.plants.iter().map(|p| (&p.id, p.location)).collect();
+        Planner {
+            world,
+            travel,
+            now,
+            horizon_end,
+            // ponytail: loads may land up to a day past the horizon; a long pour that starts near the end still fits.
+            search_until: horizon_end + TimeDelta::days(1),
+            orders: orders.iter().map(|o| (&o.id, o)).collect(),
+            plants: world
+                .plants
+                .iter()
+                .filter(|p| p.status == PlantStatus::Online)
+                .map(|plant| PlantState {
+                    plant,
+                    bays: Vec::new(),
+                })
+                .collect(),
+            trucks: world
+                .trucks
+                .iter()
+                .filter(|t| t.status != TruckStatus::OutOfService)
+                .filter_map(|truck| {
+                    Some(TruckState {
+                        truck,
+                        start: truck
+                            .last_position
+                            .or_else(|| homes.get(&truck.home_plant).copied())?,
+                        trips: Vec::new(),
+                    })
+                })
+                .collect(),
+            loads: Vec::new(),
+            unplanned: Vec::new(),
+        }
+    }
+
+    /// Adds loads that are already decided, such as frozen ones, and keeps their bays and trucks busy.
+    pub(crate) fn keep(&mut self, loads: impl IntoIterator<Item = Load>) {
+        for load in loads {
+            self.fix(&load);
+            self.loads.push(load);
+        }
+    }
+
+    /// Works out again which bays and trucks are busy, after loads were taken out.
+    pub(crate) fn rebuild(&mut self) {
+        for plant in &mut self.plants {
+            plant.bays.clear();
+        }
+        for truck in &mut self.trucks {
+            truck.trips.clear();
+        }
+        let loads = std::mem::take(&mut self.loads);
+        for load in &loads {
+            self.fix(load);
+        }
+        self.loads = loads;
+    }
+
+    /// Plans every plannable order that has no placed load yet, by requested start.
+    pub(crate) fn construct(&mut self) {
+        let batching: HashSet<&OrderId> = self
+            .loads
+            .iter()
+            .filter(|l| l.frozen)
+            .map(|l| &l.order)
+            .collect();
+        let placed: HashSet<&OrderId> = self
+            .loads
+            .iter()
+            .filter(|l| !l.frozen)
+            .map(|l| &l.order)
+            .collect();
+        let mut open: Vec<&'a Order> = self
+            .orders
+            .values()
+            .copied()
+            .filter(|o| {
+                !placed.contains(&o.id)
+                    && plannable(o, batching.contains(&o.id), self.now, self.horizon_end)
+            })
+            .collect();
+        open.sort_by(|a, b| (a.requested_start, &a.id.0).cmp(&(b.requested_start, &b.id.0)));
+        for order in open {
+            self.place(order);
+        }
+    }
+
+    /// Gives the unplanned orders one more try.
+    pub(crate) fn retry_unplanned(&mut self) {
+        for unplanned in std::mem::take(&mut self.unplanned) {
+            match self.orders.get(&unplanned.order).copied() {
+                Some(order) => self.place(order),
+                None => self.unplanned.push(unplanned),
+            }
+        }
+    }
+
+    /// Takes out each tail's loads, then plans them again with the first one on its forced plant
+    /// and truck. False if an order can't be placed whole; the caller rolls back.
+    pub(crate) fn retime(&mut self, tails: &[Tail]) -> bool {
+        self.loads.retain(|l| {
+            l.frozen
+                || !tails
+                    .iter()
+                    .any(|t| t.order == l.order && l.eta_on_site >= t.from)
+        });
+        self.rebuild();
+        for tail in tails {
+            let Some(order) = self.orders.get(&tail.order).copied() else {
+                return false;
+            };
+            let fixed = self.loads_of(&order.id);
+            match self.plan_order(order, &fixed, Some(tail.forced)) {
+                Ok(new) => self.loads.extend(new),
+                Err(_) => return false,
+            }
+        }
+        true
+    }
+
+    /// The (plant, truck) indexes a placed load uses, if both can still be used.
+    pub(crate) fn indexes(&self, load: &Load) -> Option<(usize, usize)> {
+        Some((
+            self.plants
+                .iter()
+                .position(|p| p.plant.id == load.planned_plant)?,
+            self.trucks
+                .iter()
+                .position(|t| t.truck.id == load.planned_truck)?,
+        ))
+    }
+
+    /// How many plants are online and how many trucks are in service.
+    pub(crate) fn sizes(&self) -> (usize, usize) {
+        (self.plants.len(), self.trucks.len())
+    }
+
+    pub(crate) fn into_plan(mut self) -> Plan {
+        self.loads
+            .sort_by(|a, b| (&a.order.0, a.sequence).cmp(&(&b.order.0, b.sequence)));
+        let metrics = self.measure();
+        Plan {
+            created_at: self.now,
+            horizon_end: self.horizon_end,
+            loads: self.loads,
+            unplanned: self.unplanned,
+            metrics,
+        }
+    }
+
+    /// The soft objectives of SPEC §4, measured on the loads as they stand.
+    pub(crate) fn measure(&self) -> Metrics {
+        let mut m = Metrics {
+            loads: self.loads.len(),
+            unplanned_orders: self.unplanned.len(),
+            empty_km: self.empty_km(),
+            ..Metrics::default()
+        };
+        // Ordered maps keep float sums, and so costs, the same from run to run.
+        let mut by_order: BTreeMap<&str, Vec<&Load>> = BTreeMap::new();
+        for load in &self.loads {
+            by_order.entry(&load.order.0).or_default().push(load);
+        }
+        for mut loads in by_order.into_values() {
+            let Some(order) = self.orders.get(&loads[0].order) else {
+                continue;
+            };
+            // Sequence numbers aren't arrival order once a plant batches loads out of turn.
+            loads.sort_by_key(|l| l.eta_on_site);
+            m.planned_orders += 1;
+            m.lateness_minutes +=
+                minutes((loads[0].eta_on_site - order.requested_start).max(TimeDelta::zero()));
+            for pair in loads.windows(2) {
+                let gap = minutes(pair[1].eta_on_site - discharge_end(pair[0], order)).max(0.0);
+                let limit = f64::from(order.max_gap_minutes);
+                m.gap_minutes += gap;
+                m.minutes_over_gap_limit += (gap - limit).max(0.0);
+                m.max_gap_minutes = m.max_gap_minutes.max(gap);
+                if gap > limit {
+                    m.gaps_over_limit += 1;
+                }
+            }
+        }
+        m
+    }
+
+    /// Kilometres trucks drive empty: from where they start to their first plant, then from each
+    /// site to their next plant.
+    fn empty_km(&self) -> f64 {
+        let mut by_truck: BTreeMap<&str, Vec<&Load>> = BTreeMap::new();
+        for load in &self.loads {
+            by_truck
+                .entry(&load.planned_truck.0)
+                .or_default()
+                .push(load);
+        }
+        let plant_at = |id: &PlantId| {
+            self.world
+                .plants
+                .iter()
+                .find(|p| &p.id == id)
+                .map(|p| p.location)
+        };
+        let mut km = 0.0;
+        for mut trips in by_truck.into_values() {
+            trips.sort_by_key(|l| l.planned_batch_at);
+            let Some(truck) = self
+                .world
+                .trucks
+                .iter()
+                .find(|t| t.id == trips[0].planned_truck)
+            else {
+                continue;
+            };
+            let Some(mut at) = truck.last_position.or_else(|| plant_at(&truck.home_plant)) else {
+                continue;
+            };
+            for load in trips {
+                let Some(plant) = plant_at(&load.planned_plant) else {
+                    continue;
+                };
+                km += self.travel.distance_km(at, plant);
+                at = self
+                    .orders
+                    .get(&load.order)
+                    .and_then(|o| self.world.sites.get(&o.site))
+                    .copied()
+                    .unwrap_or(plant);
+            }
+        }
+        km
+    }
+
+    fn loads_of(&self, order: &OrderId) -> Vec<Load> {
+        self.loads
+            .iter()
+            .filter(|l| &l.order == order)
+            .cloned()
+            .collect()
+    }
+
+    /// Plans what the order's loads so far leave of its volume, or lists it as unplanned.
+    fn place(&mut self, order: &'a Order) {
+        let fixed = self.loads_of(&order.id);
+        match self.plan_order(order, &fixed, None) {
+            Ok(new) => self.loads.extend(new),
+            Err(reason) => self.unplanned.push(Unplanned {
+                order: order.id.clone(),
+                reason,
+            }),
+        }
+    }
+
+    /// Keeps a bay and the truck busy for a decided load.
+    fn fix(&mut self, load: &Load) {
         let world = self.world;
         let Some(plant) = world.plants.iter().find(|p| p.id == load.planned_plant) else {
             return;
@@ -385,7 +589,9 @@ impl Planner<'_> {
                 .push((batch_at, batch_at + plant_time(load.volume_m3, plant)));
         }
         // Without its order or site, a load's discharge can't be timed. The store never sends one.
-        let Some(order) = order else { return };
+        let Some(order) = self.orders.get(&load.order).copied() else {
+            return;
+        };
         let Some(&site) = world.sites.get(&order.site) else {
             return;
         };
@@ -403,8 +609,14 @@ impl Planner<'_> {
         }
     }
 
-    /// Plans what `fixed`, the order's frozen loads, leave of its volume.
-    fn plan_order(&mut self, order: &Order, fixed: &[Load]) -> Result<Vec<Load>, String> {
+    /// Plans what `fixed`, the loads the order already has, leave of its volume. With `forced`,
+    /// the first new load goes to that (plant, truck) or nowhere.
+    fn plan_order(
+        &mut self,
+        order: &Order,
+        fixed: &[Load],
+        mut forced: Option<(usize, usize)>,
+    ) -> Result<Vec<Load>, String> {
         let frozen_m3: f64 = fixed.iter().map(|l| l.volume_m3).sum();
         if order.total_volume_m3 - frozen_m3 <= VOLUME_EPSILON {
             return Ok(Vec::new());
@@ -429,7 +641,7 @@ impl Planner<'_> {
 
         // An order is planned whole or not at all, so keep the state to roll back to.
         let saved = (self.plants.clone(), self.trucks.clone());
-        let (mut loads, mut empty_km) = (Vec::new(), 0.0);
+        let mut loads = Vec::new();
         let mut remaining = order.total_volume_m3 - frozen_m3;
         let mut target = fixed
             .iter()
@@ -440,8 +652,12 @@ impl Planner<'_> {
         while remaining > VOLUME_EPSILON {
             let mut best: Option<Candidate> = None;
             let mut too_far_everywhere = true;
+            let only = forced.take();
             for p in 0..self.plants.len() {
                 for t in 0..self.trucks.len() {
+                    if only.is_some_and(|pair| pair != (p, t)) {
+                        continue;
+                    }
                     let volume = remaining.min(self.trucks[t].truck.drum_capacity_m3);
                     match self.earliest_slot(p, t, order, site, volume, target, max_minutes) {
                         Slot::Found(c) => {
@@ -497,11 +713,9 @@ impl Planner<'_> {
                 },
                 frozen: false,
             });
-            empty_km += c.empty_km;
             remaining -= c.volume;
             target = c.discharge_end;
         }
-        self.empty_km += empty_km;
         Ok(loads)
     }
 
@@ -576,119 +790,16 @@ impl Planner<'_> {
     }
 }
 
-fn measure(loads: &[Load], unplanned: &[Unplanned], orders: &[Order], empty_km: f64) -> Metrics {
-    let by_id: HashMap<&OrderId, &Order> = orders.iter().map(|o| (&o.id, o)).collect();
-    let mut m = Metrics {
-        loads: loads.len(),
-        unplanned_orders: unplanned.len(),
-        empty_km,
-        ..Metrics::default()
-    };
-    for order_loads in loads.chunk_by(|a, b| a.order == b.order) {
-        let Some(order) = by_id.get(&order_loads[0].order) else {
-            continue;
-        };
-        // Sequence numbers aren't arrival order once a plant batches loads out of turn.
-        let mut order_loads = order_loads.to_vec();
-        order_loads.sort_by_key(|l| l.eta_on_site);
-        m.planned_orders += 1;
-        m.lateness_minutes +=
-            minutes((order_loads[0].eta_on_site - order.requested_start).max(TimeDelta::zero()));
-        for pair in order_loads.windows(2) {
-            let gap = minutes(pair[1].eta_on_site - discharge_end(&pair[0], order));
-            m.max_gap_minutes = m.max_gap_minutes.max(gap);
-            if gap > f64::from(order.max_gap_minutes) {
-                m.gaps_over_limit += 1;
-            }
-        }
-    }
-    m
-}
-
 #[cfg(test)]
 mod tests {
-    use chrono::TimeZone;
-    use domain::{Customer, CustomerId, OperatingHours, PlantId, Seed, TruckId};
+    use domain::{Customer, Seed};
     use proptest::prelude::*;
     use rand::{RngExt, SeedableRng, rngs::StdRng};
 
     use super::*;
+    use crate::testkit::*;
     use crate::travel::HaversineTravelTime;
     use crate::verify::violations;
-
-    const WALLDORF: Location = Location {
-        lat: 49.3064,
-        lon: 8.6428,
-    };
-    const HEIDELBERG: Location = Location {
-        lat: 49.3988,
-        lon: 8.6724,
-    };
-    const LEIMEN: Location = Location {
-        lat: 49.3481,
-        lon: 8.6911,
-    };
-    const FRANKFURT: Location = Location {
-        lat: 50.1109,
-        lon: 8.6821,
-    };
-
-    fn at(h: u32, m: u32) -> DateTime<Utc> {
-        Berlin
-            .with_ymd_and_hms(2026, 11, 10, h, m, 0)
-            .unwrap()
-            .with_timezone(&Utc)
-    }
-
-    fn plant(id: &str, location: Location, bays: u32, status: PlantStatus) -> Plant {
-        Plant {
-            id: PlantId(id.into()),
-            location,
-            loading_bays: bays,
-            batching_rate_m3_per_h: 120.0,
-            operating_hours: OperatingHours {
-                open: "05:00:00".parse().unwrap(),
-                close: "20:00:00".parse().unwrap(),
-            },
-            status,
-        }
-    }
-
-    fn truck(id: &str, home: &str, capacity: f64, status: TruckStatus) -> Truck {
-        Truck {
-            id: TruckId(id.into()),
-            home_plant: PlantId(home.into()),
-            drum_capacity_m3: capacity,
-            status,
-            last_position: None,
-        }
-    }
-
-    fn order(id: &str, site: &str, volume: f64, start: DateTime<Utc>) -> Order {
-        Order {
-            id: OrderId(id.into()),
-            customer: CustomerId("10001001".into()),
-            site: SiteId(site.into()),
-            mix: MixCode("C30/37-XC4".into()),
-            total_volume_m3: volume,
-            requested_start: start,
-            pour_rate_m3_per_h: 30.0,
-            max_gap_minutes: 20,
-            status: OrderStatus::Pending,
-        }
-    }
-
-    fn world(plants: Vec<Plant>, trucks: Vec<Truck>, sites: &[(&str, Location)]) -> World {
-        World {
-            plants,
-            trucks,
-            sites: sites
-                .iter()
-                .map(|(id, loc)| (SiteId((*id).into()), *loc))
-                .collect(),
-            mixes: [(MixCode("C30/37-XC4".into()), 90)].into(),
-        }
-    }
 
     fn run(world: &World, orders: &[Order], now: DateTime<Utc>) -> Plan {
         run_frozen(world, orders, &[], now)
@@ -701,23 +812,6 @@ mod tests {
         let broken = violations(&plan, world, orders, frozen, &travel);
         assert!(broken.is_empty(), "{broken:#?}");
         plan
-    }
-
-    /// The loads as the plant reports them once batching has started.
-    fn batched(loads: &[Load]) -> Vec<Load> {
-        loads
-            .iter()
-            .map(|l| Load {
-                frozen: true,
-                ..l.clone()
-            })
-            .collect()
-    }
-
-    fn five_trucks() -> Vec<Truck> {
-        (1..=5)
-            .map(|i| truck(&format!("t{i}"), "p", 9.0, TruckStatus::Available))
-            .collect()
     }
 
     fn volumes(plan: &Plan) -> Vec<f64> {
@@ -1093,104 +1187,6 @@ mod tests {
             check(&crowded).iter().any(|v| v.contains("bays")),
             "crowded"
         );
-    }
-
-    fn place(rng: &mut StdRng, spread: f64) -> Location {
-        Location {
-            lat: 49.35 + rng.random_range(-spread..spread),
-            lon: 8.65 + rng.random_range(-spread..spread),
-        }
-    }
-
-    /// A random world: plants (some offline), trucks (some out of service), sites (some far away),
-    /// mixes with short and long limits, and orders around the clock.
-    fn random_world(seed: u64) -> (World, Vec<Order>, DateTime<Utc>) {
-        let mut rng = StdRng::seed_from_u64(seed);
-        let now = at(4, 0);
-        let plants: Vec<Plant> = (0..rng.random_range(1..=3))
-            .map(|i| {
-                let status = if rng.random_bool(0.8) {
-                    PlantStatus::Online
-                } else {
-                    PlantStatus::Offline
-                };
-                let mut p = plant(
-                    &format!("p{i}"),
-                    place(&mut rng, 0.15),
-                    rng.random_range(1..=3),
-                    status,
-                );
-                p.batching_rate_m3_per_h = rng.random_range(60.0..150.0);
-                p.operating_hours.open = format!("0{}:00:00", rng.random_range(5..=7))
-                    .parse()
-                    .unwrap();
-                p.operating_hours.close = format!("{}:00:00", rng.random_range(17..=20))
-                    .parse()
-                    .unwrap();
-                p
-            })
-            .collect();
-        let trucks = (0..rng.random_range(1..=8))
-            .map(|i| {
-                let home = &plants[rng.random_range(0..plants.len())].id.0;
-                let status = if rng.random_bool(0.15) {
-                    TruckStatus::OutOfService
-                } else {
-                    TruckStatus::Available
-                };
-                truck(
-                    &format!("t{i}"),
-                    home,
-                    rng.random_range(4..=15) as f64,
-                    status,
-                )
-            })
-            .collect();
-        let sites: Vec<(String, Location)> = (0..rng.random_range(2..=8))
-            .map(|i| {
-                let spread = if rng.random_bool(0.2) { 0.8 } else { 0.25 };
-                (format!("s{i}"), place(&mut rng, spread))
-            })
-            .collect();
-        let mixes = [
-            (MixCode("short".into()), rng.random_range(45..=75)),
-            (MixCode("long".into()), 150),
-        ];
-        let orders = (0..rng.random_range(1..=12))
-            .map(|i| {
-                let site = &sites[rng.random_range(0..sites.len())].0;
-                let start = now + TimeDelta::minutes(15 * rng.random_range(0..120));
-                let mut o = order(
-                    &format!("o{i}"),
-                    site,
-                    rng.random_range(1..=160) as f64 / 2.0,
-                    start,
-                );
-                o.mix = mixes[rng.random_range(0..2)].0.clone();
-                o.pour_rate_m3_per_h = rng.random_range(10.0..60.0);
-                o.max_gap_minutes = rng.random_range(10..=30);
-                o.status = [
-                    OrderStatus::Pending,
-                    OrderStatus::Confirmed,
-                    OrderStatus::Cancelled,
-                ][rng.random_range(0..3)];
-                o
-            })
-            .collect();
-        let sites = sites
-            .into_iter()
-            .map(|(id, loc)| (SiteId(id), loc))
-            .collect();
-        (
-            World {
-                plants,
-                trucks,
-                sites,
-                mixes: mixes.into(),
-            },
-            orders,
-            now,
-        )
     }
 
     proptest! {

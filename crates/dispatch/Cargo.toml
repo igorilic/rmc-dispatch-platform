@@ -13,6 +13,7 @@ chrono.workspace = true
 chrono-tz.workspace = true
 domain.workspace = true
 futures.workspace = true
+rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
@@ -26,7 +27,6 @@ utoipa-swagger-ui.workspace = true
 [dev-dependencies]
 ingest = { path = "../ingest" }
 proptest.workspace = true
-rand.workspace = true
 testcontainers.workspace = true
 tower.workspace = true
 

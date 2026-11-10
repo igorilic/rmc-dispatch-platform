@@ -3,6 +3,9 @@
 pub mod api;
 pub mod intake;
 pub mod planner;
+pub mod search;
 pub mod store;
+#[cfg(test)]
+mod testkit;
 pub mod travel;
 pub mod verify;
