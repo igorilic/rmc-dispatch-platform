@@ -8,7 +8,7 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use chrono::{DateTime, TimeDelta, TimeZone, Utc};
 use chrono_tz::Europe::Berlin;
-use domain::{Order, OrderStatus, PlantId, PlantStatus, SiteId};
+use domain::{Order, OrderStatus, PlantId, PlantPlan, PlantStatus, SiteId};
 use serde::{Deserialize, Serialize};
 use tracing::error;
 use utoipa::{IntoParams, OpenApi, ToSchema};
@@ -59,6 +59,7 @@ pub struct SiteDelay {
         latest_plan,
         get_plan,
         get_diff,
+        plant_plan,
         set_plant_status,
         delay_site
     )
@@ -76,6 +77,7 @@ pub fn router(store: Store, jobs: Jobs, clock: fn() -> DateTime<Utc>) -> Router 
         .route("/plans/latest", get(latest_plan))
         .route("/plans/{version}", get(get_plan))
         .route("/plans/{version}/diff", get(get_diff))
+        .route("/plants/{id}/plan", get(plant_plan))
         .route("/plants/{id}/status", put(set_plant_status))
         .route("/sites/{id}/delays", post(delay_site))
         .with_state(AppState { store, jobs, clock })
@@ -180,6 +182,19 @@ async fn get_diff(
 ) -> Result<Json<Diff>, StatusCode> {
     let found = s.store.diff(version).await.map_err(internal)?;
     found.flatten().map(Json).ok_or(StatusCode::NOT_FOUND)
+}
+
+/// A plant's slice of the latest plan: its loads by batch time, each with its mix. The
+/// plant-agent fetches it to batch from. Before the first plan, `version` is `null` and there are
+/// no loads.
+#[utoipa::path(get, path = "/plants/{id}/plan", params(("id" = String, Path)),
+    responses((status = 200, body = PlantPlan), (status = 404, description = "Unknown plant")))]
+async fn plant_plan(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<PlantPlan>, StatusCode> {
+    let found = s.store.plant_plan(&PlantId(id)).await.map_err(internal)?;
+    Ok(Json(found.ok_or(StatusCode::NOT_FOUND)?))
 }
 
 /// Sets a plant online or offline, then re-dispatches.

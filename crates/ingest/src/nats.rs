@@ -1,12 +1,15 @@
 //! NATS JetStream: the `EVENTS` stream for canonical events, the `DLQ` stream for dead letters,
-//! and the `ingest-dedup` KV bucket for order idempotency keys.
+//! and the `ingest-dedup` KV bucket for order and batch-ticket idempotency keys.
 //!
 //! Deduplication works in two layers:
 //! - Every event is published with its id as `Nats-Msg-Id`, so JetStream drops a repeat within
-//!   its 2-minute window. That is enough for telematics, whose duplicates arrive seconds apart.
-//! - Order keys are also kept in the KV for `DEDUP_TTL_DAYS`, because rheinbau's snapshots repeat
-//!   the same orders for days. The key is checked first and written only after the publish is
-//!   acknowledged; a crash between the two is covered by the message-id window.
+//!   its 2-minute window. That is enough for truck telematics, whose duplicates arrive seconds apart.
+//! - Order and batch-ticket keys are also kept in the KV for `DEDUP_TTL_DAYS`. Rheinbau's
+//!   snapshots repeat the same orders for days, and a plant's outbox resends a ticket whose
+//!   acknowledgement was lost only after its link is back, which can be well over 2 minutes later.
+//!   Both are a few events per order, so the KV stays small. The key is checked first and written
+//!   only after the publish is acknowledged; a crash between the two is covered by the message-id
+//!   window.
 //!
 //! Every NATS call retries with exponential backoff: 0.1 s doubling to 3.2 s, 6 attempts. The
 //! caller then decides: a webhook answers 503, MQTT doesn't ack, an SFTP file stays put.
@@ -151,12 +154,14 @@ impl Bus {
         event: &EventEnvelope,
         subject: String,
     ) -> Result<Published, BusError> {
-        let is_order = matches!(
+        let kept = matches!(
             event.event,
-            Event::OrderUpserted { .. } | Event::OrderCancelled { .. }
+            Event::OrderUpserted { .. }
+                | Event::OrderCancelled { .. }
+                | Event::BatchTicketIssued { .. }
         );
         // KV keys allow only a few characters, so store a hash of the id.
-        let kv_key = is_order.then(|| {
+        let kv_key = kept.then(|| {
             Sha256::digest(event.id.as_bytes())
                 .iter()
                 .map(|b| format!("{b:02x}"))

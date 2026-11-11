@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT v.version AS \"version?\", v.created_at AS \"created_at?\"\n               FROM plants p LEFT JOIN plans v ON v.version = (SELECT max(version) FROM plans)\n               WHERE p.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "version?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "plans",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "created_at?",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "plans",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "7d8292a78cd85a56ddc3cd543b40f77e93e0a34bdb758189cb65f1ff628c8a99"
+}

@@ -322,6 +322,39 @@ mod tests {
         );
     }
 
+    /// The plant-agent and the simulators send `domain::PlantTicket`; this parser must read it.
+    #[test]
+    fn a_ticket_as_plants_send_it_maps() {
+        let sent = domain::PlantTicket {
+            plant: PlantId("plant-walldorf".into()),
+            ticket_no: "WAL-E000001".into(),
+            vehicle: TruckId("truck-25".into()),
+            ts_ms: 1794240261843,
+            event: DeliveryStatus::Loading,
+            mix: MixCode("C30/37-XC4".into()),
+            volume_m3: 9.0,
+            order: Some(OrderId("10001001/BW-4711".into())),
+            load_no: Some(2),
+        };
+        let mapped = event(&sent.topic(), serde_json::to_value(&sent).unwrap()).unwrap();
+        assert_eq!(mapped.id, "WAL-E000001:loading:1794240261843");
+        assert_eq!(
+            mapped.event,
+            Event::BatchTicketIssued {
+                plant: sent.plant,
+                ticket_no: sent.ticket_no,
+                truck: sent.vehicle,
+                event: sent.event,
+                mix: sent.mix,
+                volume_m3: sent.volume_m3,
+                load: Some(LoadRef {
+                    order: OrderId("10001001/BW-4711".into()),
+                    sequence: 2
+                }),
+            }
+        );
+    }
+
     #[test]
     fn messages_that_contradict_master_data_or_their_topic_are_rejected() {
         let wrong_vehicle = event(

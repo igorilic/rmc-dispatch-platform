@@ -17,7 +17,9 @@ use dispatch::store::{Store, Ticket};
 use dispatch::travel::HaversineTravelTime;
 use dispatch::verify::violations;
 use dispatch::worker;
-use domain::{DeliveryStatus, LoadRef, Order, OrderStatus, PlantStatus, Seed};
+use domain::{
+    DeliveryStatus, Load, LoadRef, Order, OrderStatus, PlantId, PlantPlan, PlantStatus, Seed,
+};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -221,6 +223,7 @@ async fn the_openapi_document_lists_every_route() {
             "/plans/latest",
             "/plans/{version}",
             "/plans/{version}/diff",
+            "/plants/{id}/plan",
             "/plants/{id}/status",
             "/sites/{id}/delays",
         ]
@@ -233,6 +236,7 @@ async fn the_openapi_document_lists_every_route() {
         "Diff",
         "Trigger",
         "Redispatched",
+        "PlantPlan",
     ] {
         assert!(
             doc["components"]["schemas"][schema].is_object(),
@@ -378,6 +382,59 @@ async fn a_site_delay_moves_todays_pours_there_and_leaves_tomorrow_alone() {
     )
     .await;
     assert_eq!(unknown.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_plant_gets_its_slice_of_the_latest_plan() {
+    let s = setup(&[
+        order("BW-1", 42.5, at(9, 0)),
+        order("BW-2", 18.0, at(10, 30)),
+    ])
+    .await;
+    let before: PlantPlan = call(&s.router, "GET", "/plants/plant-walldorf/plan")
+        .await
+        .json();
+    assert_eq!(
+        before,
+        PlantPlan {
+            plant: PlantId("plant-walldorf".into()),
+            version: None,
+            created_at: None,
+            loads: Vec::new(),
+        },
+        "no plan yet"
+    );
+
+    let v1: VersionedPlan = call(&s.router, "POST", "/plans").await.json();
+    let world = s.store.world().await.unwrap();
+    for plant in &world.plants {
+        let reply = call(&s.router, "GET", &format!("/plants/{}/plan", plant.id.0)).await;
+        assert_eq!(reply.status, StatusCode::OK);
+        let slice: PlantPlan = reply.json();
+        assert_eq!(slice.plant, plant.id);
+        assert_eq!(slice.version, Some(v1.version));
+        assert_eq!(slice.created_at, Some(v1.plan.created_at));
+
+        let mut expected: Vec<Load> = v1
+            .plan
+            .loads
+            .iter()
+            .filter(|l| l.planned_plant == plant.id)
+            .cloned()
+            .collect();
+        expected.sort_by_key(|l| (l.planned_batch_at, l.order.clone(), l.sequence));
+        let loads: Vec<Load> = slice.loads.iter().map(|l| l.load.clone()).collect();
+        assert_eq!(loads, expected, "{}'s loads, by batch time", plant.id.0);
+        assert!(slice.loads.iter().all(|l| l.mix.0 == "C30/37-XC4"));
+    }
+    assert!(!v1.plan.loads.is_empty());
+
+    assert_eq!(
+        call(&s.router, "GET", "/plants/plant-nowhere/plan")
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
 }
 
 #[tokio::test]

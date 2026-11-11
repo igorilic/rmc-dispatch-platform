@@ -16,13 +16,12 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use chrono::{DateTime, TimeDelta, Timelike, Utc};
 use chrono_tz::Europe::Berlin;
-use domain::{DeliveryStatus, Seed};
+use domain::{DeliveryStatus, MixCode, OrderId, PlantId, PlantTicket, Seed, TruckId};
 use reqwest::header::CONTENT_TYPE;
 use rumqttc::{AsyncClient, MqttOptions, QoS};
 use serde_json::{Value, json};
 use simulators::customers::{bauwerk_json, neckar_version, neckar_xml};
 use simulators::orders::GeneratedOrder;
-use simulators::plant::Ticket;
 use tokio::time::{Instant, sleep};
 
 const MIX: &str = "C30/37-XC4";
@@ -287,22 +286,22 @@ impl Demo {
             DeliveryStatus::Loaded,
         ];
         for (i, event) in (0..).zip(events) {
-            let ticket = Ticket {
-                plant,
-                ticket_no: &ticket_no,
-                vehicle: str_of(load, "planned_truck"),
+            let ticket = PlantTicket {
+                plant: PlantId(plant.to_owned()),
+                ticket_no: ticket_no.clone(),
+                vehicle: TruckId(str_of(load, "planned_truck").to_owned()),
                 ts_ms: batch_at + i * 1000,
                 event,
-                mix: MIX,
+                mix: MixCode(MIX.to_owned()),
                 volume_m3: load["volume_m3"].as_f64().unwrap_or_default(),
-                order: Some(order),
+                order: Some(OrderId(order.to_owned())),
                 load_no: load["sequence"]
                     .as_u64()
                     .and_then(|n| u32::try_from(n).ok()),
             };
             self.mqtt
                 .publish(
-                    format!("plants/{plant}/tickets"),
+                    ticket.topic(),
                     QoS::AtLeastOnce,
                     false,
                     serde_json::to_vec(&ticket)?,

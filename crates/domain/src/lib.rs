@@ -7,9 +7,11 @@
 //! planned [`Load`]s, one per truck trip. A [`Delivery`] only exists once batching for a load starts.
 //! Until then an order has no deliveries at all.
 
+mod edge;
 mod events;
 mod seed;
 
+pub use edge::{PlantLoad, PlantPlan, PlantTicket};
 pub use events::{Channel, DrumRotation, Event, EventEnvelope, EventSource};
 pub use seed::Seed;
 

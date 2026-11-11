@@ -10,8 +10,8 @@ use std::time::Duration;
 use chrono::{DateTime, TimeDelta, Utc};
 use domain::{
     Address, CustomerId, Delivery, DeliveryStatus, Load, LoadRef, Location, MixCode,
-    OperatingHours, Order, OrderId, OrderStatus, Plant, PlantId, PlantStatus, PostalCodeGeocoder,
-    Seed, Site, SiteId, TimeWindow, Truck, TruckId, TruckStatus,
+    OperatingHours, Order, OrderId, OrderStatus, Plant, PlantId, PlantLoad, PlantPlan, PlantStatus,
+    PostalCodeGeocoder, Seed, Site, SiteId, TimeWindow, Truck, TruckId, TruckStatus,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -735,6 +735,60 @@ impl Store {
                 unplanned: row.unplanned.0,
                 metrics: row.metrics.0,
             },
+        }))
+    }
+
+    /// A plant's loads in the latest version, by batch time, each with its order's mix. `None` for
+    /// an unknown plant.
+    pub async fn plant_plan(&self, plant: &PlantId) -> Result<Option<PlantPlan>, StoreError> {
+        let Some(head) = sqlx::query!(
+            r#"SELECT v.version AS "version?", v.created_at AS "created_at?"
+               FROM plants p LEFT JOIN plans v ON v.version = (SELECT max(version) FROM plans)
+               WHERE p.id = $1"#,
+            plant.0,
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        else {
+            return Ok(None);
+        };
+        let mut loads = Vec::new();
+        if let Some(version) = head.version {
+            let rows = sqlx::query!(
+                "SELECT l.order_id, l.sequence, l.volume_m3, l.plant_id, l.truck_id, l.batch_at, l.eta_on_site,
+                     l.window_start, l.window_end, l.frozen, o.mix
+                 FROM loads l JOIN orders o ON o.id = l.order_id
+                 WHERE l.plan_version = $1 AND l.plant_id = $2
+                 ORDER BY l.batch_at, l.order_id, l.sequence",
+                version,
+                plant.0,
+            )
+            .fetch_all(&self.pool)
+            .await?;
+            for r in rows {
+                let load = Load::try_from(LoadRow {
+                    order_id: r.order_id,
+                    sequence: r.sequence,
+                    volume_m3: r.volume_m3,
+                    plant_id: r.plant_id,
+                    truck_id: r.truck_id,
+                    batch_at: r.batch_at,
+                    eta_on_site: r.eta_on_site,
+                    window_start: r.window_start,
+                    window_end: r.window_end,
+                    frozen: r.frozen,
+                })?;
+                loads.push(PlantLoad {
+                    load,
+                    mix: MixCode(r.mix),
+                });
+            }
+        }
+        Ok(Some(PlantPlan {
+            plant: plant.clone(),
+            version: head.version,
+            created_at: head.created_at,
+            loads,
         }))
     }
 }

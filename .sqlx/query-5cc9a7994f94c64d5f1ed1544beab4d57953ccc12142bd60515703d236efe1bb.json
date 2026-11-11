@@ -1,0 +1,149 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT l.order_id, l.sequence, l.volume_m3, l.plant_id, l.truck_id, l.batch_at, l.eta_on_site,\n                     l.window_start, l.window_end, l.frozen, o.mix\n                 FROM loads l JOIN orders o ON o.id = l.order_id\n                 WHERE l.plan_version = $1 AND l.plant_id = $2\n                 ORDER BY l.batch_at, l.order_id, l.sequence",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "order_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "loads",
+            "name": "order_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "sequence",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "loads",
+            "name": "sequence"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "volume_m3",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "loads",
+            "name": "volume_m3"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "plant_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "loads",
+            "name": "plant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "truck_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "loads",
+            "name": "truck_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "batch_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "loads",
+            "name": "batch_at"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "eta_on_site",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "loads",
+            "name": "eta_on_site"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "window_start",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "loads",
+            "name": "window_start"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "window_end",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "loads",
+            "name": "window_end"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "frozen",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "loads",
+            "name": "frozen"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "mix",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "orders",
+            "name": "mix"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "5cc9a7994f94c64d5f1ed1544beab4d57953ccc12142bd60515703d236efe1bb"
+}

@@ -9,8 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use domain::{DeliveryStatus, MixCode, Plant, TruckId};
-use serde::Serialize;
+use domain::{DeliveryStatus, MixCode, Plant, PlantTicket, TruckId};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc};
 use tracing::info;
 
@@ -26,24 +25,6 @@ pub struct PlantSim {
     modem: Mutex<Modem>,
     out: mpsc::Sender<Outgoing>,
     clock: Clock,
-}
-
-/// A batch ticket as the plant's batch computer sends it on `plants/{id}/tickets`.
-#[derive(Debug, Serialize)]
-pub struct Ticket<'a> {
-    pub plant: &'a str,
-    pub ticket_no: &'a str,
-    pub vehicle: &'a str,
-    pub ts_ms: i64,
-    pub event: DeliveryStatus,
-    pub mix: &'a str,
-    pub volume_m3: f64,
-    /// The order and load number dispatch planned. The simulated plants batch for random trips,
-    /// so they leave both out; `make demo` sends them.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub order: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub load_no: Option<u32>,
 }
 
 impl PlantSim {
@@ -112,19 +93,20 @@ impl PlantSim {
         volume_m3: f64,
     ) -> anyhow::Result<()> {
         info!(plant = %self.plant.id.0, ticket_no, truck = %truck.0, ?event, "batch ticket");
-        let ticket = Ticket {
-            plant: &self.plant.id.0,
-            ticket_no,
-            vehicle: &truck.0,
+        // The simulated plants batch for random trips, so their tickets name no order or load.
+        let ticket = PlantTicket {
+            plant: self.plant.id.clone(),
+            ticket_no: ticket_no.to_owned(),
+            vehicle: truck.clone(),
             ts_ms: self.clock.now().timestamp_millis(),
             event,
-            mix: &mix.0,
+            mix: mix.clone(),
             volume_m3,
             order: None,
             load_no: None,
         };
         let msg = Outgoing {
-            topic: format!("plants/{}/tickets", self.plant.id.0),
+            topic: ticket.topic(),
             payload: serde_json::to_vec(&ticket)?,
         };
         let wire = self.modem.lock().await.send(msg);

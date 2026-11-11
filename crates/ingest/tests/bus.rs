@@ -9,7 +9,10 @@ use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
 use common::{customers, nats, sample};
-use domain::{Channel, Event, EventEnvelope, EventSource, Location, Seed, TruckId};
+use domain::{
+    Channel, DeliveryStatus, Event, EventEnvelope, EventSource, LoadRef, Location, MixCode,
+    OrderId, PlantId, Seed, TruckId,
+};
 use ingest::mapping::{Delivery, Mapping};
 use ingest::nats::{Bus, DLQ, EVENTS, Published};
 use tracing::Instrument;
@@ -121,6 +124,46 @@ async fn telematics_duplicates_are_dropped_by_message_id() {
     assert_eq!(bus.publish(&event).await.unwrap(), Published::New);
     assert_eq!(bus.publish(&event).await.unwrap(), Published::Duplicate);
     assert_eq!(bus.count(EVENTS).await.unwrap(), 1);
+}
+
+/// A plant's outbox resends a ticket whose acknowledgement was lost in a cut. The resend comes
+/// after the cut, which can outlast JetStream's 2-minute message-id window, so the KV must catch it.
+#[tokio::test]
+async fn a_ticket_resent_after_the_message_id_window_is_still_a_duplicate() {
+    let (_nats, url) = nats().await;
+    let bus = Bus::connect(&url, TTL).await.unwrap();
+    let at = Utc.with_ymd_and_hms(2026, 11, 11, 9, 20, 0).unwrap();
+    let ticket = EventEnvelope {
+        id: "WAL-000001:batching:1794388800000".into(),
+        occurred_at: at,
+        received_at: at,
+        source: EventSource {
+            integration: "plants".into(),
+            channel: Channel::Mqtt,
+            schema_version: None,
+            reference: "plants/plant-walldorf/tickets".into(),
+        },
+        event: Event::BatchTicketIssued {
+            plant: PlantId("plant-walldorf".into()),
+            ticket_no: "WAL-000001".into(),
+            truck: TruckId("truck-07".into()),
+            event: DeliveryStatus::Batching,
+            mix: MixCode("C30/37-XC4".into()),
+            volume_m3: 9.0,
+            load: Some(LoadRef {
+                order: OrderId("10001001/BW-4711".into()),
+                sequence: 1,
+            }),
+        },
+    };
+    assert_eq!(bus.publish(&ticket).await.unwrap(), Published::New);
+
+    // Deleting the stream forgets every message id, as the end of the window would.
+    let js = async_nats::jetstream::new(async_nats::connect(&url).await.unwrap());
+    js.delete_stream(EVENTS).await.unwrap();
+    let later = Bus::connect(&url, TTL).await.unwrap();
+    assert_eq!(later.publish(&ticket).await.unwrap(), Published::Duplicate);
+    assert_eq!(later.count(EVENTS).await.unwrap(), 0);
 }
 
 #[tokio::test]
