@@ -7,8 +7,9 @@
 //!    MQTT like any other status, and dispatch re-dispatches.
 //! 4. The second order's site is delayed 30 minutes through the dispatch API.
 //!
-//! It prints the plan and every diff. Settings come from environment variables; the defaults
-//! reach a local stack, and compose's `demo` service points them at the containers.
+//! It prints the plan and every diff, then links to the first order's trace in Jaeger and to the
+//! Grafana dashboard. Settings come from environment variables; the defaults reach a local stack,
+//! and compose's `demo` service points them at the containers.
 
 use std::time::Duration;
 
@@ -40,6 +41,9 @@ struct Demo {
     /// Where a person reaches dispatch, for the closing hint.
     dispatch_public: String,
     ingest: String,
+    /// Where a person reaches Jaeger and Grafana, for the closing links.
+    jaeger_public: String,
+    grafana_public: String,
     mqtt: AsyncClient,
     timeout: Duration,
 }
@@ -67,6 +71,8 @@ async fn main() -> anyhow::Result<()> {
             &env("DISPATCH_URL", "http://localhost:8081"),
         ),
         ingest: env("INGEST_URL", "http://localhost:8080"),
+        jaeger_public: env("JAEGER_PUBLIC_URL", "http://localhost:16686"),
+        grafana_public: env("GRAFANA_PUBLIC_URL", "http://localhost:3000"),
         mqtt,
         timeout: Duration::from_secs(env("DEMO_TIMEOUT_SECS", "120").parse()?),
     };
@@ -133,7 +139,8 @@ impl Demo {
             berlin(start),
             berlin(b_start)
         );
-        self.post_order("bauwerk-ag", "application/json", bauwerk_json(&a)?)
+        let trace_a = self
+            .post_order("bauwerk-ag", "application/json", bauwerk_json(&a)?)
             .await?;
         let version = neckar_version(&b.ship_to, &neckar_sites);
         self.post_order("neckar-infra", "application/xml", neckar_xml(&b, version)?)
@@ -239,6 +246,16 @@ impl Demo {
              Explore: {0}/plans/latest, {0}/plans/{{version}}/diff, Swagger UI at {0}/swagger-ui/",
             self.dispatch_public
         );
+        if let Some(trace) = trace_a {
+            println!(
+                "Trace of {id_a}, from the webhook to the re-dispatch that planned it: {}/trace/{trace}",
+                self.jaeger_public
+            );
+        }
+        println!(
+            "Metrics: the Dispatch overview dashboard at {}",
+            self.grafana_public
+        );
         Ok(())
     }
 
@@ -295,12 +312,13 @@ impl Demo {
         Ok(())
     }
 
+    /// Posts an order like the customer's system does, and returns the delivery's trace id.
     async fn post_order(
         &self,
         integration: &str,
         content_type: &str,
         body: String,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<String>> {
         let token_key = format!(
             "WEBHOOK_TOKEN_{}",
             integration.to_uppercase().replace('-', "_")
@@ -322,7 +340,8 @@ impl Demo {
                 response.text().await.unwrap_or_default()
             );
         }
-        Ok(())
+        let accepted: Value = serde_json::from_str(&response.text().await?)?;
+        Ok(accepted["trace_id"].as_str().map(str::to_owned))
     }
 
     /// The JSON at `path` on the dispatch API, or `None` for 404.

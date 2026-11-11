@@ -6,13 +6,15 @@ A ready-mix concrete dispatch platform in Rust. It plans which truck carries whi
 which batching plant, so every pour stays continuous and every load is discharged before it
 sets. When a truck breaks down or a site runs late, it re-plans. The full design is in [SPEC.md](SPEC.md).
 
-> **Status: milestone 5 of 9 (re-dispatch).** A simulated world of 25 trucks, three batching
+> **Status: milestone 6 of 9 (observability).** A simulated world of 25 trucks, three batching
 > plants and three contractors sends orders and telematics. Ingest turns all of it into canonical
 > events on NATS JetStream, with no duplicates, and keeps a dead-letter queue for anything it can't
 > map. Dispatch keeps every order in Postgres and re-plans by itself when something changes: a new
 > or changed order, a truck breaking down, a plant going offline, a site running late. Loads that
 > are already batching never move, every plan version passes a hard-constraint checker, and every
-> diff says why each load moved. `make demo` shows it end to end.
+> diff says why each load moved. One trace in Jaeger follows an order from the webhook to the
+> re-dispatch that planned it, and Grafana shows the plan, re-dispatching and ingest at a glance.
+> `make demo` shows it end to end.
 
 ## Prerequisites
 
@@ -51,8 +53,8 @@ Every port binds to `127.0.0.1` only.
 | Mosquitto (MQTT) | `localhost:1883` | anonymous |
 | SFTP | `localhost:2222` | `pourline` / `pourline` |
 | Prometheus | http://localhost:9090 | none |
-| Grafana | http://localhost:3000 | `admin` / `admin` (you're asked to change it on first login) |
-| Jaeger UI | http://localhost:16686, with OTLP on 4317/4318 | none |
+| Grafana | http://localhost:3000, opens on the “Dispatch overview” dashboard | none to view; `admin` / `admin` to edit (you're asked to change it on first login) |
+| Jaeger UI | http://localhost:16686, with OTLP on 4318 (HTTP) and 4317 (gRPC) | none |
 
 These credentials are throwaway local defaults. To override them, copy `.env.example` to `.env`, which is gitignored.
 
@@ -255,9 +257,10 @@ Each diff is printed with a reason per load, for example:
    10001001/DEMO-080657-A   #4    truck-04               mannheim             09:45 → 09:43   follows #2, so the pour stays continuous
 ```
 
-When it's done, the simulators go back to the normal order rate. A broken-down simulated truck is
-back in service after `TRUCK_REPAIR_MINUTES` (default 60). Each step waits at most
-`DEMO_TIMEOUT_SECS` (default 120) for the stack.
+It ends with a Jaeger link to the first order's trace and the Grafana dashboard's address (see
+[Observability](#observability)). When it's done, the simulators go back to the normal order
+rate. A broken-down simulated truck is back in service after `TRUCK_REPAIR_MINUTES` (default 60).
+Each step waits at most `DEMO_TIMEOUT_SECS` (default 120) for the stack.
 
 ### Benchmarks
 
@@ -275,6 +278,58 @@ A repair re-dispatches after the busiest truck breaks down, with the full 500 ms
 budget, so 500 ms of each repair is search time. At 1,000 loads one local search move takes about
 13 ms, because the bay check rescans every interval. That's fast enough for the 1 s target, and it
 is the first thing to index if plans grow.
+
+## Observability
+
+Open Grafana at http://localhost:3000 for metrics and Jaeger at http://localhost:16686 for traces.
+
+### Traces
+
+Each delivery starts a trace in ingest: a webhook request, an SFTP file or an MQTT message. The
+trace crosses NATS in the message's `traceparent` header and continues in dispatch:
+
+```text
+ingest   webhook          bauwerk-ag
+ingest     publish        events.orders.10001001
+dispatch     apply event  order 10001001/DEMO-100017-A, trigger new_order
+dispatch       redispatch version 1, 9 changes
+dispatch         load world · plan · save plan
+```
+
+A truck breakdown looks the same, starting from its `mqtt message`. The three API endpoints that
+trigger a re-dispatch start their own traces. When the worker merges several triggers into one
+run, the run joins the first trigger's trace and links to the others. A webhook's `202` response
+carries the delivery's `trace_id`, so http://localhost:16686/trace/{trace_id} finds it. Dead
+letters show as red spans.
+
+GPS and drum readings aren't traced. At about two a second they would bury every other trace, and
+they never trigger a re-dispatch. Status reports, batch tickets and every dead letter are traced.
+Spans carry ids and counts, never payloads. Jaeger keeps them in memory, so `make down` clears them.
+
+### Metrics
+
+Prometheus (http://localhost:9090) scrapes ingest and dispatch every 5 s, on ports that stay
+inside the compose network:
+
+| Metric | What it measures |
+|---|---|
+| `pourline_ingest_records_total{integration, outcome}` | Records by customer (plus `telematics`, `plants`): `published`, `duplicate`, `dead_lettered` |
+| `pourline_dlq_messages{integration}` | Dead letters waiting for a replay, read every 15 s |
+| `pourline_redispatch_duration_seconds{outcome}` | One re-dispatch run, from loading the world to storing the version: `new_version`, `unchanged`, `failed` |
+| `pourline_redispatch_triggers_total{kind}` | What drives re-planning, such as `new_order` or `truck_out_of_service` |
+| `pourline_plan_pour_gaps{bucket}` | The current plan's waits between consecutive loads, per range of minutes: `0-5`, `5-10`, `10-20`, `20-30`, `30+` |
+| `pourline_plan_*` | The current plan: version, planned and unplanned orders, loads, longest gap, gaps over the limit, lateness, empty km |
+
+The plan gauges always describe the current version. Dispatch sets them again from the latest
+stored version when it starts. The “Dispatch overview” dashboard lives in
+`deploy/grafana/dashboards/`: edit the JSON, not the UI. A test fails if it queries a metric that
+no service defines. Edge sync lag arrives with milestone 7's plant-agent.
+
+| Variable | Default |
+|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4318`; compose sets `http://jaeger:4318`. If Jaeger is down, spans are dropped with a warning. |
+| `METRICS_ADDR` (ingest) | `0.0.0.0:9464` |
+| `DISPATCH_METRICS_ADDR` | `0.0.0.0:9465` |
 
 ## Dependencies and security
 
