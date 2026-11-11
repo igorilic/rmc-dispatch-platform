@@ -43,7 +43,10 @@ struct Demo {
     dispatch: String,
     /// Where a person reaches dispatch, for the closing hint.
     dispatch_public: String,
-    ingest: String,
+    /// The customers' webhooks, under the simulators' variable names. In Kubernetes each webhook
+    /// integration has its own Service, so there is no single ingest URL.
+    bauwerk_webhook: String,
+    neckar_webhook: String,
     /// Where a person reaches Jaeger and Grafana, for the closing links.
     jaeger_public: String,
     grafana_public: String,
@@ -73,7 +76,14 @@ async fn main() -> anyhow::Result<()> {
             "DISPATCH_PUBLIC_URL",
             &env("DISPATCH_URL", "http://localhost:8081"),
         ),
-        ingest: env("INGEST_URL", "http://localhost:8080"),
+        bauwerk_webhook: env(
+            "BAUWERK_WEBHOOK_URL",
+            "http://localhost:8080/webhooks/bauwerk-ag",
+        ),
+        neckar_webhook: env(
+            "NECKAR_WEBHOOK_URL",
+            "http://localhost:8080/webhooks/neckar-infra",
+        ),
         jaeger_public: env("JAEGER_PUBLIC_URL", "http://localhost:16686"),
         grafana_public: env("GRAFANA_PUBLIC_URL", "http://localhost:3000"),
         mqtt,
@@ -428,15 +438,20 @@ impl Demo {
             integration.to_uppercase().replace('-', "_")
         );
         let token = env(&token_key, &format!("dev-token-{integration}"));
+        let url = match integration {
+            "bauwerk-ag" => &self.bauwerk_webhook,
+            "neckar-infra" => &self.neckar_webhook,
+            other => bail!("the demo has no webhook URL for {other}"),
+        };
         let response = self
             .http
-            .post(format!("{}/webhooks/{integration}", self.ingest))
+            .post(url)
             .bearer_auth(token)
             .header(CONTENT_TYPE, content_type)
             .body(body)
             .send()
             .await
-            .with_context(|| format!("posting to ingest at {}", self.ingest))?;
+            .with_context(|| format!("posting to ingest at {url}"))?;
         if !response.status().is_success() {
             bail!(
                 "ingest refused the {integration} order: {} {}",

@@ -22,7 +22,7 @@ const TOPIC: &str = "plants/plant-walldorf/tickets";
 
 /// Same image as deploy/compose, with the image's own anonymous-access config.
 async fn mosquitto() -> (ContainerAsync<GenericImage>, String) {
-    let container = GenericImage::new("eclipse-mosquitto", "2.0.22")
+    let container = GenericImage::new("eclipse-mosquitto", "2.1.2-alpine")
         .with_exposed_port(1883.tcp())
         .with_wait_for(WaitFor::message_on_stderr("running"))
         .with_cmd(["mosquitto", "-c", "/mosquitto-no-auth.conf"])

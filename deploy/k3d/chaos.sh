@@ -39,7 +39,9 @@ report() {
 echo "Placing three orders near Walldorf, so its bays are busy during the cut…"
 orders=$(kubectl --context k3d-cloud -n pourline run "chaos-orders-$(date +%s)" --rm -i \
   --restart=Never --quiet --image k3d-pourline-registry:5050/demo:dev --image-pull-policy=Always \
-  --env DISPATCH_URL=http://dispatch:8081 --env INGEST_URL=http://ingest:8080 \
+  --env DISPATCH_URL=http://dispatch:8081 \
+  --env BAUWERK_WEBHOOK_URL=http://ingest:8080/webhooks/bauwerk-ag \
+  --env NECKAR_WEBHOOK_URL=http://ingest:8080/webhooks/neckar-infra \
   --env MQTT_URL=mqtt://mosquitto:1883 -- edge) || { echo "$orders"; exit 1; }
 grep -v '^PLAN_VERSION=' <<<"$orders"
 version=$(sed -n 's/^PLAN_VERSION=//p' <<<"$orders")

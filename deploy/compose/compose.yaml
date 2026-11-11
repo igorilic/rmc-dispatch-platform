@@ -26,7 +26,7 @@ services:
       retries: 30
 
   mosquitto:
-    image: eclipse-mosquitto:2.0.22
+    image: eclipse-mosquitto:2.1.2-alpine
     volumes: ["./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro"]
     ports: ["127.0.0.1:1883:1883"]
     healthcheck:
@@ -136,7 +136,8 @@ services:
     environment:
       DISPATCH_URL: http://dispatch:8081
       DISPATCH_PUBLIC_URL: http://localhost:8081
-      INGEST_URL: http://ingest:8080
+      BAUWERK_WEBHOOK_URL: http://ingest:8080/webhooks/bauwerk-ag
+      NECKAR_WEBHOOK_URL: http://ingest:8080/webhooks/neckar-infra
       MQTT_URL: mqtt://mosquitto:1883
     depends_on:
       dispatch: { condition: service_started }

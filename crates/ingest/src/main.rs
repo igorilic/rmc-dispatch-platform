@@ -1,5 +1,9 @@
 //! The ingest service: webhooks, the SFTP poller and the MQTT subscriber, all publishing canonical
 //! events to NATS JetStream. All settings come from environment variables; see `Config`.
+//!
+//! `INGEST_MODE` picks what one process runs. Compose runs everything in one process. In
+//! Kubernetes, the chart's ingest runs MQTT only, and the operator runs each customer integration
+//! as its own workload with only its own mapping in `MAPPINGS_DIR` (SPEC §7).
 
 use std::fmt::Display;
 use std::net::SocketAddr;
@@ -8,16 +12,45 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::ensure;
+use anyhow::{bail, ensure};
 use domain::{Channel, Seed};
 use ingest::mapping::Mapping;
 use ingest::nats::Bus;
 use ingest::sources::{self, SftpSource, Webhooks};
 use tokio::task::JoinSet;
-use tracing::info;
+use tracing::{info, warn};
+
+/// What this process runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Webhooks, the SFTP poller and MQTT, all in one process.
+    All,
+    /// Telematics and batch tickets over MQTT, the DLQ gauges, and `/healthz`.
+    Mqtt,
+    /// The webhooks of the mappings in `MAPPINGS_DIR`.
+    Webhooks,
+    /// One poll of each SFTP mapping in `MAPPINGS_DIR`, then exit: with an error if a poll
+    /// failed, so the Kubernetes Job that runs it records the failure.
+    SftpOnce,
+}
+
+impl FromStr for Mode {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Mode, String> {
+        Ok(match value {
+            "all" => Mode::All,
+            "mqtt" => Mode::Mqtt,
+            "webhooks" => Mode::Webhooks,
+            "sftp-once" => Mode::SftpOnce,
+            other => return Err(format!("{other:?} is not all, mqtt, webhooks or sftp-once")),
+        })
+    }
+}
 
 /// Settings from the environment. Every variable is optional; `.env.example` lists the defaults.
 struct Config {
+    mode: Mode,
     http_addr: String,
     metrics_addr: SocketAddr,
     nats_url: String,
@@ -56,6 +89,7 @@ impl Config {
             Ok(value)
         };
         Ok(Config {
+            mode: parsed("INGEST_MODE", &var("INGEST_MODE", "all"))?,
             http_addr: var("HTTP_ADDR", "0.0.0.0:8080"),
             metrics_addr: parsed("METRICS_ADDR", &var("METRICS_ADDR", "0.0.0.0:9464"))?,
             nats_url: var("NATS_URL", "nats://localhost:4222"),
@@ -90,11 +124,18 @@ async fn main() -> anyhow::Result<()> {
     let _telemetry = telemetry::init("ingest", config.metrics_addr)?;
     ingest::metrics::describe();
     let seed = Arc::new(Seed::rhine_neckar()?);
-    let mappings = Mapping::load_all(&config.mappings_dir)?;
+    // The MQTT-only ingest serves no customer, so it needs no mappings.
+    let mappings = match config.mode {
+        Mode::Mqtt => Vec::new(),
+        _ => Mapping::load_all(&config.mappings_dir)?,
+    };
     let names: Vec<&str> = mappings.iter().map(|m| m.integration.as_str()).collect();
-    info!(integrations = ?names, dir = %config.mappings_dir.display(), "mappings loaded");
+    info!(mode = ?config.mode, integrations = ?names, dir = %config.mappings_dir.display(), "mappings loaded");
     let bus = Bus::connect(&config.nats_url, config.dedup_ttl).await?;
     info!(nats = %config.nats_url, "connected to NATS JetStream");
+    if config.mode == Mode::SftpOnce {
+        return poll_once(&config.sftp, &bus, &seed, &mappings).await;
+    }
 
     // The integrations that can dead-letter: every mapping, plus MQTT's telematics and plants.
     let integrations: Vec<String> = mappings
@@ -118,20 +159,25 @@ async fn main() -> anyhow::Result<()> {
 
     let mut tasks = JoinSet::new();
     tasks.spawn(async move { Ok(axum::serve(listener, router).await?) });
-    let (mqtt_bus, mqtt_seed, mqtt_url) = (bus.clone(), Arc::clone(&seed), config.mqtt_url.clone());
-    tasks.spawn(async move { Ok(sources::run_mqtt(&mqtt_url, mqtt_bus, mqtt_seed).await?) });
-    let dlq_bus = bus.clone();
-    tasks.spawn(async move {
-        ingest::metrics::watch_dlq(dlq_bus, Duration::from_secs(15), integrations).await;
-        anyhow::Ok(())
-    });
-    // ponytail: one SFTP account for every SFTP integration; give each its own when a second one appears.
-    for mapping in sftp {
-        let (source, bus, seed) = (config.sftp.clone(), bus.clone(), Arc::clone(&seed));
+    if matches!(config.mode, Mode::All | Mode::Mqtt) {
+        let (mqtt_bus, mqtt_seed, mqtt_url) =
+            (bus.clone(), Arc::clone(&seed), config.mqtt_url.clone());
+        tasks.spawn(async move { Ok(sources::run_mqtt(&mqtt_url, mqtt_bus, mqtt_seed).await?) });
+        let dlq_bus = bus.clone();
         tasks.spawn(async move {
-            sources::run_sftp(source, bus, seed, Arc::new(mapping)).await;
+            ingest::metrics::watch_dlq(dlq_bus, Duration::from_secs(15), integrations).await;
             anyhow::Ok(())
         });
+    }
+    if config.mode == Mode::All {
+        // ponytail: one SFTP account for every SFTP integration; give each its own when a second one appears.
+        for mapping in sftp {
+            let (source, bus, seed) = (config.sftp.clone(), bus.clone(), Arc::clone(&seed));
+            tasks.spawn(async move {
+                sources::run_sftp(source, bus, seed, Arc::new(mapping)).await;
+                anyhow::Ok(())
+            });
+        }
     }
 
     // Every task runs forever, so one ending is a failure. Exit and let the container restart.
@@ -147,6 +193,30 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
     }
+}
+
+/// `sftp-once`: polls each SFTP mapping once. Every mapping is polled even if one fails, and any
+/// failure fails the run.
+async fn poll_once(
+    source: &SftpSource,
+    bus: &Bus,
+    seed: &Seed,
+    mappings: &[Mapping],
+) -> anyhow::Result<()> {
+    let mut failed = Vec::new();
+    for mapping in mappings.iter().filter(|m| m.channel == Channel::Sftp) {
+        match sources::poll_sftp(source, bus, seed, mapping).await {
+            Ok(files) => info!(integration = %mapping.integration, files, "SFTP poll done"),
+            Err(error) => {
+                warn!(integration = %mapping.integration, %error, "SFTP poll failed");
+                failed.push(mapping.integration.as_str());
+            }
+        }
+    }
+    if !failed.is_empty() {
+        bail!("the SFTP poll failed for {}", failed.join(", "));
+    }
+    Ok(())
 }
 
 /// Docker stops containers with SIGTERM, which a PID-1 process ignores unless it handles it.
@@ -188,6 +258,20 @@ mod tests {
         assert_eq!(config.mappings_dir, PathBuf::from("customers"));
         assert_eq!(config.max_in_flight, 64);
         assert_eq!(config.dedup_ttl, Duration::from_secs(7 * 24 * 3600));
+        assert_eq!(config.mode, Mode::All);
+    }
+
+    #[test]
+    fn the_mode_picks_what_this_process_runs() {
+        let mode = |value| Config::from_lookup(env(value)).map(|c| c.mode).ok();
+        assert_eq!(mode(&[("INGEST_MODE", "mqtt")]), Some(Mode::Mqtt));
+        assert_eq!(mode(&[("INGEST_MODE", "webhooks")]), Some(Mode::Webhooks));
+        assert_eq!(
+            mode(&[("INGEST_MODE", " sftp-once ")]),
+            Some(Mode::SftpOnce)
+        );
+        assert_eq!(mode(&[("INGEST_MODE", "all")]), Some(Mode::All));
+        assert_eq!(mode(&[("INGEST_MODE", "sftp")]), None);
     }
 
     #[test]

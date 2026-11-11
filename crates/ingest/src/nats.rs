@@ -1,5 +1,7 @@
 //! NATS JetStream: the `EVENTS` stream for canonical events, the `DLQ` stream for dead letters,
-//! and the `ingest-dedup` KV bucket for order and batch-ticket idempotency keys.
+//! the `ingest-dedup` KV bucket for order and batch-ticket idempotency keys, and the
+//! `ingest-status` KV bucket with each customer integration's last successful ingest, which the
+//! operator reports (SPEC §7).
 //!
 //! Deduplication works in two layers:
 //! - Every event is published with its id as `Nats-Msg-Id`, so JetStream drops a repeat within
@@ -24,8 +26,9 @@ use std::time::Duration;
 
 use async_nats::HeaderMap;
 use async_nats::header::NATS_MESSAGE_ID;
-use async_nats::jetstream::{self, kv, stream};
-use chrono::{DateTime, Utc};
+use async_nats::jetstream::context::GetStreamErrorKind;
+use async_nats::jetstream::{self, ErrorCode, kv, stream};
+use chrono::{DateTime, SecondsFormat, Utc};
 use domain::{Channel, Event, EventEnvelope, Seed};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -39,6 +42,7 @@ use crate::metrics;
 pub const EVENTS: &str = "EVENTS";
 pub const DLQ: &str = "DLQ";
 const DEDUP_BUCKET: &str = "ingest-dedup";
+const STATUS_BUCKET: &str = "ingest-status";
 const ATTEMPTS: u32 = 6;
 
 #[derive(Debug, thiserror::Error)]
@@ -94,6 +98,7 @@ pub struct StoredLetter {
 pub struct Bus {
     js: jetstream::Context,
     dedup: kv::Store,
+    status: kv::Store,
 }
 
 impl Bus {
@@ -127,7 +132,15 @@ impl Bus {
             })
             .await
             .map_err(err("create the dedup KV"))?;
-        Ok(Bus { js, dedup })
+        let status = js
+            .create_or_update_key_value(kv::Config {
+                bucket: STATUS_BUCKET.into(),
+                history: 1,
+                ..Default::default()
+            })
+            .await
+            .map_err(err("create the status KV"))?;
+        Ok(Bus { js, dedup, status })
     }
 
     /// Publishes one event, or reports it as a duplicate without publishing it again.
@@ -224,6 +237,9 @@ impl Bus {
 
     /// Maps a delivery and publishes or dead-letters every record. On a NATS failure, records
     /// before it are already published; delivering again is safe because duplicates are skipped.
+    ///
+    /// A delivery with at least one record published or recognised as a duplicate is the
+    /// integration's last successful ingest; one whose records were all dead-lettered isn't.
     pub async fn deliver(
         &self,
         mapping: &Mapping,
@@ -252,6 +268,16 @@ impl Bus {
                     summary.dead_lettered += 1;
                 }
             }
+        }
+        if summary.published + summary.duplicates > 0 {
+            let at = delivery
+                .received_at
+                .to_rfc3339_opts(SecondsFormat::Millis, true);
+            retry("record the last ingest", || {
+                self.status
+                    .put(mapping.integration.as_str(), at.clone().into_bytes().into())
+            })
+            .await?;
         }
         Ok(summary)
     }
@@ -315,6 +341,99 @@ impl Bus {
             .map_err(err("read a stream"))?
             .state
             .messages)
+    }
+}
+
+/// What ingest has recorded about one customer integration.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct IntegrationStatus {
+    pub last_successful_ingest: Option<DateTime<Utc>>,
+    pub dead_letters: u64,
+}
+
+/// Reads what ingest records about its integrations, for the operator. Unlike `Bus::connect`, it
+/// never creates or reconfigures a stream or a bucket, so it can't change ingest's settings, such
+/// as the dedup TTL. Before ingest has run, there is simply nothing recorded. Calls don't retry:
+/// the operator asks again at its next reconcile.
+#[derive(Clone)]
+pub struct StatusReader {
+    js: jetstream::Context,
+}
+
+impl StatusReader {
+    /// Returns at once and keeps connecting in the background, so the operator starts even while
+    /// NATS is down; calls fail until it is up.
+    pub async fn connect(url: &str) -> Result<StatusReader, BusError> {
+        let client = async_nats::ConnectOptions::new()
+            .retry_on_initial_connect()
+            .connect(url)
+            .await
+            .map_err(err("connect"))?;
+        Ok(StatusReader {
+            js: jetstream::new(client),
+        })
+    }
+
+    pub async fn status(&self, integration: &str) -> Result<IntegrationStatus, BusError> {
+        let mut status = IntegrationStatus::default();
+        if let Some(dlq) = self.existing_stream(DLQ).await? {
+            let mut subjects = dlq
+                .info_with_subjects(format!("dlq.{integration}"))
+                .await
+                .map_err(err("read the DLQ's subjects"))?;
+            while let Some(entry) = subjects.next().await {
+                status.dead_letters += entry.map_err(err("read the DLQ's subjects"))?.1 as u64;
+            }
+        }
+        if let Some(store) = self.status_bucket().await?
+            && let Some(value) = store
+                .get(integration)
+                .await
+                .map_err(err("read the status KV"))?
+        {
+            let at = std::str::from_utf8(&value).map_err(err("decode a last ingest"))?;
+            let at = DateTime::parse_from_rfc3339(at).map_err(err("decode a last ingest"))?;
+            status.last_successful_ingest = Some(at.with_timezone(&Utc));
+        }
+        Ok(status)
+    }
+
+    /// Removes an integration's last ingest when the integration is deleted. Its dead letters
+    /// stay, so a re-created integration can still replay them.
+    pub async fn forget(&self, integration: &str) -> Result<(), BusError> {
+        if let Some(store) = self.status_bucket().await? {
+            store
+                .purge(integration)
+                .await
+                .map_err(err("clear a last ingest"))?;
+        }
+        Ok(())
+    }
+
+    async fn status_bucket(&self) -> Result<Option<kv::Store>, BusError> {
+        if self
+            .existing_stream(&format!("KV_{STATUS_BUCKET}"))
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        let store = self
+            .js
+            .get_key_value(STATUS_BUCKET)
+            .await
+            .map_err(err("open the status KV"))?;
+        Ok(Some(store))
+    }
+
+    async fn existing_stream(&self, name: &str) -> Result<Option<stream::Stream>, BusError> {
+        match self.js.get_stream(name).await {
+            Ok(stream) => Ok(Some(stream)),
+            Err(e) if matches!(e.kind(), GetStreamErrorKind::JetStream(j) if j.error_code() == ErrorCode::STREAM_NOT_FOUND) => {
+                Ok(None)
+            }
+            Err(e) => Err(err("open a stream")(e)),
+        }
     }
 }
 

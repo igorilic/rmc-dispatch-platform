@@ -317,7 +317,9 @@ impl russh::client::Handler for TrustAnyHostKey {
     }
 }
 
-async fn poll_sftp(
+/// Ingests every finished `<integration>/*.csv` once and moves it to `processed/`. Returns how many
+/// files it ingested.
+pub async fn poll_sftp(
     source: &SftpSource,
     bus: &Bus,
     seed: &Seed,

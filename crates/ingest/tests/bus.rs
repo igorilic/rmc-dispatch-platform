@@ -14,7 +14,7 @@ use domain::{
     OrderId, PlantId, Seed, TruckId,
 };
 use ingest::mapping::{Delivery, Mapping};
-use ingest::nats::{Bus, DLQ, EVENTS, Published};
+use ingest::nats::{Bus, DLQ, EVENTS, IntegrationStatus, Published, StatusReader};
 use tracing::Instrument;
 
 fn delivery<'a>(mapping: &Mapping, body: &'a [u8]) -> Delivery<'a> {
@@ -204,6 +204,70 @@ async fn poison_messages_land_in_the_dlq_with_every_error() {
     assert!(bus.dead_letters().await.unwrap().is_empty());
     assert_eq!(bus.count(DLQ).await.unwrap(), 0);
     assert!(bus.dead_letter_counts().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn the_status_reader_reports_the_last_successful_ingest_and_dead_letters_per_integration() {
+    let (_nats, url) = nats().await;
+    let reader = StatusReader::connect(&url).await.unwrap();
+    assert_eq!(
+        reader.status("bauwerk-ag").await.unwrap(),
+        IntegrationStatus::default(),
+        "nothing is recorded before ingest has run"
+    );
+    // The reader creates nothing: the stream and the bucket are ingest's to configure.
+    let js = async_nats::jetstream::new(async_nats::connect(&url).await.unwrap());
+    assert!(js.get_stream(DLQ).await.is_err());
+    assert!(js.get_key_value("ingest-status").await.is_err());
+
+    let bus = Bus::connect(&url, TTL).await.unwrap();
+    let (mapping, seed) = (
+        Mapping::load(&customers(), "bauwerk-ag").unwrap(),
+        Seed::rhine_neckar().unwrap(),
+    );
+    let at = |minute| Utc.with_ymd_and_hms(2026, 11, 9, 9, minute, 0).unwrap();
+    let deliver = |body: Vec<u8>, minute| {
+        let (bus, mapping, seed) = (&bus, &mapping, &seed);
+        async move {
+            let delivery = Delivery {
+                received_at: at(minute),
+                ..delivery(mapping, &body)
+            };
+            bus.deliver(mapping, seed, &delivery).await.unwrap()
+        }
+    };
+
+    deliver(sample("bauwerk-ag", "order.json"), 10).await;
+    let status = |dead_letters, minute| IntegrationStatus {
+        last_successful_ingest: Some(at(minute)),
+        dead_letters,
+    };
+    assert_eq!(reader.status("bauwerk-ag").await.unwrap(), status(0, 10));
+
+    // Every record dead-lettered: the integration hasn't ingested anything.
+    deliver(sample("bauwerk-ag", "broken.json"), 20).await;
+    assert_eq!(reader.status("bauwerk-ag").await.unwrap(), status(1, 10));
+
+    // A duplicate got through: the customer's system reached us and we have the order.
+    let duplicate = deliver(sample("bauwerk-ag", "order.json"), 30).await;
+    assert_eq!(duplicate.duplicates, 1);
+    assert_eq!(reader.status("bauwerk-ag").await.unwrap(), status(1, 30));
+
+    assert_eq!(
+        reader.status("neckar-infra").await.unwrap(),
+        IntegrationStatus::default(),
+        "each integration has its own"
+    );
+
+    // An integration that is deleted loses its time, but its dead letters stay for a replay.
+    reader.forget("bauwerk-ag").await.unwrap();
+    assert_eq!(
+        reader.status("bauwerk-ag").await.unwrap(),
+        IntegrationStatus {
+            last_successful_ingest: None,
+            dead_letters: 1
+        }
+    );
 }
 
 #[tokio::test]
