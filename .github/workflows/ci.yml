@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        bin: [simulators, ingest, dispatch, demo]
+        bin: [simulators, ingest, dispatch, demo, plant-agent]
     steps:
       - uses: actions/checkout@v7
       - run: docker build --build-arg BIN=${{ matrix.bin }} -t pourline/${{ matrix.bin }}:ci .
