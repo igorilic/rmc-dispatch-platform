@@ -10,6 +10,9 @@
 //!
 //! Every NATS call retries with exponential backoff: 0.1 s doubling to 3.2 s, 6 attempts. The
 //! caller then decides: a webhook answers 503, MQTT doesn't ack, an SFTP file stays put.
+//!
+//! Each event is published inside a `publish` span, whose trace context goes along in the
+//! `traceparent` header, so dispatch continues the trace (SPEC §8).
 
 use std::fmt::Display;
 use std::future::Future;
@@ -22,7 +25,8 @@ use chrono::{DateTime, Utc};
 use domain::{Channel, Event, EventEnvelope, Seed};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::warn;
+use tracing::field::Empty;
+use tracing::{Instrument, info_span, warn};
 
 use crate::mapping::{Delivery, Mapping};
 
@@ -122,6 +126,23 @@ impl Bus {
 
     /// Publishes one event, or reports it as a duplicate without publishing it again.
     pub async fn publish(&self, event: &EventEnvelope) -> Result<Published, BusError> {
+        let subject = event.subject();
+        let span = info_span!("publish", event = %event.id, %subject, duplicate = Empty);
+        let published = self
+            .publish_in_span(event, subject)
+            .instrument(span.clone())
+            .await;
+        if let Ok(outcome) = published {
+            span.record("duplicate", outcome == Published::Duplicate);
+        }
+        published
+    }
+
+    async fn publish_in_span(
+        &self,
+        event: &EventEnvelope,
+        subject: String,
+    ) -> Result<Published, BusError> {
         let is_order = matches!(
             event.event,
             Event::OrderUpserted { .. } | Event::OrderCancelled { .. }
@@ -144,7 +165,7 @@ impl Bus {
         let payload = serde_json::to_vec(event).map_err(err("encode an event"))?;
         let mut headers = HeaderMap::new();
         headers.insert(NATS_MESSAGE_ID, event.id.as_str());
-        let subject = event.subject();
+        telemetry::inject(&mut headers);
         let ack = retry("publish an event", || async {
             self.js
                 .publish_with_headers(subject.clone(), headers.clone(), payload.clone().into())
@@ -165,7 +186,15 @@ impl Bus {
         })
     }
 
+    /// Stores a record that can't be mapped. Its span is marked as an error, so it shows in red.
     pub async fn dead_letter(&self, letter: &DeadLetter) -> Result<(), BusError> {
+        let span = info_span!(
+            "dead letter",
+            integration = %letter.integration,
+            record = %letter.record,
+            errors = letter.errors.len(),
+            otel.status_code = "ERROR",
+        );
         let payload = serde_json::to_vec(letter).map_err(err("encode a dead letter"))?;
         let subject = format!("dlq.{}", letter.integration);
         retry("dead-letter a record", || async {
@@ -174,6 +203,7 @@ impl Bus {
                 .await?
                 .await
         })
+        .instrument(span)
         .await?;
         Ok(())
     }

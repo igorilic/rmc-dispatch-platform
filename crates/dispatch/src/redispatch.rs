@@ -68,6 +68,21 @@ pub enum Trigger {
 }
 
 impl Trigger {
+    /// The trigger's type as the API names it, such as `truck_out_of_service`: a label for spans
+    /// and metrics.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Trigger::NewOrder { .. } => "new_order",
+            Trigger::OrderChanged { .. } => "order_changed",
+            Trigger::OrderCancelled { .. } => "order_cancelled",
+            Trigger::TruckOutOfService { .. } => "truck_out_of_service",
+            Trigger::PlantOffline { .. } => "plant_offline",
+            Trigger::PlantOnline { .. } => "plant_online",
+            Trigger::SiteDelayed { .. } => "site_delayed",
+            Trigger::FullReplan => "full_replan",
+        }
+    }
+
     /// Whether this trigger concerns `load`.
     fn touches(&self, load: &Load) -> bool {
         match self {
@@ -531,6 +546,39 @@ mod tests {
     use crate::travel::HaversineTravelTime;
 
     const HORIZON: TimeDelta = TimeDelta::hours(48);
+
+    #[test]
+    fn trigger_kinds_are_the_api_type_names() {
+        let order = OrderId("10001001/BW-1".into());
+        let plant = PlantId("plant-walldorf".into());
+        let every = [
+            Trigger::NewOrder {
+                order: order.clone(),
+            },
+            Trigger::OrderChanged {
+                order: order.clone(),
+                change: "volume".into(),
+            },
+            Trigger::OrderCancelled { order },
+            Trigger::TruckOutOfService {
+                truck: TruckId("truck-01".into()),
+            },
+            Trigger::PlantOffline {
+                plant: plant.clone(),
+            },
+            Trigger::PlantOnline { plant },
+            Trigger::SiteDelayed {
+                site: SiteId("50001007".into()),
+                minutes: 30,
+                orders: Vec::new(),
+            },
+            Trigger::FullReplan,
+        ];
+        for trigger in every {
+            let wire = serde_json::to_value(&trigger).unwrap();
+            assert_eq!(wire["type"], trigger.kind());
+        }
+    }
 
     /// Two plants, six trucks, and two orders at two sites: `a` at 07:00 and `b` at 09:00.
     fn scene() -> (World, Vec<Order>) {

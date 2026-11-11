@@ -12,6 +12,7 @@ use common::{customers, nats, sample};
 use domain::{Channel, Event, EventEnvelope, EventSource, Location, Seed, TruckId};
 use ingest::mapping::{Delivery, Mapping};
 use ingest::nats::{Bus, DLQ, EVENTS, Published};
+use tracing::Instrument;
 
 fn delivery<'a>(mapping: &Mapping, body: &'a [u8]) -> Delivery<'a> {
     let received_at = Utc.with_ymd_and_hms(2026, 11, 9, 9, 20, 0).unwrap();
@@ -156,4 +157,42 @@ async fn poison_messages_land_in_the_dlq_with_every_error() {
     bus.remove_dead_letter(letters[0].sequence).await.unwrap();
     assert!(bus.dead_letters().await.unwrap().is_empty());
     assert_eq!(bus.count(DLQ).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn a_published_event_carries_the_trace_of_its_publish_span() {
+    let (_guard, exporter) = telemetry::testing::capture();
+    let (_nats, url) = nats().await;
+    let bus = Bus::connect(&url, TTL).await.unwrap();
+    let (mapping, seed) = (
+        Mapping::load(&customers(), "bauwerk-ag").unwrap(),
+        Seed::rhine_neckar().unwrap(),
+    );
+    let body = sample("bauwerk-ag", "order.json");
+    let delivery_span = tracing::info_span!("delivery");
+    bus.deliver(&mapping, &seed, &delivery(&mapping, &body))
+        .instrument(delivery_span)
+        .await
+        .unwrap();
+
+    let js = async_nats::jetstream::new(async_nats::connect(&url).await.unwrap());
+    let stored = js
+        .get_stream(EVENTS)
+        .await
+        .unwrap()
+        .get_raw_message(1)
+        .await
+        .unwrap();
+    let traceparent = stored.headers.get("traceparent").unwrap().as_str();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let named = |name: &str| spans.iter().find(|s| s.name == name).unwrap();
+    let (root, publish) = (named("delivery"), named("publish"));
+    assert_eq!(publish.parent_span_id, root.span_context.span_id());
+    let expected = format!(
+        "00-{}-{}-01",
+        publish.span_context.trace_id(),
+        publish.span_context.span_id()
+    );
+    assert_eq!(traceparent, expected, "the consumer continues from publish");
 }

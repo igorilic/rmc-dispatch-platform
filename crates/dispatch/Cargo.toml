@@ -28,6 +28,7 @@ utoipa-swagger-ui.workspace = true
 criterion.workspace = true
 ingest = { path = "../ingest" }
 proptest.workspace = true
+telemetry = { workspace = true, features = ["testing"] }
 testcontainers.workspace = true
 tower.workspace = true
 

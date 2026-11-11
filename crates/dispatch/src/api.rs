@@ -136,6 +136,7 @@ async fn get_order(
 #[utoipa::path(post, path = "/plans", responses(
     (status = 201, body = VersionedPlan, headers(("location" = String))),
 ))]
+#[tracing::instrument(name = "POST /plans", skip_all)]
 async fn create_plan(State(s): State<AppState>) -> Result<impl IntoResponse, StatusCode> {
     let version = s.jobs.run(Trigger::FullReplan).await.map_err(|e| {
         error!(error = %e, "full re-plan failed");
@@ -185,6 +186,7 @@ async fn get_diff(
 #[utoipa::path(put, path = "/plants/{id}/status", params(("id" = String, Path)),
     request_body = PlantStatusChange,
     responses((status = 200, body = Redispatched), (status = 404, description = "Unknown plant")))]
+#[tracing::instrument(name = "PUT /plants/{id}/status", skip_all, fields(plant = %id))]
 async fn set_plant_status(
     State(s): State<AppState>,
     Path(id): Path<String>,
@@ -215,6 +217,7 @@ async fn set_plant_status(
         (status = 404, description = "Unknown site"),
         (status = 422, description = "Minutes outside 1 to 1,440"),
     ))]
+#[tracing::instrument(name = "POST /sites/{id}/delays", skip_all, fields(site = %id))]
 async fn delay_site(
     State(s): State<AppState>,
     Path(id): Path<String>,

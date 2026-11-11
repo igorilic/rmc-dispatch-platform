@@ -19,6 +19,8 @@ use domain::{
     OrderStatus, Seed, SiteId, TruckId, TruckStatus,
 };
 use ingest::nats::Bus;
+use telemetry::testing::{InMemorySpanExporter, SpanData, capture};
+use tracing::{Instrument, info_span};
 
 fn upserted(order: &Order, occurred_at: DateTime<Utc>) -> EventEnvelope {
     envelope(
@@ -362,5 +364,102 @@ async fn a_batch_ticket_freezes_its_load() {
     let frozen = &v2.plan.loads[0];
     assert!(frozen.frozen);
     assert_eq!((frozen.sequence, frozen.planned_batch_at), (1, started));
+    tasks.iter().for_each(tokio::task::JoinHandle::abort);
+}
+
+/// Polls until a span named `name` has ended, or fails after 10 s.
+async fn finished(exporter: &InMemorySpanExporter, name: &str) -> Vec<SpanData> {
+    for _ in 0..100 {
+        let spans = exporter.get_finished_spans().unwrap();
+        if spans.iter().any(|s| s.name == name) {
+            return spans;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("no {name} span ended");
+}
+
+fn named<'a>(spans: &'a [SpanData], name: &str) -> &'a SpanData {
+    spans
+        .iter()
+        .find(|s| s.name == name)
+        .unwrap_or_else(|| panic!("no {name} span"))
+}
+
+fn attribute(span: &SpanData, key: &str) -> String {
+    span.attributes
+        .iter()
+        .find(|kv| kv.key.as_str() == key)
+        .map(|kv| kv.value.to_string())
+        .unwrap_or_else(|| panic!("{} has no {key}", span.name))
+}
+
+#[tokio::test]
+async fn one_trace_runs_from_the_publisher_to_the_redispatch_it_causes() {
+    let (_guard, exporter) = capture();
+    let mut s = setup().await;
+    let tasks = s.dispatch();
+    let o = order("BW-1", 42.5, at(9, 0));
+    s.bus
+        .publish(&upserted(&o, at(5, 0)))
+        .instrument(info_span!("webhook"))
+        .await
+        .unwrap();
+    let spans = finished(&exporter, "redispatch").await;
+
+    let (webhook, publish, apply, redispatch) = (
+        named(&spans, "webhook"),
+        named(&spans, "publish"),
+        named(&spans, "apply event"),
+        named(&spans, "redispatch"),
+    );
+    let child = |child: &SpanData, parent: &SpanData| {
+        assert_eq!(
+            (child.span_context.trace_id(), child.parent_span_id),
+            (
+                parent.span_context.trace_id(),
+                parent.span_context.span_id()
+            ),
+            "{} under {}",
+            child.name,
+            parent.name
+        );
+    };
+    child(publish, webhook);
+    child(apply, publish);
+    child(redispatch, apply);
+    for step in ["load world", "plan", "save plan"] {
+        child(named(&spans, step), redispatch);
+    }
+    assert_eq!(attribute(apply, "order"), o.id.0);
+    assert_eq!(attribute(apply, "trigger"), "new_order");
+    assert_eq!(attribute(redispatch, "version"), "1");
+    assert_eq!(attribute(redispatch, "outcome"), "new_version");
+    tasks.iter().for_each(tokio::task::JoinHandle::abort);
+}
+
+#[tokio::test]
+async fn triggers_merged_into_one_run_link_to_it() {
+    let (_guard, exporter) = capture();
+    let mut s = setup().await;
+    // Both are queued before the worker starts, so it takes them as one batch.
+    let (first, second) = (info_span!("first"), info_span!("second"));
+    s.jobs.send(Trigger::FullReplan).instrument(first).await;
+    s.jobs.send(Trigger::FullReplan).instrument(second).await;
+    let tasks = s.dispatch();
+    let spans = finished(&exporter, "redispatch").await;
+
+    let redispatch = named(&spans, "redispatch");
+    assert_eq!(
+        redispatch.parent_span_id,
+        named(&spans, "first").span_context.span_id()
+    );
+    let linked: Vec<_> = redispatch
+        .links
+        .links
+        .iter()
+        .map(|l| l.span_context.span_id())
+        .collect();
+    assert_eq!(linked, [named(&spans, "second").span_context.span_id()]);
     tasks.iter().for_each(tokio::task::JoinHandle::abort);
 }

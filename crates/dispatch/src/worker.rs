@@ -8,11 +8,15 @@
 //! repairs on a blocking thread because local search is CPU-bound, and stores the result as the
 //! next version, unless nothing changed and no one asked for a full re-plan. The queue is bounded: a burst makes senders wait instead
 //! of growing memory.
+//!
+//! Tracing (SPEC §8): each job carries the span it was sent from. The `redispatch` span is a child
+//! of the first job's span, so it joins that trace; the other jobs of the batch become links.
 
 use chrono::{DateTime, SubsecRound, TimeDelta, Utc};
 use domain::Load;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{error, info};
+use tracing::field::Empty;
+use tracing::{Instrument, Span, error, info, info_span};
 
 use crate::planner::delivered_load;
 use crate::redispatch::{Request, Settings, Trigger, redispatch};
@@ -29,6 +33,8 @@ pub type Reply = Result<Option<i64>, String>;
 pub struct Job {
     trigger: Trigger,
     reply: Option<oneshot::Sender<Reply>>,
+    /// Where the trigger came from: the re-dispatch continues its trace.
+    span: Span,
 }
 
 /// Where triggers go.
@@ -44,6 +50,7 @@ impl Jobs {
             .send(Job {
                 trigger,
                 reply: None,
+                span: Span::current(),
             })
             .await;
     }
@@ -54,6 +61,7 @@ impl Jobs {
         let job = Job {
             trigger,
             reply: Some(reply),
+            span: Span::current(),
         };
         self.0
             .send(job)
@@ -99,12 +107,36 @@ pub async fn run(
                 triggers.push(job.trigger.clone());
             }
         }
+        let kinds: Vec<&str> = triggers.iter().map(Trigger::kind).collect();
+        let span = info_span!(
+            parent: &batch[0].span,
+            "redispatch",
+            triggers = %kinds.join(", "),
+            previous_version = Empty,
+            version = Empty,
+            changes = Empty,
+            outcome = Empty,
+            otel.status_code = Empty,
+        );
+        for job in &batch[1..] {
+            span.follows_from(&job.span);
+        }
         let reply = once(&store, &triggers, &settings, clock().trunc_subsecs(0))
-            .await
-            .map_err(|e| {
-                error!(error = %e, ?triggers, "re-dispatch failed, the previous plan stays");
-                e.to_string()
-            });
+            .instrument(span.clone())
+            .await;
+        span.record(
+            "outcome",
+            match reply {
+                Ok(Some(_)) => "new_version",
+                Ok(None) => "unchanged",
+                Err(_) => "failed",
+            },
+        );
+        let reply = reply.map_err(|e| {
+            span.record("otel.status_code", "ERROR");
+            error!(error = %e, ?triggers, "re-dispatch failed, the previous plan stays");
+            e.to_string()
+        });
         for job in batch {
             if let Some(tx) = job.reply {
                 let _ = tx.send(reply.clone());
@@ -119,35 +151,51 @@ async fn once(
     settings: &Settings,
     now: DateTime<Utc>,
 ) -> Result<Option<i64>, WorkerError> {
-    let world = store.world().await?;
-    let previous = store.plan(None).await?;
-    let deliveries = store.deliveries(now - DELIVERY_WINDOW).await?;
-    // Orders with deliveries or in the previous plan are needed even outside the window: their
-    // frozen loads, and the reasons their loads left the plan, depend on them.
-    let mut also: Vec<String> = deliveries.iter().map(|d| d.order.0.clone()).collect();
-    if let Some(p) = &previous {
-        also.extend(p.plan.loads.iter().map(|l| l.order.0.clone()));
-        also.extend(p.plan.unplanned.iter().map(|u| u.order.0.clone()));
-    }
-    also.sort_unstable();
-    also.dedup();
-    let orders = store
-        .planning_orders(now - TimeDelta::hours(1), now + settings.horizon, &also)
-        .await?;
     let travel = HaversineTravelTime::default();
-    let frozen: Vec<Load> = deliveries
-        .iter()
-        .filter_map(|d| {
-            let order = orders.iter().find(|o| o.id == d.order)?;
-            delivered_load(d, order, &world, &travel)
-        })
-        .collect();
+    let (world, previous, orders, frozen) = async {
+        let world = store.world().await?;
+        let previous = store.plan(None).await?;
+        let deliveries = store.deliveries(now - DELIVERY_WINDOW).await?;
+        // Orders with deliveries or in the previous plan are needed even outside the window:
+        // their frozen loads, and the reasons their loads left the plan, depend on them.
+        let mut also: Vec<String> = deliveries.iter().map(|d| d.order.0.clone()).collect();
+        if let Some(p) = &previous {
+            also.extend(p.plan.loads.iter().map(|l| l.order.0.clone()));
+            also.extend(p.plan.unplanned.iter().map(|u| u.order.0.clone()));
+        }
+        also.sort_unstable();
+        also.dedup();
+        let orders = store
+            .planning_orders(now - TimeDelta::hours(1), now + settings.horizon, &also)
+            .await?;
+        let frozen: Vec<Load> = deliveries
+            .iter()
+            .filter_map(|d| {
+                let order = orders.iter().find(|o| o.id == d.order)?;
+                delivered_load(d, order, &world, &travel)
+            })
+            .collect();
+        let span = Span::current();
+        span.record("orders", orders.len());
+        span.record("frozen", frozen.len());
+        Ok::<_, WorkerError>((world, previous, orders, frozen))
+    }
+    .instrument(info_span!("load world", orders = Empty, frozen = Empty))
+    .await?;
     let previous_version = previous.as_ref().map(|p| p.version);
+    if let Some(v) = previous_version {
+        Span::current().record("previous_version", v);
+    }
     let previous_plan = previous.map(|p| p.plan);
     // Seeded by version, so a re-dispatch can be replayed.
     let seed = previous_version.map_or(0, |v| v.unsigned_abs() + 1);
     let (owned_triggers, owned_settings) = (triggers.to_vec(), settings.clone());
+    // Created and closed here, on the async side. The blocking thread only enters a clone: closing
+    // a span there would release its parent through that thread's default subscriber.
+    let plan_span = info_span!("plan", loads = Empty, unplanned = Empty);
+    let in_thread = plan_span.clone();
     let outcome = tokio::task::spawn_blocking(move || {
+        let _entered = in_thread.enter();
         let req = Request {
             world: &world,
             orders: &orders,
@@ -160,6 +208,9 @@ async fn once(
     })
     .await?
     .map_err(WorkerError::Invalid)?;
+    plan_span.record("loads", outcome.plan.loads.len());
+    plan_span.record("unplanned", outcome.plan.unplanned.len());
+    drop(plan_span);
 
     // An explicit full re-plan always gets its version; anything else only when something changed.
     let asked = triggers.contains(&Trigger::FullReplan);
@@ -169,7 +220,11 @@ async fn once(
     }
     let version = store
         .save_plan(&outcome.plan, previous_version, triggers, &outcome.diff)
+        .instrument(info_span!("save plan"))
         .await?;
+    let span = Span::current();
+    span.record("version", version);
+    span.record("changes", outcome.diff.changes.len());
     info!(
         version,
         changes = outcome.diff.changes.len(),

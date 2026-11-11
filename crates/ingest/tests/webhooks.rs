@@ -208,3 +208,44 @@ async fn healthz_answers() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn an_accepted_delivery_answers_with_its_trace_id() {
+    let (_guard, exporter) = telemetry::testing::capture();
+    let app = app(8).await;
+    let (status, _, body) = post(
+        &app,
+        "bauwerk-ag",
+        Some("dev-token-bauwerk-ag"),
+        sample("bauwerk-ag", "order.json"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let (_, _, broken) = post(
+        &app,
+        "bauwerk-ag",
+        Some("dev-token-bauwerk-ag"),
+        sample("bauwerk-ag", "broken.json"),
+    )
+    .await;
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let webhooks: Vec<_> = spans.iter().filter(|s| s.name == "webhook").collect();
+    assert_eq!(webhooks.len(), 2);
+    let (ok, bad) = (webhooks[0], webhooks[1]);
+    assert_eq!(body["trace_id"], ok.span_context.trace_id().to_string());
+    assert_eq!(broken["trace_id"], bad.span_context.trace_id().to_string());
+    let child_of = |name: &str, parent: &telemetry::testing::SpanData| {
+        spans
+            .iter()
+            .find(|s| s.name == name && s.parent_span_id == parent.span_context.span_id())
+            .unwrap_or_else(|| panic!("no {name} under {}", parent.name))
+    };
+    child_of("publish", ok);
+    let letter = child_of("dead letter", bad);
+    assert!(
+        format!("{:?}", letter.status).starts_with("Error"),
+        "{:?}",
+        letter.status
+    );
+}

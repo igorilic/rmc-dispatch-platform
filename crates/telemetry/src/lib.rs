@@ -134,6 +134,15 @@ pub fn continue_trace(span: &Span, headers: Option<&HeaderMap>) {
     }
 }
 
+/// The id of the trace `span` belongs to, as Jaeger shows it, or `None` when it isn't traced.
+pub fn trace_id(span: &Span) -> Option<String> {
+    let cx = span.context();
+    let span_context = cx.span().span_context().clone();
+    span_context
+        .is_valid()
+        .then(|| span_context.trace_id().to_string())
+}
+
 struct HeaderInjector<'a>(&'a mut HeaderMap);
 
 impl Injector for HeaderInjector<'_> {
@@ -158,19 +167,25 @@ impl Extractor for HeaderExtractor<'_> {
 #[cfg(any(test, feature = "testing"))]
 pub mod testing {
     use opentelemetry::trace::TracerProvider as _;
-    use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
+    use opentelemetry_sdk::trace::SdkTracerProvider;
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::Layer;
     use tracing_subscriber::filter::LevelFilter;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
-    pub use opentelemetry_sdk::trace::SpanData;
+    pub use opentelemetry_sdk::trace::{InMemorySpanExporter, SpanData};
 
     /// Records every span at `info` and above in memory, as the services would export them, while
     /// the guard lives. The guard is per thread, so use a current-thread runtime and create spans
     /// for blocking threads before handing them over.
     pub fn capture() -> (DefaultGuard, InMemorySpanExporter) {
+        // tracing caches per callsite whether anyone listens. A parallel test thread without a
+        // subscriber could cache "no" for a span this test needs, so the process-wide default
+        // listens at `info` too (and drops everything).
+        let _ = tracing::subscriber::set_global_default(
+            tracing_subscriber::registry().with(LevelFilter::INFO),
+        );
         let exporter = InMemorySpanExporter::default();
         let provider = SdkTracerProvider::builder()
             .with_simple_exporter(exporter.clone())

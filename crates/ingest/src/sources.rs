@@ -8,6 +8,10 @@
 //!   broker queues.
 //! - An SFTP file moves to `processed/` after its last row. A crash means the file is processed
 //!   again, and dedup absorbs the repeats.
+//!
+//! Each delivery (a webhook request, an SFTP file, an MQTT message) is the root span of a trace
+//! that continues into dispatch. A customer's own `traceparent` is ignored: callers are untrusted,
+//! and their trace ids mean nothing in our Jaeger.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -20,14 +24,16 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{SecondsFormat, Utc};
-use domain::{Channel, Seed};
+use domain::{Channel, Event, Seed};
 use rumqttc::{AsyncClient, Event as MqttEvent, MqttOptions, Packet, Publish, QoS};
+use serde::Serialize;
 use tokio::io::AsyncReadExt;
 use tokio::sync::{Semaphore, mpsc};
-use tracing::{info, warn};
+use tracing::field::Empty;
+use tracing::{Instrument, Span, info, info_span, instrument, warn};
 
 use crate::mapping::{Delivery, Mapping};
-use crate::nats::{Bus, BusError, DeadLetter};
+use crate::nats::{Bus, BusError, DeadLetter, Summary};
 use crate::telematics;
 
 const BODY_LIMIT: usize = 1 << 20;
@@ -90,6 +96,22 @@ pub fn webhook_router(webhooks: Webhooks) -> Router {
         .with_state(webhooks)
 }
 
+/// A webhook's `202` body: what became of its records, and the trace to find them by.
+#[derive(Serialize)]
+struct Accepted {
+    #[serde(flatten)]
+    summary: Summary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trace_id: Option<String>,
+}
+
+fn record_summary(span: &Span, summary: &Summary) {
+    span.record("published", summary.published);
+    span.record("duplicates", summary.duplicates);
+    span.record("dead_lettered", summary.dead_lettered);
+}
+
+#[instrument(name = "webhook", skip_all, fields(%integration, published = Empty, duplicates = Empty, dead_lettered = Empty))]
 async fn receive(
     State(hooks): State<Webhooks>,
     Path(integration): Path<String>,
@@ -133,7 +155,10 @@ async fn receive(
                 dead_lettered = summary.dead_lettered,
                 "webhook"
             );
-            (StatusCode::ACCEPTED, Json(summary)).into_response()
+            let span = Span::current();
+            record_summary(&span, &summary);
+            let trace_id = telemetry::trace_id(&span);
+            (StatusCode::ACCEPTED, Json(Accepted { summary, trace_id })).into_response()
         }
         Err(error) => {
             warn!(integration, %error, "webhook not accepted, NATS is unavailable");
@@ -202,6 +227,29 @@ async fn handle_mqtt(bus: &Bus, seed: &Seed, client: &AsyncClient, publish: Publ
     let received_at = Utc::now();
     let topic = publish.topic.as_str();
     let outcome = telematics::map(topic, &publish.payload, received_at, seed);
+    // GPS and drum readings, about two a second, would bury every other trace. Dead letters are
+    // always traced.
+    let noise = matches!(&outcome, Ok(e) if matches!(
+        e.event,
+        Event::TruckPositionReported { .. } | Event::DrumRotationReported { .. }
+    ));
+    let span = info_span!("mqtt message", topic, noise);
+    store_mqtt(bus, &publish, &outcome, received_at)
+        .instrument(span)
+        .await;
+    if let Err(error) = client.ack(&publish).await {
+        warn!(%error, topic, "MQTT ack failed, the broker will redeliver");
+    }
+}
+
+/// Publishes or dead-letters one MQTT message, holding it while NATS is down.
+async fn store_mqtt(
+    bus: &Bus,
+    publish: &Publish,
+    outcome: &Result<domain::EventEnvelope, Vec<String>>,
+    received_at: chrono::DateTime<Utc>,
+) {
+    let topic = publish.topic.as_str();
     loop {
         let stored = match &outcome {
             Ok(event) => bus.publish(event).await.map(drop),
@@ -231,9 +279,6 @@ async fn handle_mqtt(bus: &Bus, seed: &Seed, client: &AsyncClient, publish: Publ
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }
         }
-    }
-    if let Err(error) = client.ack(&publish).await {
-        warn!(%error, topic, "MQTT ack failed, the broker will redeliver");
     }
 }
 
@@ -328,21 +373,28 @@ async fn poll_sftp(
             .map_err(sftp_error)?;
     }
     for name in &names {
-        let path = format!("{dir}/{name}");
-        let mut body = Vec::new();
-        let mut file = sftp.open(path.as_str()).await.map_err(sftp_error)?;
-        file.read_to_end(&mut body).await.map_err(sftp_error)?;
-        let delivery = Delivery {
-            body: &body,
-            channel: Channel::Sftp,
-            reference: name,
-            received_at: Utc::now(),
-        };
-        let summary = bus.deliver(mapping, seed, &delivery).await?;
-        sftp.rename(path, format!("{processed}/{name}"))
-            .await
-            .map_err(sftp_error)?;
-        info!(integration = %mapping.integration, file = %name, published = summary.published, duplicates = summary.duplicates, dead_lettered = summary.dead_lettered, "SFTP file ingested");
+        let span = info_span!("sftp file", integration = %mapping.integration, file = %name, published = Empty, duplicates = Empty, dead_lettered = Empty);
+        async {
+            let path = format!("{dir}/{name}");
+            let mut body = Vec::new();
+            let mut file = sftp.open(path.as_str()).await.map_err(sftp_error)?;
+            file.read_to_end(&mut body).await.map_err(sftp_error)?;
+            let delivery = Delivery {
+                body: &body,
+                channel: Channel::Sftp,
+                reference: name,
+                received_at: Utc::now(),
+            };
+            let summary = bus.deliver(mapping, seed, &delivery).await?;
+            record_summary(&Span::current(), &summary);
+            sftp.rename(path, format!("{processed}/{name}"))
+                .await
+                .map_err(sftp_error)?;
+            info!(integration = %mapping.integration, file = %name, published = summary.published, duplicates = summary.duplicates, dead_lettered = summary.dead_lettered, "SFTP file ingested");
+            Ok::<_, SourceError>(())
+        }
+        .instrument(span)
+        .await?;
     }
     Ok(names.len())
 }

@@ -8,6 +8,10 @@
 //!   status and position, and turns batch tickets for planned loads into deliveries, which
 //!   freeze those loads. A truck going out of service is a trigger.
 //!
+//! Each event is applied inside an `apply event` span that continues the trace ingest started, from
+//! the message's `traceparent`. A trigger carries that span to the worker, so the re-dispatch it
+//! causes joins the same trace (SPEC §8).
+//!
 //! Each consumer applies its events one at a time, in stream order (`max_ack_pending = 1`), so a
 //! cancellation can't overtake the order it cancels. A redelivered or stale event changes nothing.
 //! An event that can never apply (unreadable, or naming something we don't have) is logged and
@@ -21,7 +25,8 @@ use chrono_tz::Europe::Berlin;
 use domain::{Event, EventEnvelope, Order, OrderStatus, TruckStatus};
 use futures::StreamExt;
 use sqlx::error::ErrorKind;
-use tracing::{debug, info, warn};
+use tracing::field::Empty;
+use tracing::{Instrument, Span, debug, info, info_span, warn};
 
 use crate::redispatch::Trigger;
 use crate::store::{Store, StoreError, Ticket, Upsert};
@@ -69,22 +74,40 @@ async fn consume(js: jetstream::Context, store: Store, jobs: Jobs, name: &str, s
                     continue;
                 }
             };
-            let ack = match apply(&store, &message.payload).await {
-                Ok(trigger) => {
-                    if let Some(trigger) = trigger {
-                        jobs.send(trigger).await;
+            let span = info_span!(
+                "apply event",
+                consumer = name,
+                subject = %message.subject,
+                event = Empty,
+                order = Empty,
+                truck = Empty,
+                outcome = Empty,
+                trigger = Empty,
+            );
+            telemetry::continue_trace(&span, message.headers.as_ref());
+            let ack = async {
+                match apply(&store, &message.payload).await {
+                    Ok(trigger) => {
+                        if let Some(trigger) = trigger {
+                            Span::current().record("trigger", trigger.kind());
+                            jobs.send(trigger).await;
+                        }
+                        AckKind::Ack
                     }
-                    AckKind::Ack
+                    Err(e) if poison(&e) => {
+                        Span::current().record("outcome", "skipped");
+                        warn!(subject = %message.subject, error = %e, "event can never apply, skipped");
+                        AckKind::Ack
+                    }
+                    Err(e) => {
+                        Span::current().record("outcome", "retried");
+                        warn!(subject = %message.subject, error = %e, "event failed, retrying");
+                        AckKind::Nak(Some(RETRY))
+                    }
                 }
-                Err(e) if poison(&e) => {
-                    warn!(subject = %message.subject, error = %e, "event can never apply, skipped");
-                    AckKind::Ack
-                }
-                Err(e) => {
-                    warn!(subject = %message.subject, error = %e, "event failed, retrying");
-                    AckKind::Nak(Some(RETRY))
-                }
-            };
+            }
+            .instrument(span)
+            .await;
             if let Err(e) = message.ack_with(ack).await {
                 // Unacked, it's redelivered after the ack wait; applying it twice is harmless.
                 warn!(consumer = name, error = %e, "intake ack failed");
@@ -125,6 +148,16 @@ enum IntakeError {
 /// Applies one event and returns the trigger it amounts to, if any.
 async fn apply(store: &Store, payload: &[u8]) -> Result<Option<Trigger>, IntakeError> {
     let envelope: EventEnvelope = serde_json::from_slice(payload)?;
+    let span = Span::current();
+    span.record("event", envelope.id.as_str());
+    match &envelope.event {
+        Event::OrderUpserted { order, .. } => span.record("order", order.id.0.as_str()),
+        Event::OrderCancelled { order, .. } => span.record("order", order.0.as_str()),
+        Event::TruckStatusReported { truck, .. }
+        | Event::TruckPositionReported { truck, .. }
+        | Event::DrumRotationReported { truck, .. }
+        | Event::BatchTicketIssued { truck, .. } => span.record("truck", truck.0.as_str()),
+    };
     let at = envelope.occurred_at;
     let trigger = match envelope.event {
         Event::OrderUpserted {
@@ -138,7 +171,8 @@ async fn apply(store: &Store, payload: &[u8]) -> Result<Option<Trigger>, IntakeE
             Upsert::Changed(before) => changed(&before, &order),
             Upsert::Stale => {
                 debug!(event = %envelope.id, "order event is stale");
-                None
+                span.record("outcome", "stale");
+                return Ok(None);
             }
         },
         Event::OrderCancelled { order, .. } => store
@@ -183,6 +217,7 @@ async fn apply(store: &Store, payload: &[u8]) -> Result<Option<Trigger>, IntakeE
         // Tickets for trips outside the plan, and drum rotation, don't concern planning.
         Event::BatchTicketIssued { load: None, .. } | Event::DrumRotationReported { .. } => None,
     };
+    span.record("outcome", "applied");
     Ok(trigger)
 }
 
