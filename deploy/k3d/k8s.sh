@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # make k8s (SPEC §9): the Docker network pourline-net, a local registry, the k3d clusters `cloud`
 # and `plant-walldorf`, Pourline's images, and the manifests in deploy/k3d. It creates only what
-# is missing, so it is safe to run again: it then rebuilds the images and restarts the services.
-# SKIP_BUILD=1 reuses the images already in the registry, for a change to the manifests only.
+# is missing, so it is safe to run again: it then rebuilds the images, and the services whose image
+# changed roll out. SKIP_BUILD=1 reuses the images pushed last, for a change to the manifests only.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -37,20 +37,25 @@ if [ "${SKIP_BUILD:-}" != 1 ]; then
   done
 fi
 
-# deploy CLUSTER DEPLOYMENT...: applies the cluster's manifests, restarts Pourline's own
-# deployments so they pull the new images, and waits until everything is ready.
+# The manifests name images by their `:dev` tag; each one is deployed by the digest just pushed.
+# A pod then runs exactly that build, a new build rolls out by itself, and a plant pod that
+# restarts while its cluster is cut off starts from the image cached on its node.
+pin=()
+for service in "${SERVICES[@]}"; do
+  digest=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "localhost:5050/$service:dev" |
+    sed -n "s#^localhost:5050/$service@##p" | head -1)
+  [ -n "$digest" ] || { echo "localhost:5050/$service:dev was never pushed: run make k8s without SKIP_BUILD"; exit 1; }
+  pin+=(-e "s#k3d-pourline-registry:5050/$service:dev#k3d-pourline-registry:5050/$service@$digest#")
+done
+
+# deploy CLUSTER: applies the cluster's manifests and waits until everything is ready.
 deploy() {
-  local cluster=$1
-  shift
-  kubectl kustomize --load-restrictor LoadRestrictionsNone "deploy/k3d/$cluster" |
-    kubectl --context "k3d-$cluster" apply -f -
-  for deployment in "$@"; do
-    kubectl --context "k3d-$cluster" -n pourline rollout restart "deployment/$deployment"
-  done
-  kubectl --context "k3d-$cluster" -n pourline rollout status deployment --timeout=300s
+  kubectl kustomize --load-restrictor LoadRestrictionsNone "deploy/k3d/$1" | sed "${pin[@]}" |
+    kubectl --context "k3d-$1" apply -f -
+  kubectl --context "k3d-$1" -n pourline rollout status deployment --timeout=300s
 }
-deploy cloud ingest dispatch simulators
-deploy plant-walldorf plant-agent
+deploy cloud
+deploy plant-walldorf
 
 cat <<EOF
 

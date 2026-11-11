@@ -24,7 +24,6 @@ spec:
       containers:
         - name: plant-agent
           image: k3d-pourline-registry:5050/plant-agent:dev
-          imagePullPolicy: Always
           env:
             - { name: PLANT_ID, value: plant-walldorf }
             - { name: DISPATCH_URL, value: "http://cloud" }

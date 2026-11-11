@@ -10,13 +10,17 @@
 //! It prints the plan and every diff, then links to the first order's trace in Jaeger and to the
 //! Grafana dashboard. Settings come from environment variables; the defaults reach a local stack,
 //! and compose's `demo` service points them at the containers.
+//!
+//! `demo edge` is `make chaos`'s first step instead: three orders at the ship-tos nearest
+//! Walldorf, starting as soon as possible, so Walldorf's bays are busy for the next minutes. It
+//! ends with `PLAN_VERSION=<n>`, the version that planned them.
 
 use std::time::Duration;
 
 use anyhow::{Context, bail};
 use chrono::{DateTime, TimeDelta, Timelike, Utc};
 use chrono_tz::Europe::Berlin;
-use domain::{DeliveryStatus, MixCode, OrderId, PlantId, PlantTicket, Seed, TruckId};
+use domain::{DeliveryStatus, MixCode, OrderId, PlantId, PlantTicket, Seed, Site, TruckId};
 use reqwest::header::CONTENT_TYPE;
 use rumqttc::{AsyncClient, MqttOptions, QoS};
 use serde_json::{Value, json};
@@ -75,7 +79,11 @@ async fn main() -> anyhow::Result<()> {
         mqtt,
         timeout: Duration::from_secs(env("DEMO_TIMEOUT_SECS", "120").parse()?),
     };
-    demo.run().await?;
+    match std::env::args().nth(1).as_deref() {
+        None => demo.run().await?,
+        Some("edge") => demo.edge().await?,
+        Some(other) => bail!("unknown scenario {other:?}: run demo, or demo edge"),
+    }
     // Let the last MQTT messages leave before the process exits.
     sleep(Duration::from_secs(1)).await;
     Ok(())
@@ -255,6 +263,103 @@ impl Demo {
             "Metrics: the Dispatch overview dashboard at {}",
             self.grafana_public
         );
+        Ok(())
+    }
+
+    /// `demo edge`: orders that keep Walldorf's bays busy during `make chaos`'s cut. Simulated
+    /// orders start 2 to 26 hours ahead, so without these the plant would have nothing to batch.
+    async fn edge(&self) -> anyhow::Result<()> {
+        const PLANT: &str = "plant-walldorf";
+        self.wait_until_up().await?;
+        let seed = Seed::rhine_neckar()?;
+        let walldorf = seed.plant(PLANT).context("no plant-walldorf")?.location;
+        // The webhook customers: bauwerk-ag (JSON) and neckar-infra (XML).
+        let neckar_sites: Vec<String> = seed
+            .sites_of("10001003")
+            .iter()
+            .map(|s| s.id.0.clone())
+            .collect();
+        let mut nearest: Vec<(f64, &Site)> = seed
+            .sites
+            .iter()
+            .filter(|s| ["10001001", "10001003"].contains(&s.customer.0.as_str()))
+            .filter_map(|s| Some((seed.geocoder.locate(s)?.distance_km(walldorf), s)))
+            .collect();
+        nearest.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+        let now = Utc::now();
+        // Already too late to arrive on time, so dispatch batches the first loads right away.
+        let start = now + TimeDelta::minutes(5);
+        let stamp = now.with_timezone(&Berlin).format("%H%M%S");
+        let before = self
+            .get("/plans/latest")
+            .await?
+            .and_then(|p| p["version"].as_i64())
+            .unwrap_or(0);
+        let mut ids = Vec::new();
+        for (i, (km, site)) in nearest.iter().take(3).enumerate() {
+            let order = GeneratedOrder {
+                order_ref: format!("EDGE-{stamp}-{}", i + 1),
+                customer: site.customer.0.clone(),
+                ship_to: site.id.0.clone(),
+                mix: MIX.into(),
+                volume_m3: 27.0,
+                start,
+                pour_rate_m3_per_h: 60,
+                max_gap_minutes: 20,
+                revision: 1,
+                updated_at: now,
+                cancelled: false,
+            };
+            if order.customer == "10001001" {
+                self.post_order("bauwerk-ag", "application/json", bauwerk_json(&order)?)
+                    .await?;
+            } else {
+                let version = neckar_version(&order.ship_to, &neckar_sites);
+                self.post_order(
+                    "neckar-infra",
+                    "application/xml",
+                    neckar_xml(&order, version)?,
+                )
+                .await?;
+            }
+            let id = format!("{}/{}", order.customer, order.order_ref);
+            println!(
+                "  {id}: 27 m³ for {} ({km:.1} km from Walldorf), as soon as possible",
+                site.name
+            );
+            ids.push(id);
+        }
+        let planned = self
+            .next_version(before, |p| {
+                ids.iter().all(|id| {
+                    loads(p, id).next().is_some()
+                        || p["unplanned"]
+                            .as_array()
+                            .is_some_and(|u| u.iter().any(|x| x["order"] == *id))
+                })
+            })
+            .await?;
+        // Any order's loads keep the bays busy, and an earlier run's orders may already fill them.
+        let soon = Utc::now() + TimeDelta::minutes(15);
+        let at_walldorf = planned["loads"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|l| l["planned_plant"] == PLANT && l["frozen"] == false)
+            .filter(|l| {
+                l["planned_batch_at"]
+                    .as_str()
+                    .and_then(|s| s.parse::<DateTime<Utc>>().ok())
+                    .is_some_and(|at| at < soon)
+            })
+            .count();
+        if at_walldorf == 0 {
+            bail!("dispatch planned no loads at {PLANT} for the next 15 minutes");
+        }
+        let version = planned["version"].as_i64().unwrap_or_default();
+        println!("  plan v{version}: {at_walldorf} loads at {PLANT} batch within 15 minutes");
+        println!("PLAN_VERSION={version}");
         Ok(())
     }
 

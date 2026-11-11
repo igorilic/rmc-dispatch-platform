@@ -1,5 +1,5 @@
-# Pourline's own services, from the images make k8s pushes to the local registry. The `:dev` tag
-# is overwritten on every push, so pods always pull.
+# Pourline's own services, from the images make k8s pushes to the local registry. make k8s
+# replaces each `:dev` tag with the digest it just pushed.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -12,7 +12,6 @@ spec:
       containers:
         - name: ingest
           image: k3d-pourline-registry:5050/ingest:dev
-          imagePullPolicy: Always
           env:
             - { name: NATS_URL, value: "nats://nats:4222" }
             - { name: MQTT_URL, value: "mqtt://mosquitto:1883" }
@@ -56,7 +55,6 @@ spec:
       containers:
         - name: dispatch
           image: k3d-pourline-registry:5050/dispatch:dev
-          imagePullPolicy: Always
           env:
             - { name: DATABASE_URL, valueFrom: { secretKeyRef: { name: dev-credentials, key: DATABASE_URL } } }
             - { name: NATS_URL, value: "nats://nats:4222" }
@@ -86,7 +84,6 @@ spec:
       containers:
         - name: simulators
           image: k3d-pourline-registry:5050/simulators:dev
-          imagePullPolicy: Always
           env:
             - { name: MQTT_URL, value: "mqtt://mosquitto:1883" }
             - { name: SFTP_HOST, value: sftp }

@@ -7,7 +7,7 @@ COMPOSE := docker compose -f deploy/compose/compose.yaml $(if $(wildcard .env),-
 # The plant-agent is its own Cargo workspace; crates/plant-agent/Cargo.toml says why.
 AGENT := --manifest-path crates/plant-agent/Cargo.toml
 
-.PHONY: up down demo logs k8s test bench audit sqlx-prepare
+.PHONY: up down demo logs k8s chaos test bench audit sqlx-prepare
 
 up: ## Build and start the local stack, and wait until it is up
 	$(COMPOSE) up -d --wait --build
@@ -24,6 +24,9 @@ down: ## Stop the stack and delete its volumes; delete the k3d clusters, registr
 
 k8s: ## Two k3d clusters, cloud and plant-walldorf, with Pourline deployed (needs k3d and kubectl)
 	deploy/k3d/k8s.sh
+
+chaos: ## Cut plant-walldorf off the cloud for 2 minutes and watch its outbox drain (after make k8s)
+	deploy/k3d/chaos.sh
 
 demo: ## Fresh stack, then a scripted scenario: two orders, a batching load, a breakdown, a site delay
 	$(COMPOSE) down -v --remove-orphans

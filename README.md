@@ -6,15 +6,17 @@ A ready-mix concrete dispatch platform in Rust. It plans which truck carries whi
 which batching plant, so every pour stays continuous and every load is discharged before it
 sets. When a truck breaks down or a site runs late, it re-plans. The full design is in [SPEC.md](SPEC.md).
 
-> **Status: milestone 6 of 9 (observability).** A simulated world of 25 trucks, three batching
-> plants and three contractors sends orders and telematics. Ingest turns all of it into canonical
-> events on NATS JetStream, with no duplicates, and keeps a dead-letter queue for anything it can't
-> map. Dispatch keeps every order in Postgres and re-plans by itself when something changes: a new
-> or changed order, a truck breaking down, a plant going offline, a site running late. Loads that
-> are already batching never move, every plan version passes a hard-constraint checker, and every
-> diff says why each load moved. One trace in Jaeger follows an order from the webhook to the
-> re-dispatch that planned it, and Grafana shows the plan, re-dispatching and ingest at a glance.
-> `make demo` shows it end to end.
+> **Status: milestone 7 of 9 (edge).** A simulated world of 25 trucks, three batching plants and
+> three contractors sends orders and telematics. Ingest turns all of it into canonical events on
+> NATS JetStream, with no duplicates, and keeps a dead-letter queue for anything it can't map.
+> Dispatch keeps every order in Postgres and re-plans by itself when something changes: a new or
+> changed order, a truck breaking down, a plant going offline, a site running late. Loads that are
+> already batching never move, every plan version passes a hard-constraint checker, and every diff
+> says why each load moved. One trace in Jaeger follows an order from the webhook to the
+> re-dispatch that planned it, and Grafana shows the plan, re-dispatching, ingest and the edge at
+> a glance. At the Walldorf plant, a plant-agent batches from its slice of the plan and sends its
+> tickets through a SQLite outbox, so a cut link loses nothing. `make demo` shows re-dispatch end
+> to end, and `make k8s` with `make chaos` cuts the plant off its cloud.
 
 ## Prerequisites
 
@@ -39,6 +41,7 @@ sets. When a truck breaks down or a site runs late, it re-plans. The full design
 | `make audit` | Checks the dependencies against the RustSec advisory database |
 | `make sqlx-prepare` | Refreshes `.sqlx/` after a query or migration changes (needs `make up` and `cargo install sqlx-cli --locked`) |
 | `make k8s` | Runs Pourline in two k3d clusters, `cloud` and `plant-walldorf`: see [Kubernetes](#kubernetes) |
+| `make chaos` | Cuts `plant-walldorf` off the cloud for 2 minutes, then reconnects it, and shows its outbox draining (after `make k8s`): see [`make chaos`](#make-chaos) |
 | `make down` | Stops everything and deletes the volumes, and deletes the k3d clusters, their registry and network |
 
 ## Local services
@@ -423,6 +426,45 @@ curl -s localhost:8080/plants/plant-walldorf/plan | jq '.version, (.loads | leng
 restarts ingest, dispatch, the simulators and the agent. The infrastructure keeps its data.
 `SKIP_BUILD=1 make k8s` skips the images, for a change to the manifests only. The manifests are
 plain YAML until milestone 8 turns them into Helm charts.
+
+### `make chaos`
+
+`make chaos` runs `deploy/k3d/chaos.sh`:
+
+1. It places three orders at the ship-tos nearest Walldorf, starting as soon as possible, through
+   the demo image's `edge` mode. Simulated orders start 2 to 26 hours ahead, so without these the
+   plant would have nothing to batch during the cut.
+2. It waits until the agent has the plan, then runs
+   `docker network disconnect pourline-net k3d-plant-walldorf-server-0`.
+3. It prints the agent's status every 10 s for 120 s (`CHAOS_SECONDS`). It reads the status
+   through the plant's own API server inside the node, which still answers while the node is
+   cut off.
+4. It reconnects the node with its old IP, because k3s doesn't survive a new one, and waits until
+   the outbox is empty and both links are back. If the script is interrupted, it still
+   reconnects the node.
+
+```text
+Cutting plant-walldorf off pourline-net for 120 s
+  t+  0s  links up    outbox 0  sync lag    0s  plan v21,    2s old
+  t+ 10s  links up    outbox 0  sync lag    0s  plan v21,   12s old
+  t+ 20s  links down  outbox 3  sync lag    4s  plan v21,   22s old
+  ...
+  t+113s  links down  outbox 3  sync lag   96s  plan v21,  114s old
+Reconnected
+  t+128s  links down  outbox 0  sync lag    0s  plan v21,  130s old
+  t+134s  links up    outbox 0  sync lag    0s  plan v21,    0s old
+✓ 3 tickets waited out the cut, and all were sent in order within 11 s of reconnecting
+```
+
+The agent notices the cut within about 15 s. It keeps batching from the plan it has, and its
+tickets wait in the outbox. Within seconds of reconnecting they reach ingest, oldest first, and
+the plan sync catches up. `make k8s` deploys each image by digest, so a plant pod that restarts
+during a cut starts from the image cached on its node, and finds its outbox and plan in SQLite.
+
+During a cut, dispatch doesn't know the plant is cut off. If something else triggers a
+re-dispatch meanwhile, such as a new order, the re-dispatch may move a Walldorf load whose batch
+time passed without a ticket, although Walldorf batched it from its last plan. Once the tickets
+arrive, the next re-dispatch freezes the load where Walldorf actually batched it.
 
 ## Dependencies and security
 
