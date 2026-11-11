@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Milestone 6 plan</title>
+<link rel="stylesheet" href="../../.design/styles.css">
+<style>
+/* Diagram styles: Spotlight tokens only (zinc greys, one teal accent). */
+.dg{display:block;width:100%;height:auto}
+.dg text{font-family:var(--font-sans);font-size:12px;fill:var(--text-body)}
+.dg .t{fill:var(--text-strong);font-weight:600;font-size:13px}
+.dg .s{fill:var(--text-muted);font-size:11px}
+.dg .m{font-family:var(--font-mono);font-size:10.5px;fill:var(--text-body)}
+.dg .c{text-anchor:middle}
+.dg .end{text-anchor:end}
+.dg .halo{paint-order:stroke;stroke:var(--surface-column);stroke-width:3px;stroke-linejoin:round}
+.dg .b-done{fill:var(--surface-solid);stroke:var(--zinc-500);stroke-width:1}
+.dg .b-now{fill:color-mix(in oklab,var(--accent) 14%,var(--surface-column));stroke:var(--accent);stroke-width:1.5}
+.dg .e-now{fill:none;stroke:var(--accent);stroke-width:1.5}
+.dg .e-done{fill:none;stroke:var(--zinc-400);stroke-width:1.5}
+.dg .axis{fill:none;stroke:var(--zinc-600);stroke-width:1}
+.dg .guide{fill:none;stroke:var(--zinc-700);stroke-width:1;stroke-dasharray:2 3}
+.dg .p-in{fill:var(--zinc-300)}
+.dg .p-dis{fill:var(--accent)}
+.ah{fill:var(--zinc-400)}
+.ah-now{fill:var(--accent)}
+.sp-prose figure{margin-left:0;margin-right:0}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+<defs>
+<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0 1 L9 5 L0 9 z"/></marker>
+<marker id="ah-now" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-now" d="M0 1 L9 5 L0 9 z"/></marker>
+</defs>
+</svg>
+<div class="sp-layout__bg"><div><div></div></div></div>
+<div class="sp-layout__fg">
+<main class="sp-layout__main">
+<div class="sp-container-outer sp-article"><div class="sp-container-outer__in">
+<div class="sp-container-inner"><div class="sp-container-inner__in">
+<div class="sp-article__col">
+<article>
+<header class="sp-article__header">
+<h1 class="sp-h1">Milestone 6 plan: observability</h1>
+<time class="sp-article__date" datetime="2026-11-10"><span class="sp-bar"></span><span style="margin-left:.75rem">November 10, 2026</span></time>
+</header>
+<div class="sp-prose" style="margin-top:2rem">
+
+<p>Today, ingest and dispatch only write log lines. The compose stack already runs Prometheus, Grafana and Jaeger, but nothing sends them data. Milestone 6 connects all three. An order’s trace starts when ingest receives it, crosses NATS in a message header, and ends at the re-dispatch that planned it, with the new version and the size of its diff on the span. Both services export the Prometheus metrics that SPEC §8 lists, and Grafana opens on a provisioned “Dispatch overview” dashboard.</p>
+
+<p><strong>Done when:</strong></p>
+<ul>
+<li>In <code>make up</code>, Jaeger shows one trace per order delivery. It runs from the webhook or SFTP file, through ingest’s publish, NATS and dispatch’s order intake, to the re-dispatch that planned the order. A truck reporting <code>out_of_service</code> over MQTT produces the same kind of trace.</li>
+<li>Prometheus scrapes ingest and dispatch. Four of SPEC §8’s five metrics exist: ingest throughput per customer, DLQ size, re-dispatch latency and the pour-gap distribution. Edge sync lag arrives with the plant-agent in M7.</li>
+<li>Grafana opens on “Dispatch overview”, and after <code>make demo</code> every panel shows data.</li>
+<li><code>make demo</code> ends by printing a Jaeger link to its first order’s trace, and the dashboard’s URL.</li>
+<li>An integration test proves that a trace crosses NATS into the re-dispatch. Another test proves that the dashboard queries only metrics the services export.</li>
+<li><code>make test</code>, <code>make audit</code> and CI are green, and <code>make up</code> is healthy.</li>
+</ul>
+
+<h2 id="where">Where telemetry flows</h2>
+
+<figure>
+<svg class="dg" viewBox="0 0 680 330" role="img" aria-labelledby="f1t f1d">
+<title id="f1t">Telemetry flows in milestone 6</title>
+<desc id="f1d">Customers send orders by webhook and SFTP, and trucks and plants send telematics and tickets over MQTT, all to ingest. Ingest publishes to the EVENTS stream in NATS, and each message now carries a traceparent header. Dispatch consumes EVENTS. Ingest and dispatch both send spans to Jaeger over OTLP/HTTP. Prometheus scrapes ingest on port 9464 and dispatch on port 9465. Grafana queries Prometheus for the Dispatch overview dashboard.</desc>
+
+<g><title>Root span per delivery: one webhook request, one SFTP file or one MQTT message. A child span per published event.</title>
+<rect class="b-now" x="150" y="110" width="140" height="90" rx="8"/><text class="t c" x="220" y="135">ingest</text><text class="s c" x="220" y="155">root span per delivery</text><text class="s c" x="220" y="171">publish span per event</text><text class="s c" x="220" y="187">→ traceparent header</text></g>
+<rect class="b-done" x="320" y="130" width="110" height="50" rx="8"/><text class="t c" x="375" y="151">EVENTS</text><text class="s c" x="375" y="167">NATS JetStream</text>
+<text class="s c halo" x="375" y="198">+ traceparent</text>
+<g><title>The intake span continues the trace from the message header. The re-dispatch joins the trace of its first trigger.</title>
+<rect class="b-now" x="460" y="110" width="210" height="90" rx="8"/><text class="t c" x="565" y="135">dispatch</text><text class="s c" x="565" y="155">intake span: child of publish</text><text class="s c" x="565" y="171">→ trigger → re-dispatch</text><text class="s c" x="565" y="187">version + diff on the span</text></g>
+
+<rect class="b-done" x="10" y="110" width="110" height="40" rx="8"/><text class="t c" x="65" y="128">Customers</text><text class="s c" x="65" y="143">webhook, SFTP</text>
+<rect class="b-done" x="10" y="160" width="110" height="40" rx="8"/><text class="t c" x="65" y="178">Trucks, plants</text><text class="s c" x="65" y="193">MQTT</text>
+
+<rect class="b-now" x="300" y="20" width="150" height="46" rx="8"/><text class="t c" x="375" y="40">Jaeger</text><text class="s c" x="375" y="56">traces, OTLP/HTTP :4318</text>
+<rect class="b-now" x="300" y="250" width="150" height="46" rx="8"/><text class="t c" x="375" y="269">Prometheus</text><text class="s c" x="375" y="285">scrapes every 5 s</text>
+<g><title>Provisioned from deploy/grafana: the Prometheus datasource and the Dispatch overview dashboard</title>
+<rect class="b-now" x="560" y="250" width="110" height="46" rx="8"/><text class="t c" x="615" y="269">Grafana</text><text class="s c" x="615" y="285">Dispatch overview</text></g>
+
+<path class="e-done" d="M120 130 H146" marker-end="url(#ah)"/>
+<path class="e-done" d="M120 180 H146" marker-end="url(#ah)"/>
+<path class="e-done" d="M290 155 H316" marker-end="url(#ah)"/>
+<path class="e-done" d="M430 155 H456" marker-end="url(#ah)"/>
+
+<path class="e-now" d="M250 110 V43 H296" marker-end="url(#ah-now)"/><text class="s halo" x="256" y="90">spans</text>
+<path class="e-now" d="M520 110 V43 H454" marker-end="url(#ah-now)"/><text class="s halo" x="526" y="90">spans</text>
+<path class="e-now" d="M300 262 H250 V204" marker-end="url(#ah-now)"/><text class="s halo" x="256" y="238">scrape :9464</text>
+<path class="e-now" d="M450 262 H500 V204" marker-end="url(#ah-now)"/><text class="s halo" x="506" y="238">scrape :9465</text>
+<path class="e-now" d="M560 284 H454" marker-end="url(#ah-now)"/>
+
+<rect class="b-done" x="10" y="312" width="16" height="12" rx="3"/><text class="s" x="32" y="322">exists (M1–M5)</text>
+<rect class="b-now" x="140" y="312" width="16" height="12" rx="3"/><text class="s" x="162" y="322">built or configured in M6</text>
+</svg>
+<figcaption>Figure 1. The event path doesn’t change. Each NATS message gains one header, <code>traceparent</code>, which carries the trace across the stream. Metrics have their own port on each service, so they never share a listener with the customer-facing webhooks. Hover a box for details.</figcaption>
+</figure>
+
+<h2 id="trace">One trace, end to end</h2>
+<p>Every span is a <code>tracing</code> span. A <code>tracing-opentelemetry</code> layer exports them to Jaeger, next to the console logs we already have. The trace crosses three boundaries:</p>
+<ol>
+<li><strong>Ingest to NATS.</strong> <code>Bus::publish</code> runs inside a <code>publish</code> span and writes that span’s W3C <code>traceparent</code> into the message headers, next to <code>Nats-Msg-Id</code>. Webhooks, SFTP, MQTT and <code>ingest-cli replay</code> all publish through it, so all of them get the header.</li>
+<li><strong>NATS to dispatch.</strong> The intake reads the header and makes its <code>apply event</code> span a child of the publish span. A message without the header, such as one published before M6, starts a new trace.</li>
+<li><strong>Intake to the worker.</strong> Each trigger carries the span it was sent from. The <code>redispatch</code> span is a child of its first trigger’s span. Triggers merged into the same run become links on that span (decision 3).</li>
+</ol>
+
+<figure>
+<svg class="dg" viewBox="0 0 680 230" role="img" aria-labelledby="f2t f2d">
+<title id="f2t">The trace of one order in Jaeger</title>
+<desc id="f2d">A waterfall of seven spans with illustrative timings. In ingest: the webhook request for bauwerk-ag takes 14 milliseconds, and its child, publish to EVENTS, takes 7. In dispatch: apply event, which raises a NewOrder trigger, takes 11 milliseconds and is a child of the publish span. Its child, the re-dispatch to version 12, starts after it and takes 625 milliseconds, with three children: load world 28 milliseconds, construct, search and verify 562 milliseconds, and save plan and diff 35 milliseconds.</desc>
+<rect class="p-in" x="10" y="8" width="16" height="10" rx="2"/><text class="s" x="32" y="17">ingest</text>
+<rect class="p-dis" x="100" y="8" width="16" height="10" rx="2"/><text class="s" x="122" y="17">dispatch</text>
+
+<text class="m" x="10" y="48">ingest</text><text class="s" x="72" y="48">webhook bauwerk-ag</text><text class="s end" x="290" y="48">14 ms</text>
+<text class="m" x="10" y="72">ingest</text><text class="s" x="82" y="72">publish to EVENTS</text><text class="s end" x="290" y="72">7 ms</text>
+<text class="m" x="10" y="96">dispatch</text><text class="s" x="92" y="96">apply event · NewOrder</text><text class="s end" x="290" y="96">11 ms</text>
+<text class="m" x="10" y="120">dispatch</text><text class="s" x="102" y="120">redispatch → v12</text><text class="s end" x="290" y="120">625 ms</text>
+<text class="m" x="10" y="144">dispatch</text><text class="s" x="112" y="144">load world</text><text class="s end" x="290" y="144">28 ms</text>
+<text class="m" x="10" y="168">dispatch</text><text class="s" x="112" y="168">construct, search, verify</text><text class="s end" x="290" y="168">562 ms</text>
+<text class="m" x="10" y="192">dispatch</text><text class="s" x="112" y="192">save plan + diff</text><text class="s end" x="290" y="192">35 ms</text>
+
+<rect class="p-in" x="300" y="39" width="7" height="12" rx="1"/>
+<rect class="p-in" x="302" y="63" width="4" height="12" rx="1"/>
+<rect class="p-dis" x="308" y="87" width="6" height="12" rx="1"/>
+<rect class="p-dis" x="315" y="111" width="321" height="12" rx="1"/>
+<rect class="p-dis" x="315" y="135" width="14" height="12" rx="1"/>
+<rect class="p-dis" x="330" y="159" width="289" height="12" rx="1"/>
+<rect class="p-dis" x="619" y="183" width="18" height="12" rx="1"/>
+<text class="s halo" x="342" y="95">NATS hop: traceparent</text>
+<text class="s halo" x="344" y="121">version 12, 9 changes, triggers: NewOrder</text>
+
+<path class="axis" d="M300 206 H660"/>
+<text class="s c" x="300" y="222">0</text><text class="s c" x="403" y="222">200 ms</text><text class="s c" x="506" y="222">400 ms</text><text class="s c" x="609" y="222">600 ms</text>
+</svg>
+<figcaption>Figure 2. What Jaeger shows for one order, with illustrative timings. Hardly any time passes between the webhook and the intake. The re-dispatch is a child of the intake span, even though it starts after the intake has acked its message, because it is the work that the event caused.</figcaption>
+</figure>
+
+<h3 id="spans">Spans</h3>
+<table>
+<thead><tr><th>Span</th><th>Where</th><th>Attributes</th></tr></thead>
+<tbody>
+<tr><td><code>webhook</code>, <code>sftp file</code>, <code>mqtt message</code></td><td>ingest, one root per delivery</td><td>integration, file or topic, published, duplicates, dead-lettered</td></tr>
+<tr><td><code>publish</code></td><td>ingest, per event</td><td>event id, subject, order or truck, duplicate</td></tr>
+<tr><td><code>dead letter</code></td><td>ingest, per rejected record</td><td>integration, record, error count. The span status is error, so Jaeger shows it in red.</td></tr>
+<tr><td><code>apply event</code></td><td>dispatch intake</td><td>consumer, subject, event id, order or truck, outcome (applied, stale, skipped, retried), trigger</td></tr>
+<tr><td><code>redispatch</code></td><td>dispatch worker</td><td>triggers, previous version, new version, changes, outcome (new version, unchanged, failed)</td></tr>
+<tr><td><code>load world</code>, <code>plan</code>, <code>save plan</code></td><td>children of <code>redispatch</code></td><td>orders, frozen loads, loads planned. <code>plan</code> runs on the blocking thread inside the parent span.</td></tr>
+<tr><td><code>PUT /plants/{id}/status</code>, <code>POST /sites/{id}/delays</code>, <code>POST /plans</code></td><td>dispatch API, roots</td><td>plant or site. These are the requests that trigger a re-dispatch.</td></tr>
+</tbody>
+</table>
+<p>Spans carry ids and counts, never payloads. Raw records stay in the DLQ, where they already are. Two rules keep Jaeger readable:</p>
+<ul>
+<li>Only our own crates’ spans are exported, at <code>info</code> and above. Library internals (NATS, sqlx, hyper, and the exporter’s own HTTP calls) are left out. <code>RUST_LOG</code> still controls the console as before.</li>
+<li>GPS and drum messages aren’t traced (decision 4). They make up about 99% of the messages, at roughly two per second, and never trigger a re-dispatch.</li>
+</ul>
+
+<h2 id="metrics">Metrics</h2>
+<p>Metrics use the <code>metrics</code> crate. Each service exports them in Prometheus format on its own port. All metric names start with <code>pourline_</code> and are defined as constants, which the dashboard test reads.</p>
+<table>
+<thead><tr><th>Metric</th><th>Type, labels</th><th>Measured</th></tr></thead>
+<tbody>
+<tr><td><code>pourline_ingest_records_total</code></td><td>counter; <code>integration</code>, <code>outcome</code> = published, duplicate, dead_lettered</td><td>Per record, in <code>Bus::deliver</code> and the MQTT handler. The integrations are the three customers plus <code>telematics</code> and <code>plants</code>, the names the DLQ already uses. This is SPEC’s “ingest throughput per customer”.</td></tr>
+<tr><td><code>pourline_dlq_messages</code></td><td>gauge; <code>integration</code></td><td>Ingest reads the DLQ stream’s message count per subject every 15 s, so replays by <code>ingest-cli</code> show up too.</td></tr>
+<tr><td><code>pourline_redispatch_duration_seconds</code></td><td>histogram; <code>outcome</code></td><td>One re-dispatch run, from loading the world to storing the version (decision 6). The buckets run from 0.1 s to 10 s around the 500 ms search budget.</td></tr>
+<tr><td><code>pourline_redispatch_triggers_total</code></td><td>counter; <code>kind</code></td><td>Each trigger the worker runs, such as <code>new_order</code> or <code>truck_out_of_service</code>. The dashboard uses it to show what drives re-planning.</td></tr>
+<tr><td><code>pourline_plan_pour_gaps</code></td><td>gauge; <code>bucket</code> = 0–5, 5–10, 10–20, 20–30, over 30 min</td><td>The current plan’s gaps between consecutive loads of an order, counted per bucket. It is set again on every new version, and at startup from the latest stored version (decision 5).</td></tr>
+<tr><td><code>pourline_plan_*</code></td><td>gauges</td><td>The current plan’s <code>Metrics</code>, which every plan already carries: version, planned and unplanned orders, loads, maximum gap, gaps over the limit, lateness minutes and empty km.</td></tr>
+</tbody>
+</table>
+
+<h2 id="dashboard">The “Dispatch overview” dashboard</h2>
+<p>The dashboard is provisioned from <code>deploy/grafana/</code>, the place SPEC §10 gives it, and is Grafana’s home page. It has four rows:</p>
+<ol>
+<li><strong>Current plan.</strong> Stat tiles for the version, planned and unplanned orders, gaps over the limit, the maximum gap and empty km.</li>
+<li><strong>Pour gaps.</strong> A bar chart of the current plan’s gap buckets.</li>
+<li><strong>Re-dispatch.</strong> Runs per minute by outcome, latency at p50, p95 and p99, and triggers per minute by kind.</li>
+<li><strong>Ingest.</strong> Records per second by customer, stacked by outcome, and DLQ size by integration.</li>
+</ol>
+<p>Its header links to Jaeger and to the Swagger UI.</p>
+
+<h2 id="layout">Code layout</h2>
+<pre><code>crates/telemetry/          (new) shared by ingest and dispatch
+└── src/lib.rs             init: console logs, OTLP spans, metrics listener; the noise sampler;
+                           traceparent in and out of NATS headers
+crates/ingest/
+├── src/metrics.rs         names, descriptions, the DLQ poller (new)
+├── src/nats.rs            publish and dead-letter spans, the traceparent header, record counts
+└── src/sources.rs         root spans per delivery
+crates/dispatch/
+├── src/metrics.rs         names, descriptions, plan gauges, gap buckets (new)
+├── src/intake.rs          apply-event span, continued from the header
+├── src/worker.rs          triggers carry their span; redispatch span, links, latency
+└── src/api.rs             spans on the three triggering endpoints
+crates/simulators/src/bin/demo.rs   prints the trace link and the dashboard URL
+deploy/compose/prometheus.yml       scrape config (new)
+deploy/grafana/                     datasource, dashboard provider, dispatch-overview.json (new)</code></pre>
+<p>Simulators and <code>ingest-cli</code> keep their plain console logs. Neither runs inside the traced path.</p>
+
+<h2 id="config">Configuration</h2>
+<table>
+<thead><tr><th>Variable</th><th>Default</th></tr></thead>
+<tbody>
+<tr><td><code>OTEL_EXPORTER_OTLP_ENDPOINT</code></td><td><code>http://localhost:4318</code>. Compose sets <code>http://jaeger:4318</code>. This is the standard OpenTelemetry variable, which the exporter reads itself. If Jaeger is unreachable, spans are dropped and a warning is logged. A request never waits for, or fails because of, tracing.</td></tr>
+<tr><td><code>METRICS_ADDR</code> (ingest)</td><td><code>0.0.0.0:9464</code></td></tr>
+<tr><td><code>DISPATCH_METRICS_ADDR</code></td><td><code>0.0.0.0:9465</code>. It differs from ingest’s default so both can run on one host. The variable is prefixed like <code>DISPATCH_HTTP_ADDR</code>, because every service reads the same <code>.env</code>.</td></tr>
+</tbody>
+</table>
+<p>The metrics ports stay inside the compose network. Prometheus (<code>localhost:9090</code>) is the way in.</p>
+
+<h2 id="steps">Steps</h2>
+<p>Each step ends green and becomes its own commit.</p>
+
+<h3 id="step-1">Step 1</h3>
+<p><strong>The <code>telemetry</code> crate.</strong> First, check <code>rust-toolchain.toml</code>, the crate versions and the pinned Prometheus, Grafana and Jaeger images. Then build:</p>
+<ul>
+<li><code>init(service)</code>, which sets up console logs as today, the OTLP span exporter with the target filter, and the metrics listener, and returns a guard that flushes spans at shutdown;</li>
+<li><code>inject</code> and <code>extract</code>, which move a span’s context into and out of a NATS <code>HeaderMap</code>;</li>
+<li>the sampler that drops GPS and drum roots, and follows the parent’s decision everywhere else.</li>
+</ul>
+<p>Unit tests check that a context round-trips through headers, that a GPS root isn’t sampled while a ticket root is, and that a child of an unsampled remote parent isn’t sampled either. The <code>ingest</code> and <code>dispatch</code> binaries switch to <code>init</code>, and compose gets the endpoint variable.</p>
+
+<h3 id="step-2">Step 2</h3>
+<p><strong>The trace across NATS.</strong> This step adds the ingest spans and the header, the intake span, triggers that carry their span, the <code>redispatch</code> span with its children and links, and the API spans. Tests, with an in-memory span exporter:</p>
+<ul>
+<li>in <code>ingest/tests/bus.rs</code>, an event published inside a span carries that span’s <code>traceparent</code> in the stored message;</li>
+<li>in <code>dispatch/tests/intake.rs</code>, against real NATS and Postgres, an order published through ingest’s <code>Bus</code> produces publish, apply-event and redispatch spans with one trace id, each the parent of the next;</li>
+<li>in the same file, two triggers merged into one run give one <code>redispatch</code> span, with a parent from the first trigger and a link to the second;</li>
+<li>a webhook router test checks that the <code>202</code> response carries the trace id (decision 9).</li>
+</ul>
+
+<h3 id="step-3">Step 3</h3>
+<p><strong>Metrics.</strong> This step adds ingest’s record counter and DLQ poller, and dispatch’s latency histogram, trigger counter and plan gauges. The gap buckets are a pure function, with unit tests for gaps that fall on a boundary, a single-load order and frozen loads. The other recording calls are one line each and get no tests of their own. Step 4 checks them end to end.</p>
+
+<h3 id="step-4">Step 4</h3>
+<p><strong>Prometheus, Grafana and the dashboard.</strong> This step adds:</p>
+<ul>
+<li>the scrape config;</li>
+<li>Grafana provisioning, with the dashboard as the home page and anonymous read-only access (decision 8);</li>
+<li>healthchecks for Prometheus and Grafana, so <code>make up --wait</code> covers them. Jaeger gets one too if its image has a tool to run it with.</li>
+</ul>
+<p>A test in <code>dispatch/tests</code>, which can already see ingest, reads <code>dispatch-overview.json</code> and fails if a query names a <code>pourline_</code> metric that neither service defines.</p>
+
+<h3 id="step-5">Step 5</h3>
+<p><strong>Demo, README, and a full run.</strong></p>
+<ul>
+<li><code>make demo</code> prints a Jaeger link to its first order’s trace, using the trace id from the webhook response, and the dashboard’s URL.</li>
+<li>The README gets an “Observability” section with what to open, the trace’s path, the metrics table and the updated Grafana access.</li>
+<li>Run <code>make demo</code> on a fresh stack. Then confirm in Jaeger that the order’s trace reaches its <code>redispatch</code> span, and confirm through Prometheus’s API that every dashboard query returns data. Commit.</li>
+</ul>
+<p>The sandbox can’t edit <code>.env.*</code> files, so I’ll give you the lines to add to <code>.env.example</code>.</p>
+
+<h2 id="decisions">Decisions I need from you</h2>
+<p>I’ll use the default unless you say otherwise.</p>
+<table>
+<thead><tr><th>#</th><th>Question</th><th>My default</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Which metrics stack?</td><td><code>metrics</code> with <code>metrics-exporter-prometheus</code>, which Prometheus scrapes. SPEC §11 names it, it’s Prometheus’s native model, and metric names reach Prometheus exactly as written. The alternative is OpenTelemetry metrics pushed over OTLP to Prometheus’s OTLP receiver. That would mean one SDK for both signals, but metric names get translated, and the push needs a second exporter endpoint.</td></tr>
+<tr><td>2</td><td>Does ingest honour a <code>traceparent</code> that a customer sends?</td><td>No. Every delivery starts a new trace. Customers are untrusted callers, and their trace ids mean nothing in our Jaeger.</td></tr>
+<tr><td>3</td><td>Which trace does a re-dispatch of merged triggers belong to?</td><td>Its first trigger’s trace, as a child. Every other trigger in the run becomes a link, which Jaeger shows as a reference from the <code>redispatch</code> span. The other traces end at their intake span, and the link leads on from there.</td></tr>
+<tr><td>4</td><td>Do we trace GPS and drum messages?</td><td>No. At about two per second they would bury the order traces in search results, and they would push the order traces out of Jaeger’s in-memory store first. They are still counted in <code>pourline_ingest_records_total</code>. Status reports and batch tickets are traced, because they freeze loads or trigger a re-dispatch.</td></tr>
+<tr><td>5</td><td>What does “pour-gap distribution” measure?</td><td>The current plan: one gauge per gap bucket, replaced on every new version. The alternative is a histogram over every stored version’s gaps. That counts an unchanged pour again with every version, so busy periods would look worse than they are.</td></tr>
+<tr><td>6</td><td>Where does “re-dispatch latency” start?</td><td>When the worker takes the batch, and it ends when the version is stored. Waiting in the queue shows up in the trace as the gap between the intake span and the <code>redispatch</code> span. A queue-wait metric can follow if the queue ever backs up.</td></tr>
+<tr><td>7</td><td>Edge sync lag?</td><td>M7, together with its dashboard panel. Until the plant-agent exists, there is nothing to measure.</td></tr>
+<tr><td>8</td><td>How do you get into Grafana?</td><td>Anonymous read-only access, with “Dispatch overview” as the home page, so the link from <code>make demo</code> opens without a login. <code>admin</code> / <code>admin</code> stays for editing. The port binds to <code>127.0.0.1</code>, like every other port.</td></tr>
+<tr><td>9</td><td>Does the webhook’s <code>202</code> response carry the trace id?</td><td>Yes, as a new <code>trace_id</code> field next to the counts. Support can then find a customer’s delivery in Jaeger, and the demo can link to its trace directly. The change only adds a field, so existing clients aren’t affected.</td></tr>
+</tbody>
+</table>
+
+<h2 id="later">Heads-up: not in M6</h2>
+<ul>
+<li>Log lines don’t carry trace ids. That only pays off with a log backend, such as Loki, which SPEC doesn’t ask for.</li>
+<li>There are no exemplars that link histogram buckets to traces, because the Prometheus exporter doesn’t support them, and there are no alerting rules.</li>
+<li>Dead letters don’t keep their trace context. A replay starts a new trace.</li>
+<li>Jaeger keeps traces in memory, so <code>make down</code> or a restart loses them. That’s fine for a local stack.</li>
+</ul>
+
+<h2 id="deps">New dependencies</h2>
+<table>
+<thead><tr><th>Crate</th><th>Version</th><th>For</th></tr></thead>
+<tbody>
+<tr><td><code>opentelemetry</code>, <code>opentelemetry_sdk</code></td><td>0.33.1</td><td>Span context, propagation and the sampler. The SDK’s <code>testing</code> feature, as a dev-dependency, provides the in-memory exporter.</td></tr>
+<tr><td><code>opentelemetry-otlp</code></td><td>0.33.1</td><td>Traces only, over HTTP with protobuf. It reuses reqwest 0.13.5, which the workspace already has, so there’s no gRPC or TLS stack.</td></tr>
+<tr><td><code>tracing-opentelemetry</code></td><td>0.34.0</td><td>Bridges <code>tracing</code> spans to OpenTelemetry. This is the release that pairs with OpenTelemetry 0.33.</td></tr>
+<tr><td><code>metrics</code></td><td>0.24.6</td><td>Counters, gauges and histograms</td></tr>
+<tr><td><code>metrics-exporter-prometheus</code></td><td>0.18.3</td><td>The <code>/metrics</code> listener, with default features off and only <code>http-listener</code> on, so no push gateway and no TLS</td></tr>
+</tbody>
+</table>
+<p>I resolved these in a scratch crate, and they add no duplicate versions of reqwest, hyper or tokio. I’ll check RustSec in step 1.</p>
+
+</div>
+</article>
+</div></div></div></div></div>
+</main>
+</div>
+</body>
+</html>
