@@ -1,0 +1,17 @@
+# The cloud cluster (SPEC §9): ingest, dispatch, their infrastructure and the simulators.
+# make k8s creates it on pourline-net; its ingress is http://localhost:8080.
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: cloud
+servers: 1
+image: rancher/k3s:v1.37.2-k3s1
+network: pourline-net
+kubeAPI:
+  hostIP: 127.0.0.1
+  hostPort: "6550"
+ports:
+  - port: 127.0.0.1:8080:80
+    nodeFilters: [loadbalancer]
+registries:
+  use: [k3d-pourline-registry:5050]

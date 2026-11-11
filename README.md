@@ -22,8 +22,10 @@ sets. When a truck breaks down or a site runs late, it re-plans. The full design
   integration tests start NATS and Postgres containers with testcontainers.
 - **Rust** via [rustup](https://rustup.rs). `rust-toolchain.toml` pins 1.99.1, and rustup installs it on first use.
 - Optional: `cargo install cargo-audit --locked` for `make audit`.
-
-Kubernetes tooling (k3d, kubectl, Helm) is only needed from milestone 7 onwards.
+- For `make k8s` and `make chaos`: **k3d** and **kubectl**, and Docker with at least 4 CPUs and
+  8 GB of memory. On macOS: `brew install k3d kubectl`; on Linux, Docker Engine and the
+  [k3d install script](https://k3d.io). Check with `k3d version && kubectl version --client`.
+  Helm joins them with milestone 8.
 
 ## Commands
 
@@ -36,9 +38,8 @@ Kubernetes tooling (k3d, kubectl, Helm) is only needed from milestone 7 onwards.
 | `make bench` | Runs the planner benchmarks at 50, 200 and 1,000 loads (a few minutes) |
 | `make audit` | Checks the dependencies against the RustSec advisory database |
 | `make sqlx-prepare` | Refreshes `.sqlx/` after a query or migration changes (needs `make up` and `cargo install sqlx-cli --locked`) |
-| `make down` | Stops everything and deletes the volumes |
-
-`make k8s` and `make chaos` arrive with milestone 7.
+| `make k8s` | Runs Pourline in two k3d clusters, `cloud` and `plant-walldorf`: see [Kubernetes](#kubernetes) |
+| `make down` | Stops everything and deletes the volumes, and deletes the k3d clusters, their registry and network |
 
 ## Local services
 
@@ -341,7 +342,8 @@ no service defines.
 ## Edge
 
 The plant-agent (`crates/plant-agent`) is the service that runs at a batching plant (SPEC §6). In
-compose, Walldorf's agent runs next to the cloud services.
+compose, Walldorf's agent runs next to the cloud services; [`make k8s`](#kubernetes) gives it a
+cluster of its own.
 
 - Every 15 s it fetches its plant's slice of the latest plan, `GET /plants/plant-walldorf/plan`,
   and keeps it in a SQLite file.
@@ -384,6 +386,43 @@ fetched or stored, whatever the state of its links: an offline plant keeps worki
 | `PLANT_AGENT_METRICS_ADDR` | `0.0.0.0:9466` |
 | `PLAN_POLL_SECS` | `15` |
 | `AGENT_PLANTS` (simulators) | Empty; compose sets `plant-walldorf`, whose simulated plant then stays quiet |
+
+## Kubernetes
+
+`make k8s` runs the cloud and the plant in two k3d clusters, as SPEC §9 describes. It stops if
+`localhost:8080` is taken, so run `make down` first if the compose stack is up. The two setups
+are alternatives.
+
+1. It creates the Docker network `pourline-net` with a fixed subnet, and a local registry,
+   `k3d-pourline-registry`, on `localhost:5050`.
+2. It creates the clusters from `deploy/k3d/cloud.yaml` and `deploy/k3d/plant-walldorf.yaml`, on
+   that network, with a pinned k3s. The plant cluster gets a host alias, `cloud`, for the cloud
+   node's address.
+3. It builds the five images, pushes them as `localhost:5050/<service>:dev`, and applies the
+   manifests in `deploy/k3d/cloud/` and `deploy/k3d/plant-walldorf/` with
+   `kubectl kustomize --load-restrictor LoadRestrictionsNone`. That way the Mosquitto config and
+   the customer mappings come from the same files compose uses.
+
+| Cluster | Runs | Reach it |
+|---|---|---|
+| `cloud` | Postgres, NATS, Mosquitto, SFTP, Jaeger, ingest, dispatch, the simulators | http://localhost:8080: webhooks under `/webhooks`, the dispatch API everywhere else; `kubectl --context k3d-cloud` (API on `127.0.0.1:6550`) |
+| `plant-walldorf` | the plant-agent, with its SQLite file on a volume | `kubectl --context k3d-plant-walldorf` (API on `127.0.0.1:6551`) |
+
+The plant-agent fetches its plan from `http://cloud` through the cloud's ingress, and sends its
+tickets to `mqtt://cloud:1883`, which the cloud's Mosquitto opens on its node. Prometheus and
+Grafana run only in compose for now; Jaeger runs in both:
+`kubectl --context k3d-cloud -n pourline port-forward svc/jaeger 16686`.
+
+```sh
+kubectl --context k3d-cloud -n pourline get pods
+kubectl --context k3d-plant-walldorf -n pourline logs deploy/plant-agent -f
+curl -s localhost:8080/plants/plant-walldorf/plan | jq '.version, (.loads | length)'
+```
+
+`make k8s` is safe to run again. It creates what is missing, rebuilds and pushes the images, and
+restarts ingest, dispatch, the simulators and the agent. The infrastructure keeps its data.
+`SKIP_BUILD=1 make k8s` skips the images, for a change to the manifests only. The manifests are
+plain YAML until milestone 8 turns them into Helm charts.
 
 ## Dependencies and security
 

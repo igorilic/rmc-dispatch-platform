@@ -1,0 +1,54 @@
+# The plant-agent reaches the cloud as `cloud`, a host alias make k8s gives this cluster for the
+# cloud node on pourline-net: the plan through its ingress on port 80, tickets through Mosquitto
+# on 1883. Its SQLite file lives on a volume, so the outbox and the plan survive a new pod.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: plant-agent
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 100Mi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: plant-agent
+spec:
+  # One writer for the SQLite file: the old pod stops before the new one starts.
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: plant-agent } }
+  template:
+    metadata: { labels: { app: plant-agent } }
+    spec:
+      securityContext: { runAsNonRoot: true, fsGroup: 65532 }
+      containers:
+        - name: plant-agent
+          image: k3d-pourline-registry:5050/plant-agent:dev
+          imagePullPolicy: Always
+          env:
+            - { name: PLANT_ID, value: plant-walldorf }
+            - { name: DISPATCH_URL, value: "http://cloud" }
+            - { name: MQTT_URL, value: "mqtt://cloud:1883" }
+            - { name: PLANT_AGENT_DB, value: /data/plant-agent.sqlite }
+          ports:
+            - { name: http, containerPort: 8082 }
+            - { name: metrics, containerPort: 9466 }
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+          # Ready once it has a plan, fetched or stored: an offline plant keeps working.
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+          volumeMounts: [{ name: data, mountPath: /data }]
+      volumes:
+        - { name: data, persistentVolumeClaim: { claimName: plant-agent } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: plant-agent
+spec:
+  selector: { app: plant-agent }
+  ports:
+    - { name: http, port: 8082 }
+    - { name: metrics, port: 9466 }

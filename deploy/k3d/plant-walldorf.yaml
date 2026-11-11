@@ -1,0 +1,21 @@
+# The Walldorf plant's cluster (SPEC §6, §9): only the plant-agent. make k8s creates it on
+# pourline-net with a host alias, `cloud`, for the cloud cluster's node, and make chaos cuts its
+# node off that network.
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: plant-walldorf
+servers: 1
+image: rancher/k3s:v1.37.2-k3s1
+network: pourline-net
+kubeAPI:
+  hostIP: 127.0.0.1
+  hostPort: "6551"
+registries:
+  use: [k3d-pourline-registry:5050]
+options:
+  k3s:
+    extraArgs:
+      # Nothing at the plant takes requests from outside, so it needs no ingress controller.
+      - arg: --disable=traefik
+        nodeFilters: [server:*]

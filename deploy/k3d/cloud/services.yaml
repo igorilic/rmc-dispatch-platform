@@ -1,0 +1,115 @@
+# Pourline's own services, from the images make k8s pushes to the local registry. The `:dev` tag
+# is overwritten on every push, so pods always pull.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingest
+spec:
+  selector: { matchLabels: { app: ingest } }
+  template:
+    metadata: { labels: { app: ingest } }
+    spec:
+      containers:
+        - name: ingest
+          image: k3d-pourline-registry:5050/ingest:dev
+          imagePullPolicy: Always
+          env:
+            - { name: NATS_URL, value: "nats://nats:4222" }
+            - { name: MQTT_URL, value: "mqtt://mosquitto:1883" }
+            - { name: SFTP_HOST, value: sftp }
+            - { name: SFTP_PORT, value: "2222" }
+            - { name: SFTP_USER, valueFrom: { secretKeyRef: { name: dev-credentials, key: SFTP_USER } } }
+            - { name: SFTP_PASSWORD, valueFrom: { secretKeyRef: { name: dev-credentials, key: SFTP_PASSWORD } } }
+            - { name: MAPPINGS_DIR, value: /customers }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://jaeger:4318" }
+          ports: [{ containerPort: 8080 }, { containerPort: 9464 }]
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 2
+          # One ConfigMap per customer, the shape M8's CustomerIntegration manages.
+          volumeMounts:
+            - { name: bauwerk-ag, mountPath: /customers/bauwerk-ag }
+            - { name: neckar-infra, mountPath: /customers/neckar-infra }
+            - { name: rheinbau-gmbh, mountPath: /customers/rheinbau-gmbh }
+      volumes:
+        - { name: bauwerk-ag, configMap: { name: bauwerk-ag-mapping } }
+        - { name: neckar-infra, configMap: { name: neckar-infra-mapping } }
+        - { name: rheinbau-gmbh, configMap: { name: rheinbau-gmbh-mapping } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingest
+spec:
+  selector: { app: ingest }
+  ports: [{ port: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dispatch
+spec:
+  selector: { matchLabels: { app: dispatch } }
+  template:
+    metadata: { labels: { app: dispatch } }
+    spec:
+      containers:
+        - name: dispatch
+          image: k3d-pourline-registry:5050/dispatch:dev
+          imagePullPolicy: Always
+          env:
+            - { name: DATABASE_URL, valueFrom: { secretKeyRef: { name: dev-credentials, key: DATABASE_URL } } }
+            - { name: NATS_URL, value: "nats://nats:4222" }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://jaeger:4318" }
+          ports: [{ containerPort: 8081 }, { containerPort: 9465 }]
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8081 }
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dispatch
+spec:
+  selector: { app: dispatch }
+  ports: [{ port: 8081 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: simulators
+spec:
+  selector: { matchLabels: { app: simulators } }
+  template:
+    metadata: { labels: { app: simulators } }
+    spec:
+      containers:
+        - name: simulators
+          image: k3d-pourline-registry:5050/simulators:dev
+          imagePullPolicy: Always
+          env:
+            - { name: MQTT_URL, value: "mqtt://mosquitto:1883" }
+            - { name: SFTP_HOST, value: sftp }
+            - { name: SFTP_PORT, value: "2222" }
+            - { name: SFTP_USER, valueFrom: { secretKeyRef: { name: dev-credentials, key: SFTP_USER } } }
+            - { name: SFTP_PASSWORD, valueFrom: { secretKeyRef: { name: dev-credentials, key: SFTP_PASSWORD } } }
+            - { name: BAUWERK_WEBHOOK_URL, value: "http://ingest:8080/webhooks/bauwerk-ag" }
+            - { name: NECKAR_WEBHOOK_URL, value: "http://ingest:8080/webhooks/neckar-infra" }
+            # Walldorf's batch computer is its plant-agent, in the plant-walldorf cluster.
+            - { name: AGENT_PLANTS, value: plant-walldorf }
+---
+# k3s's Traefik on http://localhost:8080 (from the host) and http://cloud (from the plant cluster).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pourline
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /webhooks
+            pathType: Prefix
+            backend: { service: { name: ingest, port: { number: 8080 } } }
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: dispatch, port: { number: 8081 } } }

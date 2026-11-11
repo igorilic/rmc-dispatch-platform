@@ -1,0 +1,33 @@
+# The cloud cluster's workloads (SPEC §9), the compose stack minus Prometheus and Grafana.
+# Plain manifests until M8 turns them into Helm charts. make k8s renders them with
+# `kubectl kustomize --load-restrictor LoadRestrictionsNone`, so the configs below are the very
+# files compose uses, not copies.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: pourline
+resources:
+  - namespace.yaml
+  - infra.yaml
+  - services.yaml
+generatorOptions:
+  # Stable names: M8's CustomerIntegration refers to `<customer>-mapping` by name.
+  disableNameSuffixHash: true
+configMapGenerator:
+  - name: mosquitto-config
+    files: [mosquitto.conf=../../compose/mosquitto.conf]
+  - name: bauwerk-ag-mapping
+    files: [mapping.yaml=../../../customers/bauwerk-ag/mapping.yaml]
+  - name: neckar-infra-mapping
+    files: [mapping.yaml=../../../customers/neckar-infra/mapping.yaml]
+  - name: rheinbau-gmbh-mapping
+    files: [mapping.yaml=../../../customers/rheinbau-gmbh/mapping.yaml]
+secretGenerator:
+  # The same throwaway local defaults as compose; the cluster only listens on 127.0.0.1.
+  - name: dev-credentials
+    literals:
+      - POSTGRES_USER=pourline
+      - POSTGRES_PASSWORD=pourline
+      - POSTGRES_DB=pourline
+      - DATABASE_URL=postgres://pourline:pourline@postgres:5432/pourline
+      - SFTP_USER=pourline
+      - SFTP_PASSWORD=pourline
