@@ -93,6 +93,14 @@ impl Store {
         }))
     }
 
+    /// How many messages are waiting.
+    pub fn waiting(&self) -> Result<u64, StoreError> {
+        let count: i64 = self
+            .conn()
+            .query_row("SELECT count(*) FROM outbox", [], |row| row.get(0))?;
+        Ok(count.unsigned_abs())
+    }
+
     /// Removes a message once the broker has acknowledged it.
     pub fn remove(&self, id: i64) -> Result<(), StoreError> {
         self.conn()

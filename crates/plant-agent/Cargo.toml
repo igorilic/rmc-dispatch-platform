@@ -15,8 +15,15 @@ license = "MIT"
 
 [dependencies]
 chrono = { version = "0.4.45", features = ["serde"] }
+metrics = "0.24.6"
+rumqttc = { version = "0.25.1", default-features = false, features = ["url"] } # plain MQTT, no TLS
 rusqlite = { version = "0.42.0", features = ["bundled"] } # bundled: SQLite 3.54.1 compiled in, no system library
 thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+testcontainers = "0.28.0"
 
 # The root workspace's lints, which a second workspace can't inherit.
 [lints.clippy]
