@@ -1,4 +1,4 @@
-# Local stack (SPEC §9): infrastructure, the simulators, ingest and dispatch. More services arrive in later milestones.
+# Local stack (SPEC §9): infrastructure, the simulators, ingest, dispatch and Walldorf's plant-agent.
 # Images are pinned to exact versions; Dependabot proposes bumps.
 # Host ports bind to 127.0.0.1 only: the dev credentials below never leave this machine.
 name: pourline
@@ -97,10 +97,33 @@ services:
       NECKAR_WEBHOOK_URL: http://ingest:8080/webhooks/neckar-infra
       # make demo slows order generation down, so its scenario stays readable.
       ORDER_INTERVAL_SECS: ${ORDER_INTERVAL_SECS:-180}
+      # Walldorf's plant-agent is its batch computer, so its fake one stays quiet.
+      AGENT_PLANTS: plant-walldorf
     depends_on:
       mosquitto: { condition: service_healthy }
       sftp: { condition: service_healthy }
       ingest: { condition: service_started }
+    restart: unless-stopped
+
+  # The edge agent for Walldorf (SPEC §6). Here it shares the host with the cloud; make k8s runs it
+  # in a cluster of its own. Prometheus also reaches it over `edge`, so the dashboard keeps showing
+  # its outbox when it is cut off the default network (docker network disconnect).
+  plant-agent:
+    build:
+      context: ../..
+      args: { BIN: plant-agent }
+    env_file: [{ path: ../../.env, required: false }]
+    environment:
+      PLANT_ID: plant-walldorf
+      DISPATCH_URL: http://dispatch:8081
+      MQTT_URL: mqtt://mosquitto:1883
+      PLANT_AGENT_DB: /data/plant-agent.sqlite
+    volumes: ["plant-agent:/data"]
+    networks: [default, edge]
+    ports: ["127.0.0.1:8082:8082"]
+    depends_on:
+      mosquitto: { condition: service_healthy }
+      dispatch: { condition: service_started }
     restart: unless-stopped
 
   # make demo's scripted scenario; runs once, only with --profile demo.
@@ -120,11 +143,12 @@ services:
       ingest: { condition: service_started }
       mosquitto: { condition: service_healthy }
 
-  # Observability (SPEC §8): Prometheus scrapes ingest and dispatch, Grafana opens on the provisioned
-  # "Dispatch overview", Jaeger keeps traces in memory.
+  # Observability (SPEC §8): Prometheus scrapes ingest, dispatch and the plant-agent, Grafana opens
+  # on the provisioned "Dispatch overview", Jaeger keeps traces in memory.
   prometheus:
     image: prom/prometheus:v3.16.0
     volumes: ["./prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    networks: [default, edge]
     ports: ["127.0.0.1:9090:9090"]
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/ready"]
@@ -156,3 +180,11 @@ services:
       test: ["CMD", "wget", "-qO-", "http://localhost:13133/status"]
       interval: 2s
       retries: 30
+
+# The plant-agent keeps its SQLite file here; make down deletes it with the other volumes.
+volumes:
+  plant-agent:
+
+# Prometheus scrapes the plant-agent over `edge`, which a cut of the default network leaves alone.
+networks:
+  edge:

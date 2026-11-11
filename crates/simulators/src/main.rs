@@ -38,6 +38,8 @@ struct Config {
     order_interval: Duration,
     fleet: FleetConfig,
     seed: u64,
+    /// Plants whose plant-agent runs: their fake batch computer stays quiet.
+    agent_plants: Vec<String>,
 }
 
 impl Config {
@@ -80,6 +82,12 @@ impl Config {
                 repair: secs("TRUCK_REPAIR_MINUTES", "60").map(|minutes| minutes * 60)?,
             },
             seed: parsed("SIM_SEED", &parse("SIM_SEED", "42"))?,
+            agent_plants: parse("AGENT_PLANTS", "")
+                .split(',')
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .map(str::to_owned)
+                .collect(),
         })
     }
 }
@@ -115,14 +123,24 @@ async fn main() -> anyhow::Result<()> {
     let mut tasks = JoinSet::new();
 
     let mut plants: HashMap<PlantId, Arc<PlantSim>> = HashMap::new();
+    for name in &config.agent_plants {
+        ensure!(
+            world.plant(name).is_some(),
+            "AGENT_PLANTS names {name}, which isn't a plant in the seed"
+        );
+    }
     for (i, plant) in world.plants.iter().enumerate() {
-        let sim = PlantSim::new(
+        let mut sim = PlantSim::new(
             plant.clone(),
             tx.clone(),
             clock,
             config.fleet.chaos,
             config.seed.wrapping_add(100 + i as u64),
         );
+        if config.agent_plants.contains(&plant.id.0) {
+            info!(plant = %plant.id.0, "its plant-agent sends the tickets");
+            sim = sim.quiet();
+        }
         plants.insert(plant.id.clone(), Arc::new(sim));
     }
     let mut breakdowns = HashMap::new();
@@ -281,6 +299,7 @@ mod tests {
         assert_eq!(config.fleet.dead_zone_trip_share, 0.2);
         assert_eq!(config.fleet.repair, Duration::from_secs(3600));
         assert_eq!(config.seed, 42);
+        assert!(config.agent_plants.is_empty(), "every plant simulated");
         // Throwaway dev tokens, the same defaults ingest uses.
         assert_eq!(config.bauwerk_webhook_token, "dev-token-bauwerk-ag");
         assert_eq!(config.neckar_webhook_token, "dev-token-neckar-infra");
@@ -299,6 +318,7 @@ mod tests {
             ),
             ("NECKAR_WEBHOOK_URL", " "),
             ("SIM_SEED", "7"),
+            ("AGENT_PLANTS", "plant-walldorf, plant-mannheim,"),
         ]))
         .unwrap();
         assert_eq!(
@@ -307,6 +327,7 @@ mod tests {
         );
         assert_eq!(config.neckar_webhook_url, None, "blank means unset");
         assert_eq!(config.seed, 7);
+        assert_eq!(config.agent_plants, ["plant-walldorf", "plant-mannheim"]);
 
         assert!(Config::from_lookup(env(&[("TELEMATICS_DUPLICATE_RATE", "1.5")])).is_err());
         assert!(Config::from_lookup(env(&[("DEAD_ZONE_TRIP_SHARE", "-0.1")])).is_err());

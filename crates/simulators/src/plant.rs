@@ -4,6 +4,9 @@
 //! The bays are a semaphore that trucks queue on. Each load produces three ticket events on
 //! `plants/{id}/tickets`: `batching`, `loading` and `loaded`. Batching takes volume ÷ batching
 //! rate, and loading the truck takes a fixed 3 minutes.
+//!
+//! A plant whose plant-agent runs (`AGENT_PLANTS`) goes quiet: its trucks still wait for bays and
+//! take as long to load, but the agent is the plant's one batch computer and sends the tickets.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -25,6 +28,7 @@ pub struct PlantSim {
     modem: Mutex<Modem>,
     out: mpsc::Sender<Outgoing>,
     clock: Clock,
+    quiet: bool,
 }
 
 impl PlantSim {
@@ -42,6 +46,15 @@ impl PlantSim {
             plant,
             out,
             clock,
+            quiet: false,
+        }
+    }
+
+    /// Sends no tickets, because the plant's agent sends them.
+    pub fn quiet(self) -> Self {
+        PlantSim {
+            quiet: true,
+            ..self
         }
     }
 
@@ -92,6 +105,9 @@ impl PlantSim {
         mix: &MixCode,
         volume_m3: f64,
     ) -> anyhow::Result<()> {
+        if self.quiet {
+            return Ok(());
+        }
         info!(plant = %self.plant.id.0, ticket_no, truck = %truck.0, ?event, "batch ticket");
         // The simulated plants batch for random trips, so their tickets name no order or load.
         let ticket = PlantTicket {
@@ -183,5 +199,28 @@ mod tests {
         tickets.sort();
         let expected: Vec<String> = (1..=5).map(|n| format!("WAL-{n:06}")).collect();
         assert_eq!(tickets, expected, "unique and sequential per plant");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_plant_with_an_agent_loads_trucks_without_sending_tickets() {
+        let (tx, mut rx) = mpsc::channel(100);
+        let clock = Clock::start(Utc.with_ymd_and_hms(2026, 11, 9, 6, 0, 0).unwrap());
+        let sim = PlantSim::new(plant(2), tx, clock, Chaos::NONE, 1).quiet();
+
+        let bay = sim.acquire_bay().await.unwrap();
+        let truck = TruckId("truck-1".into());
+        let started = tokio::time::Instant::now();
+        sim.load(bay, &truck, &MixCode("C30/37-XC4".into()), 9.0)
+            .await
+            .unwrap();
+        assert_eq!(
+            started.elapsed(),
+            Duration::from_secs(450),
+            "the truck still takes 4.5 + 3 minutes"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "the agent is the plant's batch computer"
+        );
     }
 }

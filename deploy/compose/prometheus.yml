@@ -1,4 +1,5 @@
-# Scrapes ingest and dispatch (SPEC §8). Their metrics ports stay inside the compose network.
+# Scrapes ingest, dispatch and the plant-agent (SPEC §8). Their metrics ports stay inside the
+# compose networks.
 global:
   scrape_interval: 5s
 
@@ -7,3 +8,5 @@ scrape_configs:
     static_configs: [{ targets: ["ingest:9464"] }]
   - job_name: dispatch
     static_configs: [{ targets: ["dispatch:9465"] }]
+  - job_name: plant-agent
+    static_configs: [{ targets: ["plant-agent:9466"], labels: { plant: plant-walldorf } }]

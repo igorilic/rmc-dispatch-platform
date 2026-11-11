@@ -49,6 +49,7 @@ Every port binds to `127.0.0.1` only.
 | Postgres | `localhost:5432` | `pourline` / `pourline`, database `pourline` |
 | Ingest webhooks | http://localhost:8080/webhooks/{integration} | a bearer token per integration |
 | Dispatch API | http://localhost:8081, Swagger UI at http://localhost:8081/swagger-ui/ | none |
+| Walldorf's plant-agent | http://localhost:8082/status, `/healthz` and `/readyz` | none |
 | NATS (JetStream) | `localhost:4222`, monitoring at http://localhost:8222 | none |
 | Mosquitto (MQTT) | `localhost:1883` | anonymous |
 | SFTP | `localhost:2222` | `pourline` / `pourline` |
@@ -229,10 +230,11 @@ curl -s -X PUT localhost:8081/plants/plant-walldorf/status -H 'content-type: app
 docker exec pourline-mosquitto-1 mosquitto_pub -t sim/trucks/truck-07/breakdown -m ''   # a simulated truck breaks down
 ```
 
-An order with a delivery reads as `in_progress`. The simulated trucks still make random trips,
-and the simulated plants batch for them without naming a load. In the live stack, loads only
-freeze when `make demo` plays the plant. Trucks following the plan arrive with milestone 7's
-plant-agent. The milestone 5 plan in `docs/context/specs/` has diagrams.
+An order with a delivery reads as `in_progress`. In the live stack, Walldorf's
+[plant-agent](#edge) batches Walldorf's planned loads on time, so they freeze as they would at a
+real plant. Mannheim and Weinheim stay simulated: they batch for random trips without naming a
+load. The simulated trucks still make random trips too, rather than following the plan. The
+milestone 5 plan in `docs/context/specs/` has diagrams.
 
 ### `make demo`
 
@@ -308,8 +310,8 @@ Spans carry ids and counts, never payloads. Jaeger keeps them in memory, so `mak
 
 ### Metrics
 
-Prometheus (http://localhost:9090) scrapes ingest and dispatch every 5 s, on ports that stay
-inside the compose network:
+Prometheus (http://localhost:9090) scrapes ingest, dispatch and the plant-agent every 5 s, on
+ports that stay inside the compose networks:
 
 | Metric | What it measures |
 |---|---|
@@ -319,11 +321,16 @@ inside the compose network:
 | `pourline_redispatch_triggers_total{kind}` | What drives re-planning, such as `new_order` or `truck_out_of_service` |
 | `pourline_plan_pour_gaps{bucket}` | The current plan's waits between consecutive loads, per range of minutes: `0-5`, `5-10`, `10-20`, `20-30`, `30+` |
 | `pourline_plan_*` | The current plan: version, planned and unplanned orders, loads, longest gap, gaps over the limit, lateness, empty km |
+| `pourline_edge_connectivity{plant, link}` | 1 while the plant-agent reaches the broker (`mqtt`) or dispatch (`dispatch`) |
+| `pourline_edge_outbox_messages{plant}` | Tickets waiting at the plant |
+| `pourline_edge_sync_lag_seconds{plant}` | Edge sync lag: how long the oldest waiting ticket has waited |
+| `pourline_edge_plan_age_seconds{plant}`, `pourline_edge_plan_version{plant}` | The plan the agent works from, and the time since dispatch last confirmed it |
+| `pourline_edge_tickets_total{plant, outcome}` | Tickets `queued` into the outbox and `sent` from it |
 
 The plan gauges always describe the current version. Dispatch sets them again from the latest
 stored version when it starts. The “Dispatch overview” dashboard lives in
 `deploy/grafana/dashboards/`: edit the JSON, not the UI. A test fails if it queries a metric that
-no service defines. Edge sync lag arrives with milestone 7's plant-agent.
+no service defines.
 
 | Variable | Default |
 |---|---|
@@ -331,10 +338,64 @@ no service defines. Edge sync lag arrives with milestone 7's plant-agent.
 | `METRICS_ADDR` (ingest) | `0.0.0.0:9464` |
 | `DISPATCH_METRICS_ADDR` | `0.0.0.0:9465` |
 
+## Edge
+
+The plant-agent (`crates/plant-agent`) is the service that runs at a batching plant (SPEC §6). In
+compose, Walldorf's agent runs next to the cloud services.
+
+- Every 15 s it fetches its plant's slice of the latest plan, `GET /plants/plant-walldorf/plan`,
+  and keeps it in a SQLite file.
+- When a load's batch time comes, it waits for one of the plant's loading bays, then issues
+  `batching`, `loading` and `loaded` tickets that name the order and load number. Dispatch freezes
+  the load at the first one.
+- Every ticket goes into a SQLite outbox first. A forwarder sends the outbox over MQTT, on the
+  topic the simulated plants use, one ticket at a time, and deletes a ticket only once the broker
+  has acknowledged it.
+
+When the cloud link is down, the agent keeps batching from its last plan, and the outbox fills up.
+When the link is back, the outbox drains in order. Nothing is lost and nothing arrives twice:
+
+- the outbox, the plan and the loads it has started survive a restart;
+- a resent ticket carries the same bytes, so ingest drops the copy by its event id, which it keeps
+  in the dedup KV for `DEDUP_TTL_DAYS`;
+- Mosquitto persists what it has acknowledged.
+
+The agent never batches a load twice, even if a newer plan moves it, and a restart resumes a load
+where it stopped. A load more than 15 minutes overdue is left to dispatch. While the agent works
+with Walldorf, the simulated Walldorf plant sends no tickets of its own (`AGENT_PLANTS`).
+
+```sh
+curl -s localhost:8082/status | jq        # links, outbox, sync lag, plan version and age, tickets
+docker network disconnect pourline_default pourline-plant-agent-1   # cut Walldorf off the cloud
+docker network connect pourline_default pourline-plant-agent-1      # and reconnect it
+```
+
+Prometheus reaches the agent over a second network, `edge`, so the dashboard's Edge row keeps
+showing the outbox while the agent is cut off. `/readyz` answers once the agent has a plan,
+fetched or stored, whatever the state of its links: an offline plant keeps working.
+
+| Variable | Default |
+|---|---|
+| `PLANT_ID` | `plant-walldorf`, a plant in the seed, which gives the agent its bays and batching rate |
+| `DISPATCH_URL` | `http://localhost:8081`; compose sets `http://dispatch:8081` |
+| `MQTT_URL` | `mqtt://localhost:1883`; compose sets `mqtt://mosquitto:1883` |
+| `PLANT_AGENT_DB` | `plant-agent.sqlite`; compose keeps `/data/plant-agent.sqlite` on a volume |
+| `PLANT_AGENT_HTTP_ADDR` | `0.0.0.0:8082` |
+| `PLANT_AGENT_METRICS_ADDR` | `0.0.0.0:9466` |
+| `PLAN_POLL_SECS` | `15` |
+| `AGENT_PLANTS` (simulators) | Empty; compose sets `plant-walldorf`, whose simulated plant then stays quiet |
+
 ## Dependencies and security
 
 Crates, GitHub Actions and container images are pinned to their latest releases. Dependabot
 proposes updates every week. CI runs `cargo audit` on every push and on a weekly schedule.
+
+The plant-agent is a Cargo workspace of its own, with its own `Cargo.lock`. Its SQLite library,
+`rusqlite` 0.42, needs `libsqlite3-sys` 0.40, which bundles SQLite 3.54.1. sqlx 0.9.0 in the root
+workspace caps `libsqlite3-sys` below 0.38, even though it never compiles SQLite, and one lockfile
+can hold only one crate that links SQLite. `make test` and `make audit` cover both workspaces,
+which share `target/`. The agent moves back into the root workspace once sqlx allows a newer
+`libsqlite3-sys`.
 
 ## License
 
