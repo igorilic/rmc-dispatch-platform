@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Milestone 8 plan</title>
+<link rel="stylesheet" href="../../.design/styles.css">
+<style>
+/* Diagram styles: Spotlight tokens only (zinc greys, one teal accent). */
+.dg{display:block;width:100%;height:auto}
+.dg text{font-family:var(--font-sans);font-size:12px;fill:var(--text-body)}
+.dg .t{fill:var(--text-strong);font-weight:600;font-size:13px}
+.dg .s{fill:var(--text-muted);font-size:11px}
+.dg .m{font-family:var(--font-mono);font-size:10.5px;fill:var(--text-body)}
+.dg .c{text-anchor:middle}
+.dg .halo{paint-order:stroke;stroke:var(--surface-column);stroke-width:3px;stroke-linejoin:round}
+.dg .b-done{fill:var(--surface-solid);stroke:var(--zinc-500);stroke-width:1}
+.dg .b-now{fill:color-mix(in oklab,var(--accent) 14%,var(--surface-column));stroke:var(--accent);stroke-width:1.5}
+.dg .frame{fill:none;stroke:var(--zinc-500);stroke-width:1;stroke-dasharray:5 4}
+.dg .e-now{fill:none;stroke:var(--accent);stroke-width:1.5}
+.dg .e-back{fill:none;stroke:var(--accent);stroke-width:1.5;stroke-dasharray:4 3}
+.dg .e-done{fill:none;stroke:var(--zinc-400);stroke-width:1.5}
+.ah{fill:var(--zinc-400)}
+.ah-now{fill:var(--accent)}
+.sp-prose figure{margin-left:0;margin-right:0}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+<defs>
+<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0 1 L9 5 L0 9 z"/></marker>
+<marker id="ah-now" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-now" d="M0 1 L9 5 L0 9 z"/></marker>
+</defs>
+</svg>
+<div class="sp-layout__bg"><div><div></div></div></div>
+<div class="sp-layout__fg">
+<main class="sp-layout__main">
+<div class="sp-container-outer sp-article"><div class="sp-container-outer__in">
+<div class="sp-container-inner"><div class="sp-container-inner__in">
+<div class="sp-article__col">
+<article>
+<header class="sp-article__header">
+<h1 class="sp-h1">Milestone 8 plan: the operator</h1>
+<time class="sp-article__date" datetime="2026-11-11"><span class="sp-bar"></span><span style="margin-left:.75rem">November 11, 2026</span></time>
+</header>
+<div class="sp-prose" style="margin-top:2rem">
+
+<p>Today one ingest process serves every customer. It reads every mapping once at startup, and in k3d it runs from M7’s plain manifests. Milestone 8 makes each customer integration a Kubernetes object. A <code>CustomerIntegration</code> names its channel, its mapping ConfigMap and its credentials Secret, and the new <code>operator</code> (kube-rs) runs it as its own workload (SPEC §7). Before a mapping reaches a pod, the operator checks it with ingest’s own parser. It also pauses and resumes the integration, cleans up with a finalizer when the resource is deleted, and keeps the resource’s status up to date: its phase, its last successful ingest and its dead letters. M7’s manifests become two Helm charts. CI gains an end-to-end test: a kind cluster, a Helm install, the demo scenario, and checks that a plan exists and the DLQ is empty (SPEC §12).</p>
+
+<p><strong>One thing to decide first.</strong> In SPEC §7, the operator reconciles “the matching Deployment/CronJob” for each integration, with that integration’s own replicas, schedule and pause switch. None of that can apply to a single customer while one process serves them all. My default is to run each integration as its own workload from the same ingest image (decision 1). A webhook integration becomes a Deployment behind its own path. An SFTP integration becomes a CronJob that polls once per run. For that, ingest gets a mode switch, and in Kubernetes the chart’s own ingest Deployment keeps only MQTT. Compose stays as it is: there, one ingest process still runs everything.</p>
+
+<p><strong>Done when:</strong></p>
+<ul>
+<li>A webhook <code>CustomerIntegration</code> runs as a Deployment with <code>spec.replicas</code> pods, a Service and the ingress path <code>/webhooks/&lt;name&gt;</code>. An SFTP one runs as a CronJob on <code>spec.schedule</code>. Each runs the ingest image with only its own mapping and credentials.</li>
+<li>The operator checks the mapping and the credentials before it rolls them out. A broken mapping sets the phase to <code>Failed</code> with the parser’s message, and it never reaches a pod. A valid change to the mapping or the credentials rolls the workload.</li>
+<li><code>paused: true</code> scales a webhook integration to 0 or suspends an SFTP integration’s CronJob, and the phase becomes <code>Paused</code>. <code>paused: false</code> resumes it.</li>
+<li>When a <code>CustomerIntegration</code> is deleted, its workload stops before the resource disappears (finalizer).</li>
+<li>The status (phase, message, last successful ingest, dead letters) is at most 30 s old, and <code>kubectl get customerintegrations</code> shows it in columns.</li>
+<li><code>make k8s</code> installs the two charts and applies the three example <code>CustomerIntegration</code>s, which all reach <code>Running</code>. <code>make chaos</code> still works.</li>
+<li><code>make e2e</code> and CI’s new <code>e2e</code> job pass: the demo scenario runs on kind, rheinbau’s CronJob ingests a drop, and the DLQ stays empty.</li>
+<li><code>make test</code>, <code>make audit</code> and CI are green, and <code>make up</code> is healthy.</li>
+</ul>
+
+<h2 id="resource">How a CustomerIntegration runs</h2>
+
+<figure>
+<svg class="dg" viewBox="0 0 680 340" role="img" aria-labelledby="f1t f1d">
+<title id="f1t">The operator and the workloads it owns</title>
+<desc id="f1d">You apply a CustomerIntegration, a mapping ConfigMap and a credentials Secret. The operator reads all three. For a webhook integration it applies a Deployment, a Service and an Ingress path. For an SFTP integration it applies a CronJob. Both kinds of workload publish to NATS JetStream. The operator reads dead letters and the last ingest time from NATS and writes them into the CustomerIntegration's status.</desc>
+
+<text class="s" x="10" y="30">you apply</text>
+<g><title>Watched by the operator. CEL rules in the CRD reject a schedule on a webhook, a missing schedule on SFTP, and more than one replica for SFTP before the object is even stored.</title>
+<rect class="b-now" x="10" y="40" width="160" height="58" rx="8"/><text class="t c" x="90" y="62">CustomerIntegration</text><text class="s c" x="90" y="78">channel, schedule,</text><text class="s c" x="90" y="92">replicas, paused</text></g>
+<g><title>&lt;name&gt;-mapping, the shape M7 already created from customers/&lt;name&gt;/mapping.yaml. The operator watches it, so an edit is picked up right away.</title>
+<rect class="b-done" x="10" y="128" width="160" height="44" rx="8"/><text class="t c" x="90" y="147">mapping</text><text class="s c" x="90" y="163">ConfigMap, yours</text></g>
+<g><title>&lt;name&gt;-credentials: token for a webhook, username and password for SFTP. Pods get them through secretKeyRef. The operator only checks that the keys exist.</title>
+<rect class="b-now" x="10" y="196" width="160" height="44" rx="8"/><text class="t c" x="90" y="215">credentials</text><text class="s c" x="90" y="231">Secret, yours</text></g>
+
+<g><title>A kube-rs Controller in the pourline namespace. It watches CustomerIntegrations, the ConfigMaps and Secrets they name, and the objects it owns, applies with server-side apply, and refreshes every status every 30 s.</title>
+<rect class="b-now" x="230" y="96" width="130" height="108" rx="8"/><text class="t c" x="295" y="120">operator</text><text class="s c" x="295" y="140">checks the mapping</text><text class="s c" x="295" y="155">and credentials,</text><text class="s c" x="295" y="170">applies the workload,</text><text class="s c" x="295" y="185">writes the status</text></g>
+
+<path class="e-now" d="M170 72 H200 V120 H226" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M170 150 H226" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M170 218 H200 V180 H226" marker-end="url(#ah-now)"/>
+<path class="e-back" d="M260 96 V52 H174" marker-end="url(#ah-now)"/><text class="s c halo" x="217" y="46">status</text>
+
+<rect class="frame" x="400" y="40" width="160" height="150" rx="10"/>
+<text class="s" x="412" y="58">channel: webhook</text>
+<g><title>ingest-&lt;name&gt;, INGEST_MODE=webhooks, with the operator's copy of the mapping mounted at /customers/&lt;name&gt;/. Its pod template carries the mapping's hash and the Secret's resourceVersion, so a change to either rolls it.</title>
+<rect class="b-now" x="412" y="68" width="136" height="48" rx="8"/><text class="t c" x="480" y="88">Deployment</text><text class="s c" x="480" y="104">replicas, 0 if paused</text></g>
+<g><title>ingest-&lt;name&gt;. The ingress controller merges the path with the chart's Ingress, which sends everything else to dispatch.</title>
+<rect class="b-now" x="412" y="126" width="136" height="52" rx="8"/><text class="t c" x="480" y="147">Service, Ingress</text><text class="s c" x="480" y="163">/webhooks/&lt;name&gt;</text></g>
+
+<rect class="frame" x="572" y="40" width="98" height="150" rx="10"/>
+<text class="s" x="582" y="58">channel: sftp</text>
+<g><title>ingest-&lt;name&gt;, INGEST_MODE=sftp-once, concurrencyPolicy Forbid: one poll at a time, because two would race to move the same files.</title>
+<rect class="b-now" x="582" y="68" width="78" height="110" rx="8"/><text class="t c" x="621" y="90">CronJob</text><text class="s c" x="621" y="110">one poll</text><text class="s c" x="621" y="125">per run,</text><text class="s c" x="621" y="145">suspended</text><text class="s c" x="621" y="160">if paused</text></g>
+
+<path class="e-now" d="M360 150 H396" marker-end="url(#ah-now)"/><text class="s c halo" x="378" y="142">apply</text>
+<path class="e-now" d="M330 96 V24 H621 V36" marker-end="url(#ah-now)"/><text class="s c halo" x="470" y="19">apply</text>
+
+<g><title>Exists. New: the ingest-status KV bucket, which holds each integration's last successful ingest. Dead letters were already counted per integration by subject, dlq.&lt;name&gt;.</title>
+<rect class="b-done" x="400" y="244" width="270" height="50" rx="8"/><text class="t c" x="535" y="264">NATS JetStream</text><text class="s c" x="535" y="281">events, DLQ, + ingest-status KV</text></g>
+<path class="e-now" d="M480 190 V240" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M621 190 V240" marker-end="url(#ah-now)"/>
+<text class="s c halo" x="550" y="220">publish</text>
+<path class="e-back" d="M400 270 H295 V208" marker-end="url(#ah-now)"/>
+<text class="s c" x="347" y="286">dead letters,</text><text class="s c" x="347" y="300">last ingest</text>
+
+<rect class="b-done" x="10" y="318" width="16" height="12" rx="3"/><text class="s" x="32" y="328">exists, or yours to edit</text>
+<rect class="b-now" x="190" y="318" width="16" height="12" rx="3"/><text class="s" x="212" y="328">new in M8</text>
+<rect class="frame" x="300" y="318" width="16" height="12" rx="3"/><text class="s" x="322" y="328">owned by the CustomerIntegration, deleted with it</text>
+</svg>
+<figcaption>Figure 1. The operator parses the mapping with ingest’s own parser and copies the last valid version into a ConfigMap of its own, <code>ingest-&lt;name&gt;</code>, which the workload mounts. A broken edit therefore never reaches a pod, and pods that restart still get the last good mapping. Everything the operator creates is named <code>ingest-&lt;name&gt;</code> and has an owner reference to the <code>CustomerIntegration</code>, so Kubernetes deletes it along with the resource, even while the operator is down. Hover a box for details.</figcaption>
+</figure>
+
+<h3 id="crd">The resource</h3>
+<p>This is SPEC §7’s resource with one new field, <code>credentialsSecret</code> (decision 2), and a <code>message</code> in the status:</p>
+<pre><code>apiVersion: pourline.dev/v1alpha1
+kind: CustomerIntegration
+metadata:
+  name: rheinbau-gmbh                # the integration, as in customers/rheinbau-gmbh/
+spec:
+  channel: sftp                      # sftp | webhook; must match the mapping's channel
+  mappingConfigMap: rheinbau-gmbh-mapping
+  credentialsSecret: rheinbau-gmbh-credentials   # sftp: username, password; webhook: token
+  schedule: "*/5 * * * *"            # sftp only, and required for it
+  replicas: 1                        # default 1; sftp allows only 1
+  paused: false
+status:
+  phase: Running                     # Pending | Running | Paused | Failed
+  message: null                      # why, whenever it isn't Running
+  lastSuccessfulIngest: "2026-11-11T14:05:12Z"
+  deadLetterCount: 0</code></pre>
+<p>The Rust types generate the CRD. Its CEL rules reject a missing <code>schedule</code> on SFTP, a <code>schedule</code> on a webhook, and more than one SFTP replica, so <code>kubectl apply</code> refuses these before anything runs. The generated YAML is committed in the chart, and a test fails if it drifts from the types.</p>
+<pre><code>$ kubectl -n pourline get customerintegrations
+NAME            CHANNEL   PHASE     DEAD LETTERS   LAST INGEST   AGE
+bauwerk-ag      webhook   Running   0              40s           12m
+neckar-infra    webhook   Running   0              2m            12m
+rheinbau-gmbh   sftp      Running   0              3m            12m</code></pre>
+
+<h3 id="checks">Before a rollout</h3>
+<p>The operator rolls out a mapping only if all of these hold:</p>
+<ul>
+<li>the ConfigMap exists and has a <code>mapping.yaml</code> key;</li>
+<li>ingest’s <code>Mapping::parse</code> accepts it, which is the same check <code>ingest-cli validate</code> starts with, and the mapping’s <code>channel</code> matches <code>spec.channel</code>;</li>
+<li>the Secret exists and has the keys its channel needs.</li>
+</ul>
+<p>If one of them fails, the phase becomes <code>Failed</code>, and the <code>message</code> says which check failed and why. The workload is left alone and keeps running on its last valid mapping (decision 3). Once the ConfigMap or Secret is fixed, the operator notices the change and rolls it out.</p>
+
+<h3 id="lifecycle">Pause, resume, delete</h3>
+<ul>
+<li><strong>Pause</strong> sets a webhook integration’s replicas to 0, so its requests fail until it resumes. It suspends an SFTP integration’s CronJob, so files wait on the server. <strong>Resume</strong> undoes both. Nothing is lost either way: customers retry, the files stay where they are, and dedup absorbs any repeats.</li>
+<li><strong>Delete</strong> goes through the finalizer (decision 5). The operator first deletes the workload in the foreground and waits until it is gone. Then it removes the integration’s entry from the <code>ingest-status</code> KV, which is the one thing outside Kubernetes. That step is best effort: if NATS is down, it logs a warning and the deletion continues. Only then does it release the resource. Dead letters stay in the DLQ, so a re-created integration can still replay them.</li>
+</ul>
+
+<h3 id="status">Status</h3>
+<table>
+<thead><tr><th>Phase</th><th>When</th></tr></thead>
+<tbody>
+<tr><td><code>Pending</code></td><td>The workload is applied but not ready yet: the webhook Deployment has fewer ready replicas than requested.</td></tr>
+<tr><td><code>Running</code></td><td>Webhook: every replica is ready. SFTP: the CronJob exists and its last run didn’t fail.</td></tr>
+<tr><td><code>Paused</code></td><td><code>spec.paused</code> is true.</td></tr>
+<tr><td><code>Failed</code></td><td>The mapping or the credentials are missing or invalid, the API server refused the workload, or the last SFTP run failed. <code>message</code> says which.</td></tr>
+</tbody>
+</table>
+<p><code>deadLetterCount</code> is the number of messages on the DLQ subject <code>dlq.&lt;name&gt;</code>. <code>lastSuccessfulIngest</code> is the time of the integration’s last delivery (a webhook request or an SFTP file) in which at least one record was published or recognised as a duplicate (decision 4). A delivery whose records were all dead-lettered doesn’t count, and neither does a poll that found no files. Neither value causes a Kubernetes event, so the operator re-reads both every 30 s.</p>
+
+<h2 id="ingest">Changes in ingest</h2>
+<table>
+<thead><tr><th><code>INGEST_MODE</code></th><th>Runs</th><th>Used by</th></tr></thead>
+<tbody>
+<tr><td><code>all</code> (default)</td><td>Webhooks, the SFTP poller and MQTT, as today</td><td>compose</td></tr>
+<tr><td><code>mqtt</code></td><td>Telematics and batch tickets over MQTT, the DLQ gauges, <code>/healthz</code></td><td>the chart’s <code>ingest</code> Deployment</td></tr>
+<tr><td><code>webhooks</code></td><td>The webhooks of the mappings in <code>MAPPINGS_DIR</code></td><td>a webhook integration’s Deployment</td></tr>
+<tr><td><code>sftp-once</code></td><td>One poll of each SFTP mapping in <code>MAPPINGS_DIR</code>, then exit: 0 if every poll worked, 1 if one failed, so the Job records a failure</td><td>an SFTP integration’s CronJob</td></tr>
+</tbody>
+</table>
+<ul>
+<li><strong>The <code>ingest-status</code> KV:</strong> <code>Bus::deliver</code> writes the integration’s last successful ingest after each delivery that counts (see above). <code>Bus::connect</code> creates the bucket next to the dedup bucket.</li>
+<li><strong>A read-only status reader</strong> in <code>ingest::nats</code> gives the dead-letter count and the last ingest for one integration, and deletes the KV entry when an integration is deleted. Unlike <code>Bus::connect</code>, it never creates or reconfigures a stream or bucket, so the operator can’t change the dedup TTL by accident.</li>
+<li><strong>The demo</strong> reads <code>BAUWERK_WEBHOOK_URL</code> and <code>NECKAR_WEBHOOK_URL</code>, the variables the simulators already use, instead of <code>INGEST_URL</code>. In Kubernetes, each webhook integration has its own Service, so a single base URL no longer reaches both. Compose sets both variables.</li>
+</ul>
+
+<h2 id="charts">Helm charts and make k8s</h2>
+<table>
+<thead><tr><th>What</th><th>Installs into</th><th>Contains</th></tr></thead>
+<tbody>
+<tr><td><code>deploy/helm/pourline</code></td><td><code>cloud</code>, and kind in the e2e test</td><td>The CRD (in <code>crds/</code>), the infrastructure (Postgres, NATS, Mosquitto, SFTP, Jaeger, with the same pinned images as compose), ingest in <code>mqtt</code> mode, dispatch, the simulators, the operator with its Role, and the Ingress <code>/</code> → dispatch</td></tr>
+<tr><td><code>deploy/helm/plant-agent</code></td><td><code>plant-walldorf</code></td><td>The plant-agent, its PVC and its Service. Values: plant id, dispatch and MQTT URLs, image</td></tr>
+<tr><td><code>deploy/integrations/</code> (kustomize, not a chart)</td><td><code>cloud</code>, and kind</td><td>For each of the three customers: the <code>&lt;name&gt;-mapping</code> ConfigMap built from <code>customers/&lt;name&gt;/mapping.yaml</code>, a credentials Secret with compose’s throwaway dev values, and the <code>CustomerIntegration</code>. Onboarding a customer means adding these three objects; the chart doesn’t change (decision 6).</td></tr>
+</tbody>
+</table>
+<p>The operator gets the ingest image from the chart, so integrations always run the same build as the core ingest. A new ingest image restarts the operator, which re-applies every workload with that image. The chart also passes the operator <code>NATS_URL</code>, the SFTP host and port, and the OTLP endpoint, and the operator hands them on to the workloads. <code>mosquitto.conf</code> moves into the chart, and compose mounts it from there, so only one copy exists.</p>
+<p><code>make k8s</code> keeps the network, the registry and the clusters from M7. What changes:</p>
+<ol>
+<li>It also checks for <code>helm</code>, and builds and pushes a sixth image, <code>operator</code>.</li>
+<li>It applies the CRD with <code>kubectl apply --server-side</code> first, because Helm never upgrades what is in <code>crds/</code> (decision 7). Then it runs <code>helm upgrade --install</code> for each chart, with every image pinned to the digest it just pushed, as M7 does with <code>sed</code> today.</li>
+<li>It applies <code>deploy/integrations/</code> and waits until all three integrations are <code>Running</code>.</li>
+<li>Clusters left from M7 hold objects that Helm didn’t create, and Helm won’t adopt them. <code>make k8s</code> detects this and stops, with a hint to run <code>make down</code> once first.</li>
+</ol>
+<p><code>deploy/k3d/cloud/</code> and <code>deploy/k3d/plant-walldorf/</code> are removed. <code>chaos.sh</code> only changes the demo’s webhook URLs.</p>
+
+<h2 id="e2e">The end-to-end test</h2>
+<p>CI runs <code>make e2e</code> in a new job, and you can run the same command locally. It runs <code>deploy/e2e/run.sh</code>, which:</p>
+<ol>
+<li>creates a kind cluster, <code>pourline-e2e</code>, from a pinned node image, and writes its kubeconfig under <code>target/</code>, so <code>~/.kube/config</code> is never touched;</li>
+<li>lints both charts, builds the images for ingest, dispatch, the simulators, the demo and the operator, and loads them into kind;</li>
+<li>applies the CRD, installs the cloud chart with <code>deploy/e2e/values.yaml</code> (local images, rheinbau drops every 30 s, a slow random-order rate as in <code>make demo</code>), applies <code>deploy/integrations/</code>, and patches rheinbau’s schedule to every minute, which also tests a spec change;</li>
+<li>waits until all three integrations are <code>Running</code>;</li>
+<li>runs the <code>demo</code> scenario as a pod. It already fails if an order isn’t planned, a frozen load moves or a diff is missing;</li>
+<li>waits until rheinbau’s <code>lastSuccessfulIngest</code> is set, which proves the CronJob path;</li>
+<li>checks that <code>/plans/latest</code> has loads, that the DLQ stream holds 0 messages (both read through the API server’s service proxy, as <code>make chaos</code> does), and that every integration reports 0 dead letters;</li>
+<li>on failure, prints the integrations, pods, events and the logs of the operator, ingest and dispatch. Locally, it deletes the cluster unless <code>E2E_KEEP=1</code> is set.</li>
+</ol>
+<p>The plant chart isn’t part of it. One kind cluster tests the cloud, and <code>make k8s</code> keeps covering the plant.</p>
+
+<h2 id="layout">Code layout</h2>
+<pre><code>crates/operator/                (new)
+├── src/main.rs                config, `operator crd`, the controller, shutdown
+├── src/crd.rs                 CustomerIntegration: spec, status, CEL rules, printer columns
+├── src/workload.rs            the desired objects and the phase, as pure functions
+├── src/reconcile.rs           checks, server-side apply, status, finalizer
+└── tests/reconcile.rs         against k3s and NATS (testcontainers)
+crates/ingest/src/main.rs      INGEST_MODE
+crates/ingest/src/nats.rs      the ingest-status KV and the read-only status reader
+crates/simulators/src/bin/demo.rs   per-integration webhook URLs
+deploy/helm/pourline/          (new) the cloud chart, with crds/ and files/mosquitto.conf
+deploy/helm/plant-agent/       (new) the plant chart
+deploy/integrations/           (new) the three customers' ConfigMaps, Secrets and CustomerIntegrations
+deploy/e2e/                    (new) run.sh, values.yaml
+deploy/k3d/                    cloud/ and plant-walldorf/ go; k8s.sh installs the charts
+deploy/compose/                mosquitto.conf from the chart; the demo's webhook URLs
+Makefile, CI, Dependabot       make e2e, the e2e job, the operator image</code></pre>
+
+<h2 id="config">Configuration</h2>
+<table>
+<thead><tr><th>Variable</th><th>Default</th></tr></thead>
+<tbody>
+<tr><td><code>INGEST_MODE</code> (ingest)</td><td><code>all</code>. The chart sets <code>mqtt</code>, and the operator sets <code>webhooks</code> or <code>sftp-once</code>.</td></tr>
+<tr><td><code>INGEST_IMAGE</code> (operator)</td><td><code>k3d-pourline-registry:5050/ingest:dev</code>. The chart sets it to the ingest image it deploys.</td></tr>
+<tr><td><code>NATS_URL</code>, <code>SFTP_HOST</code>, <code>SFTP_PORT</code>, <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> (operator)</td><td>As for ingest. The operator uses <code>NATS_URL</code> itself, and passes all four on to the workloads.</td></tr>
+<tr><td><code>OPERATOR_METRICS_ADDR</code></td><td><code>0.0.0.0:9467</code>, for <code>telemetry::init</code>’s listener, and prefixed like the other services’</td></tr>
+<tr><td><code>BAUWERK_WEBHOOK_URL</code>, <code>NECKAR_WEBHOOK_URL</code> (demo)</td><td><code>http://localhost:8080/webhooks/&lt;name&gt;</code>. They replace the demo’s <code>INGEST_URL</code>.</td></tr>
+</tbody>
+</table>
+<p>The operator watches the namespace it runs in, which it learns from its service account, so it needs no variable for that. The status refresh (30 s) and the poll while waiting for a workload to go away (2 s) are constants, each with a <code>ponytail:</code> comment. The sandbox can’t edit <code>.env.*</code> files, so I’ll give you the lines to add to <code>.env.example</code>.</p>
+
+<h2 id="steps">Steps</h2>
+<p>Each step ends green and becomes its own commit.</p>
+
+<h3 id="step-1">Step 1</h3>
+<p><strong>Ingest, one part at a time.</strong> First, check <code>rust-toolchain.toml</code>, the crate versions, the image pins and the action versions, and pull the advisory database. Then:</p>
+<ul>
+<li><code>INGEST_MODE</code>, with config tests;</li>
+<li>the <code>ingest-status</code> KV and the status reader. Tests in <code>ingest/tests/bus.rs</code> check that a delivery with a published record or a duplicate sets the time, that one whose records were all dead-lettered doesn’t, that the counts are per integration, and that the reader doesn’t create anything on a fresh server;</li>
+<li>the demo’s webhook URLs. <code>make up</code> and <code>make demo</code> still pass.</li>
+</ul>
+
+<h3 id="step-2">Step 2</h3>
+<p><strong>The resource and what it becomes.</strong> This step adds <code>crates/operator</code> with the CRD types, <code>operator crd</code>, the generated CRD in the chart’s <code>crds/</code> and the drift test, plus the pure functions that build the desired objects and the phase. Unit tests check that:</p>
+<ul>
+<li>a webhook integration becomes a Deployment, Service and Ingress with the right replicas, 0 when paused, <code>INGEST_MODE=webhooks</code>, the mapping mounted where <code>MAPPINGS_DIR</code> expects it, the token from <code>secretKeyRef</code>, and owner references;</li>
+<li>an SFTP integration becomes a CronJob with its schedule, <code>suspend</code> when paused, <code>concurrencyPolicy: Forbid</code> and <code>INGEST_MODE=sftp-once</code>;</li>
+<li>the pod template’s hash changes when the mapping or the Secret’s version changes, and only then;</li>
+<li>each check before a rollout fails with its own message, including a channel that doesn’t match the mapping’s;</li>
+<li>the phase follows the table above;</li>
+<li>the CRD carries the CEL rules and the printer columns.</li>
+</ul>
+
+<h3 id="step-3">Step 3</h3>
+<p><strong>The controller.</strong> This step adds the reconciler with server-side apply, the watches on ConfigMaps and Secrets, the status refresh and the finalizer. <code>tests/reconcile.rs</code> starts k3s and NATS with testcontainers (the same <code>rancher/k3s</code> image k3d uses) and runs the controller against them. The pods won’t start, because k3s doesn’t have the image, so these tests check objects and status, and the e2e test checks <code>Running</code>. They check that:</p>
+<ul>
+<li>applying an integration creates its objects, and the status reports dead letters seeded into the DLQ;</li>
+<li>pausing and resuming change replicas and <code>suspend</code>, and the phase;</li>
+<li>a missing ConfigMap gives <code>Failed</code>, and creating it recovers without touching the integration;</li>
+<li>a broken mapping edit leaves the operator’s copy and the Deployment unchanged;</li>
+<li>deleting the integration removes its objects and its KV entry, and then the resource itself.</li>
+</ul>
+<p>k3s needs a privileged container. k3d works here, so k3s should too. If it doesn’t, I’ll stop and report what I found.</p>
+
+<h3 id="step-4">Step 4</h3>
+<p><strong>Charts and make k8s.</strong> This step adds both charts, <code>deploy/integrations/</code>, the new <code>k8s.sh</code>, the move of <code>mosquitto.conf</code>, the change to <code>chaos.sh</code>, and the operator in the CI image matrix. The old kustomizations are removed. I check it on fresh clusters (<code>make down &amp;&amp; make k8s</code>):</p>
+<ul>
+<li>all three integrations are <code>Running</code>, and orders from all three customers reach dispatch;</li>
+<li>a webhook gets through the ingress at <code>localhost:8080/webhooks/bauwerk-ag</code>;</li>
+<li>a broken mapping edit gives <code>Failed</code> and the pods stay up; the fix rolls them;</li>
+<li>pausing, resuming, deleting and re-applying an integration each work;</li>
+<li><code>make chaos</code> still passes.</li>
+</ul>
+<p>The README gets an Operator section, and its Kubernetes section changes to describe the charts.</p>
+
+<h3 id="step-5">Step 5</h3>
+<p><strong>The end-to-end test.</strong> This step adds <code>deploy/e2e/</code>, <code>make e2e</code> and the CI job. Running it here needs kind, which isn’t installed and which I can’t install from the sandbox: <code>brew install kind</code>. Running it in CI needs a push, and I’ll ask before I push.</p>
+
+<h3 id="step-6">Step 6</h3>
+<p><strong>Wrap-up.</strong> This step adds Helm and kind to the README’s prerequisites and its check line (SPEC §9), gives you the <code>.env.example</code> lines, and ticks the milestone in <code>CLAUDE.md</code>.</p>
+
+<h2 id="decisions">Decisions I need from you</h2>
+<p>I’ll use the default unless you say otherwise.</p>
+<table>
+<thead><tr><th>#</th><th>Question</th><th>My default</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>How does a <code>CustomerIntegration</code> map onto workloads?</td><td>Each integration gets its own workload from the ingest image: a Deployment, Service and Ingress path for a webhook, and a CronJob running <code>sftp-once</code> for SFTP. In Kubernetes the core ingest keeps only MQTT. Compose doesn’t change. The alternative is for the operator to manage only the configuration of the one shared ingest and restart it on each change. That is less code, but it ignores replicas, schedule and pause per integration, and it isn’t SPEC §7’s Deployment/CronJob.</td></tr>
+<tr><td>2</td><td>SPEC §7 has the operator reconcile “Secret refs”, but its example has no field for them. Where do credentials go?</td><td>A required field, <code>credentialsSecret</code>, which needs <code>token</code> for a webhook, or <code>username</code> and <code>password</code> for SFTP. Pods get the values through <code>secretKeyRef</code>. The operator reads the Secret only to check its keys, and puts the Secret’s <code>resourceVersion</code> into the pod template, so a rotation rolls the pods without a hash of the password appearing anywhere. The alternative is to keep the shared credentials from M7, so integrations have no Secret of their own.</td></tr>
+<tr><td>3</td><td>What happens to a broken mapping?</td><td>The operator checks it and copies only valid mappings into its own ConfigMap, which the workload mounts. A broken edit sets <code>Failed</code> and never reaches a pod, not even one that restarts. The alternative is to mount your ConfigMap directly and only report the problem. That is simpler, but the next CronJob run, or any webhook pod that restarts, would load the broken mapping.</td></tr>
+<tr><td>4</td><td>Where does <code>lastSuccessfulIngest</code> come from?</td><td>Ingest writes it to a new KV bucket, <code>ingest-status</code>, after each delivery in which a record was published or was a duplicate. The alternatives need no change to ingest: the time of the last event on <code>events.orders.&lt;customer&gt;</code> (but rheinbau’s snapshots are mostly duplicates, so a healthy integration would look stale), or the CronJob’s <code>lastSuccessfulTime</code> (which exists only for SFTP).</td></tr>
+<tr><td>5</td><td>What does the finalizer do?</td><td>It stops the workload first, then removes the integration’s <code>ingest-status</code> entry on a best-effort basis, so it never blocks on NATS. Owner references delete the objects anyway. Dead letters are kept. The alternatives are to purge the integration’s dead letters too, which destroys data that could still be replayed, or to block deletion while dead letters remain.</td></tr>
+<tr><td>6</td><td>How are the charts split, and where do the example integrations live?</td><td>Two charts, <code>pourline</code> for the cloud and <code>plant-agent</code> for the plant. The infrastructure goes in as plain templates with our pinned images, not as subcharts. The customers’ ConfigMaps, Secrets and <code>CustomerIntegration</code>s live in a kustomization outside the charts, because Helm can’t read <code>customers/</code>, and because onboarding a customer shouldn’t need a chart release. The alternative is to put them in the chart’s values, with copies of the mappings.</td></tr>
+<tr><td>7</td><td>How is the CRD installed and upgraded?</td><td>It is generated from the Rust types, committed in the chart’s <code>crds/</code> directory, and kept in sync by a test. <code>make k8s</code> and <code>make e2e</code> apply it server-side before <code>helm upgrade</code>, because Helm installs <code>crds/</code> once and never upgrades it. The alternative is to template the CRD, so Helm upgrades it, but <code>helm uninstall</code> would then delete every <code>CustomerIntegration</code>.</td></tr>
+<tr><td>8</td><td>How much can the operator touch, and how many copies of it run?</td><td>Its own namespace only, through a Role rather than a ClusterRole. It runs as one replica with the <code>Recreate</code> strategy and without leader election, so two operators never reconcile at the same time. The alternative is to run cluster-wide with leader election, which is more RBAC and more code for one namespace.</td></tr>
+<tr><td>9</td><td>What does the e2e test run on, and which scenario does it use?</td><td>kind, as SPEC §12 says. <code>make e2e</code> runs the same script locally (<code>brew install kind</code>). The scenario is the existing <code>demo</code>, which already checks its own results, plus rheinbau’s CronJob and the checks on the DLQ. The alternative is k3d in CI too, so there is only one tool, but that departs from SPEC §12.</td></tr>
+<tr><td>10</td><td>Should Prometheus and Grafana move into the cloud chart? (M7 deferred them to M8.)</td><td>Not in M8. They stay in compose, and <code>kubectl get customerintegrations</code> becomes Kubernetes’ view of ingest health. The alternative is to template them into the chart, with the dashboard copied into it.</td></tr>
+<tr><td>11</td><td>SPEC §12 also asks for multi-arch images pushed to GHCR on <code>main</code>, and no milestone has taken that on yet. Does it belong in M8?</td><td>No. Nothing in M8 needs a public image, and an arm64 build doubles the build time. I suggest doing it after M8, together with M9’s README walkthrough, so that walkthrough can <code>helm install</code> from GHCR.</td></tr>
+</tbody>
+</table>
+
+<h2 id="later">Heads-up: not in M8</h2>
+<ul>
+<li>The operator doesn’t check mappings at admission. A broken mapping is still accepted by <code>kubectl apply</code>, and only the status reports it. Rejecting it at admission needs a validating webhook, and that webhook needs TLS certificates.</li>
+<li>Uninstalling: delete the <code>CustomerIntegration</code>s before the operator, or their finalizers keep them around. <code>make down</code> deletes whole clusters, so it isn’t affected.</li>
+<li><code>ingest-cli</code> has no image. To replay dead letters in k3d, run <code>kubectl port-forward svc/nats 4222</code> and use <code>ingest-cli</code> locally, with the mappings from <code>customers/</code>.</li>
+<li>Compose has no operator. <code>make up</code> keeps running the all-in-one ingest.</li>
+<li>Your M7 clusters need one <code>make down</code> before the first <code>make k8s</code> of M8.</li>
+<li>The e2e job builds five release images, so expect it to take 15 to 20 minutes.</li>
+</ul>
+
+<h2 id="deps">New dependencies</h2>
+<table>
+<thead><tr><th>What</th><th>Version</th><th>For</th></tr></thead>
+<tbody>
+<tr><td><code>kube</code></td><td>5.0.0, with <code>runtime</code> and <code>derive</code> on top of the defaults (<code>client</code>, <code>rustls-tls</code>, <code>ring</code>)</td><td>The API client, <code>Controller</code>, the finalizer helper and the CRD derive. It uses <code>ring</code>, as russh does, so the build needs no aws-lc or cmake.</td></tr>
+<tr><td><code>k8s-openapi</code></td><td>0.29.0, feature <code>v1_37</code></td><td>The Kubernetes types, matching k3s v1.37.2</td></tr>
+<tr><td><code>schemars</code></td><td>the 1.x release that kube 5 needs</td><td>The CRD’s schema</td></tr>
+<tr><td>k3s in tests</td><td><code>rancher/k3s:v1.37.2-k3s1</code>, the image k3d already uses</td><td>The operator’s integration tests. I’ll use testcontainers’ <code>GenericImage</code>, and add <code>testcontainers-modules</code> only if its k3s module works with testcontainers 0.28.</td></tr>
+<tr><td>Helm, kind</td><td>Latest releases, pinned in CI, along with kind’s node image</td><td>The charts and the e2e test. You have Helm 4.3.1 but not kind.</td></tr>
+<tr><td>GitHub Actions</td><td>The latest majors of <code>azure/setup-helm</code> and <code>helm/kind-action</code></td><td>The e2e job</td></tr>
+</tbody>
+</table>
+<p>The YAML for the CRD comes from <code>serde-saphyr</code>, which the workspace already uses. The plant-agent’s workspace gets no new crates.</p>
+
+</div>
+</article>
+</div></div></div></div></div>
+</main>
+</div>
+</body>
+</html>
