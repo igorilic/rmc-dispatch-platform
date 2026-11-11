@@ -2,3 +2,8 @@
 # sqlx checks queries at compile time against .sqlx/ (committed), so builds need no database.
 # Refresh it with `make sqlx-prepare` after changing a query or a migration.
 SQLX_OFFLINE = "true"
+
+[build]
+# One build directory for both workspaces (the root and crates/plant-agent), so they share compiled
+# dependencies. Relative to the repository root.
+target-dir = "target"

@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# Its own workspace for now: see crates/plant-agent/Cargo.toml.
+exclude = ["crates/plant-agent"]
 
 [workspace.package]
 edition = "2024"

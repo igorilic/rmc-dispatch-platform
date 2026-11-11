@@ -4,6 +4,8 @@
 # current context (colima, Docker Desktop, or /var/run/docker.sock on CI).
 export DOCKER_HOST ?= $(shell docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)
 COMPOSE := docker compose -f deploy/compose/compose.yaml $(if $(wildcard .env),--env-file .env)
+# The plant-agent is its own Cargo workspace; crates/plant-agent/Cargo.toml says why.
+AGENT := --manifest-path crates/plant-agent/Cargo.toml
 
 .PHONY: up down demo logs test bench audit sqlx-prepare
 
@@ -23,10 +25,13 @@ demo: ## Fresh stack, then a scripted scenario: two orders, a batching load, a b
 logs: ## Follow the simulators' logs
 	$(COMPOSE) logs -f simulators
 
-test: ## fmt, clippy, unit/property/integration tests
+test: ## fmt, clippy, unit/property/integration tests, for both workspaces
 	cargo fmt --all --check
+	cargo fmt $(AGENT) --all --check
 	cargo clippy --workspace --all-targets -- -D warnings
+	cargo clippy $(AGENT) --all-targets -- -D warnings
 	cargo test --workspace
+	cargo test $(AGENT)
 
 bench: ## Planner benchmarks at 50, 200 and 1,000 loads (takes a few minutes)
 	cargo bench -p dispatch --bench planner
@@ -36,6 +41,9 @@ audit: ## Check dependencies against the RustSec advisory DB (needs cargo-audit)
 	@# .cargo/audit.toml ignores a SQLite advisory because SQLite is never compiled; keep it that way.
 	@test -z "$$(cargo tree --workspace --target all -e normal,build -i libsqlite3-sys 2>/dev/null)" \
 		|| { echo "libsqlite3-sys is now compiled: drop the ignore in .cargo/audit.toml"; exit 1; }
+	@# cargo audit reads .cargo/audit.toml from the directory it runs in, so that ignore doesn't
+	@# apply to the plant-agent's lockfile, which really compiles SQLite.
+	cd crates/plant-agent && cargo audit
 
 # Compile-time-checked queries (sqlx) read .sqlx/ offline; this refreshes it from the compose Postgres.
 DATABASE_URL ?= postgres://pourline:pourline@localhost:5432/pourline
