@@ -1,0 +1,11 @@
+apiVersion: 1
+
+# Dashboards are files in the repo: edit the JSON, not the UI.
+providers:
+  - name: pourline
+    folder: Pourline
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
