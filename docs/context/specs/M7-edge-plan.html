@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Milestone 7 plan</title>
+<link rel="stylesheet" href="../../.design/styles.css">
+<style>
+/* Diagram styles: Spotlight tokens only (zinc greys, one teal accent). */
+.dg{display:block;width:100%;height:auto}
+.dg text{font-family:var(--font-sans);font-size:12px;fill:var(--text-body)}
+.dg .t{fill:var(--text-strong);font-weight:600;font-size:13px}
+.dg .s{fill:var(--text-muted);font-size:11px}
+.dg .m{font-family:var(--font-mono);font-size:10.5px;fill:var(--text-body)}
+.dg .c{text-anchor:middle}
+.dg .halo{paint-order:stroke;stroke:var(--surface-column);stroke-width:3px;stroke-linejoin:round}
+.dg .b-done{fill:var(--surface-solid);stroke:var(--zinc-500);stroke-width:1}
+.dg .b-now{fill:color-mix(in oklab,var(--accent) 14%,var(--surface-column));stroke:var(--accent);stroke-width:1.5}
+.dg .frame{fill:none;stroke:var(--zinc-500);stroke-width:1;stroke-dasharray:5 4}
+.dg .e-now{fill:none;stroke:var(--accent);stroke-width:1.5}
+.dg .e-back{fill:none;stroke:var(--accent);stroke-width:1.5;stroke-dasharray:4 3}
+.dg .e-done{fill:none;stroke:var(--zinc-400);stroke-width:1.5}
+.dg .guide{fill:none;stroke:var(--zinc-600);stroke-width:1;stroke-dasharray:2 3}
+.ah{fill:var(--zinc-400)}
+.ah-now{fill:var(--accent)}
+.sp-prose figure{margin-left:0;margin-right:0}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+<defs>
+<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0 1 L9 5 L0 9 z"/></marker>
+<marker id="ah-now" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-now" d="M0 1 L9 5 L0 9 z"/></marker>
+</defs>
+</svg>
+<div class="sp-layout__bg"><div><div></div></div></div>
+<div class="sp-layout__fg">
+<main class="sp-layout__main">
+<div class="sp-container-outer sp-article"><div class="sp-container-outer__in">
+<div class="sp-container-inner"><div class="sp-container-inner__in">
+<div class="sp-article__col">
+<article>
+<header class="sp-article__header">
+<h1 class="sp-h1">Milestone 7 plan: the edge</h1>
+<time class="sp-article__date" datetime="2026-11-11"><span class="sp-bar"></span><span style="margin-left:.75rem">November 11, 2026</span></time>
+</header>
+<div class="sp-prose" style="margin-top:2rem">
+
+<p>Today a plant is a few lines in the simulators that send batch tickets for random trips, and <code>make demo</code> plays the plant by hand for one load. Milestone 7 adds the <code>plant-agent</code>, the service that runs at the plant (SPEC §6). It pulls its plant’s slice of the plan and batches each load when its time comes. Every ticket it issues goes into a SQLite outbox first, and a forwarder sends the outbox to the cloud in order. When the link is down, the agent keeps batching from its last plan, the outbox fills up, and nothing is lost. When the link comes back, the outbox drains. Two k3d clusters, <code>cloud</code> and <code>plant-walldorf</code>, make the cut real, and <code>make chaos</code> shows it.</p>
+
+<p><strong>One thing to decide first.</strong> SPEC §11 names <code>rusqlite</code> for the outbox. Its current release can’t share a Cargo workspace with our sqlx. I checked: sqlx 0.9.0 caps <code>libsqlite3-sys</code> below 0.38, even though we never compile its SQLite driver. <code>rusqlite</code> 0.42.0 needs <code>libsqlite3-sys</code> 0.40.0, and only one crate in a lockfile may link <code>sqlite3</code>. Older <code>rusqlite</code> releases would fit, but they bundle a SQLite with RUSTSEC-2026-0459 (the advisory that <code>.cargo/audit.toml</code> already ignores, because nothing compiles it today). My default is to give the plant-agent its own small Cargo workspace (decision 1). In a scratch copy, that resolves with <code>domain</code> and <code>telemetry</code> as path dependencies and audits clean.</p>
+
+<p><strong>Done when:</strong></p>
+<ul>
+<li>The plant-agent pulls its plant’s slice of the plan and batches each load on time, never with more loads in parallel than the plant has loading bays, and never the same load twice, even after a restart or a plan that moved the load.</li>
+<li>Every ticket goes through the SQLite outbox and reaches ingest in the order it was issued. A test cuts the broker off, queues tickets, restarts the agent, restores the broker, and checks that every ticket arrives in order and that ingest publishes each one once.</li>
+<li>Offline, the agent keeps batching from its last plan, which it keeps in SQLite, and reports the plan’s age. It serves <code>/healthz</code>, <code>/readyz</code> and <code>/status</code>, and exports a <code>connectivity</code> metric and the edge sync lag.</li>
+<li><code>make up</code> runs an agent for Walldorf, and the Grafana dashboard gains an “Edge” row that shows data.</li>
+<li><code>make k8s</code> creates the <code>pourline-net</code> network, the local registry and both k3d clusters, deploys the cloud stack and the agent, and the agent syncs across clusters. <code>make down</code> removes all of it, too.</li>
+<li><code>make chaos</code> cuts the plant off for 120 s, then reconnects it, and prints the outbox filling and draining.</li>
+<li><code>make test</code>, <code>make audit</code> and CI are green for both workspaces, and <code>make up</code> is healthy.</li>
+</ul>
+
+<h2 id="where">Where the edge sits</h2>
+
+<figure>
+<svg class="dg" viewBox="0 0 680 336" role="img" aria-labelledby="f1t f1d">
+<title id="f1t">The two k3d clusters in milestone 7</title>
+<desc id="f1d">On the left, the cloud cluster runs Mosquitto, ingest, NATS, dispatch, Postgres and the simulators with the SFTP server, behind a Traefik ingress on localhost port 8080. On the right, the plant-walldorf cluster runs the plant-agent with its SQLite file on a persistent volume. Both clusters sit on the Docker network pourline-net. The agent sends tickets to Mosquitto over MQTT with QoS 1. Ingest maps them and publishes them to NATS, and dispatch records them in Postgres. The agent pulls its plan slice from dispatch every 15 seconds. make chaos cuts the plant cluster off pourline-net for 120 seconds.</desc>
+
+<rect class="frame" x="10" y="28" width="390" height="270" rx="10"/>
+<text class="s" x="24" y="48">k3d cluster</text><text class="t" x="24" y="66">cloud</text>
+
+<rect class="b-done" x="30" y="80" width="100" height="46" rx="8"/><text class="t c" x="80" y="99">NATS</text><text class="s c" x="80" y="115">EVENTS stream</text>
+<g><title>Batch-ticket ids are now also kept in the dedup KV, like order ids</title>
+<rect class="b-now" x="150" y="80" width="100" height="46" rx="8"/><text class="t c" x="200" y="99">ingest</text><text class="s c" x="200" y="115">+ ticket dedup</text></g>
+<g><title>Persistence on, so a broker restart keeps the messages it has acknowledged</title>
+<rect class="b-now" x="270" y="80" width="110" height="46" rx="8"/><text class="t c" x="325" y="99">Mosquitto</text><text class="s c" x="325" y="115">+ persistence</text></g>
+<g><title>New: GET /plants/{id}/plan, the plant’s slice of the latest version</title>
+<rect class="b-now" x="30" y="170" width="100" height="46" rx="8"/><text class="t c" x="80" y="189">dispatch</text><text class="s c" x="80" y="205">+ plant slice</text></g>
+<rect class="b-done" x="150" y="170" width="100" height="46" rx="8"/><text class="t c" x="200" y="189">Postgres</text><text class="s c" x="200" y="205">plans, deliveries</text>
+<rect class="b-done" x="270" y="170" width="110" height="46" rx="8"/><text class="t c" x="325" y="189">simulators</text><text class="s c" x="325" y="205">+ SFTP server</text>
+<rect class="b-done" x="30" y="242" width="350" height="40" rx="8"/><text class="t c" x="205" y="259">Traefik ingress · localhost:8080</text><text class="s c" x="205" y="274">/webhooks → ingest, everything else → dispatch</text>
+
+<path class="e-done" d="M270 103 H254" marker-end="url(#ah)"/>
+<path class="e-done" d="M150 103 H134" marker-end="url(#ah)"/>
+<path class="e-done" d="M80 126 V166" marker-end="url(#ah)"/>
+<path class="e-done" d="M130 193 H146" marker-end="url(#ah)"/>
+<path class="e-done" d="M325 170 V130" marker-end="url(#ah)"/>
+
+<path class="guide" d="M435 20 V298"/>
+<text class="s c" x="435" y="14">pourline-net</text>
+<g><title>make chaos: docker network disconnect pourline-net k3d-plant-walldorf-server-0, wait 120 s, reconnect with the same IP</title>
+<rect class="b-now" x="408" y="140" width="54" height="40" rx="6"/><text class="t c" x="435" y="157">cut</text><text class="s c" x="435" y="172">120 s</text></g>
+
+<rect class="frame" x="470" y="28" width="200" height="270" rx="10"/>
+<text class="s" x="484" y="48">k3d cluster</text><text class="t" x="484" y="66">plant-walldorf</text>
+<g><title>One process: plan sync, the batch computer and the outbox forwarder. See figure 2.</title>
+<rect class="b-now" x="490" y="80" width="170" height="100" rx="8"/><text class="t c" x="575" y="101">plant-agent</text><text class="s c" x="575" y="119">plan sync</text><text class="s c" x="575" y="135">batch computer, 2 bays</text><text class="s c" x="575" y="151">outbox forwarder</text><text class="m c" x="575" y="169">:8082 · :9466</text></g>
+<g><title>k3s’s local-path volume, so the outbox and the last plan survive a pod restart</title>
+<rect class="b-now" x="580" y="200" width="80" height="52" rx="8"/><text class="t c" x="620" y="221">SQLite</text><text class="s c" x="620" y="237">on a PVC</text></g>
+<path class="e-now" d="M620 180 V196" marker-start="url(#ah-now)" marker-end="url(#ah-now)"/>
+
+<path class="e-now" d="M490 103 H384" marker-end="url(#ah-now)"/><text class="s c halo" x="437" y="96">tickets, QoS 1</text>
+<path class="e-now" d="M80 216 V230 H505 V184" marker-end="url(#ah-now)"/><text class="s" x="512" y="203">plan slice,</text><text class="s" x="512" y="217">every 15 s</text>
+
+<rect class="b-done" x="10" y="314" width="16" height="12" rx="3"/><text class="s" x="32" y="324">exists (M1–M6)</text>
+<rect class="b-now" x="140" y="314" width="16" height="12" rx="3"/><text class="s" x="162" y="324">new or changed in M7</text>
+<rect class="frame" x="300" y="314" width="16" height="12" rx="3"/><text class="s" x="322" y="324">k3d cluster (new)</text>
+</svg>
+<figcaption>Figure 1. The plant talks to the cloud over two links, both of which it opens itself. Tickets go out over MQTT, on the topic the fake plant already uses (<code>plants/plant-walldorf/tickets</code>), so ingest maps, deduplicates, traces and counts them as it does today. The plan comes in over HTTP. Both clusters pull images from the local registry <code>k3d-pourline-registry:5050</code>. Hover a box for details.</figcaption>
+</figure>
+
+<h2 id="agent">The plant-agent</h2>
+<p>One process with three loops, which share one SQLite file:</p>
+<ol>
+<li><strong>Plan sync.</strong> Every 15 s it fetches <code>GET /plants/{id}/plan</code> from dispatch and stores the slice, together with the time it got it. At startup it reads the stored slice, so a restarted agent that can’t reach the cloud still has a plan.</li>
+<li><strong>Batch computer.</strong> This replaces the fake plant’s random trips with the plan’s loads. When a load’s planned batch time comes, the computer waits for a free bay (Walldorf has 2, from the seed) and then issues three tickets: <code>batching</code>, then <code>loading</code> after volume ÷ batching rate, then <code>loaded</code> 3 minutes later, the same timings the fake plant uses. Each ticket names the order and the load number. The computer skips loads that are already frozen, because something else batched them, and loads that a newer plan has dropped.</li>
+<li><strong>Forwarder.</strong> It sends the oldest outbox row, waits for the broker’s PUBACK, deletes the row, and moves on to the next one. If the PUBACK doesn’t come within 10 s, the forwarder reconnects and sends the same row again.</li>
+</ol>
+
+<figure>
+<svg class="dg" viewBox="0 0 680 290" role="img" aria-labelledby="f2t f2d">
+<title id="f2t">Inside the plant-agent</title>
+<desc id="f2d">Plan sync gets the slice from dispatch and stores it in the plan table. The batch computer reads the plan table, and for each ticket it writes the batched table and the outbox table together. The forwarder reads the oldest outbox row and publishes it to Mosquitto. The broker’s PUBACK comes back, and the forwarder deletes the row. An HTTP server reads all three tables for healthz, readyz, status and metrics.</desc>
+
+<rect class="frame" x="385" y="24" width="170" height="240" rx="10"/>
+<text class="s c" x="470" y="16">SQLite file on a PVC</text>
+
+<rect class="b-done" x="10" y="36" width="110" height="44" rx="8"/><text class="t c" x="65" y="55">dispatch</text><text class="s c" x="65" y="71">cloud</text>
+<rect class="b-done" x="10" y="206" width="110" height="44" rx="8"/><text class="t c" x="65" y="225">Mosquitto</text><text class="s c" x="65" y="241">cloud</text>
+
+<rect class="b-now" x="190" y="36" width="150" height="44" rx="8"/><text class="t c" x="265" y="55">plan sync</text><text class="s c" x="265" y="71">every 15 s</text>
+<rect class="b-now" x="190" y="121" width="150" height="44" rx="8"/><text class="t c" x="265" y="140">batch computer</text><text class="s c" x="265" y="156">on time, ≤ 2 bays</text>
+<rect class="b-now" x="190" y="206" width="150" height="44" rx="8"/><text class="t c" x="265" y="225">forwarder</text><text class="s c" x="265" y="241">one ticket in flight</text>
+
+<g><title>The last slice from dispatch, and when the agent got it</title>
+<rect class="b-now" x="400" y="36" width="140" height="44" rx="8"/><text class="t c" x="470" y="55">plan</text><text class="s c" x="470" y="71">last slice, synced at</text></g>
+<g><title>One row per load this plant has started, keyed by order and load number, with how far it got. A load in here is never batched again.</title>
+<rect class="b-now" x="400" y="121" width="140" height="44" rx="8"/><text class="t c" x="470" y="140">batched</text><text class="s c" x="470" y="156">loads started, stage</text></g>
+<g><title>Tickets serialised once, when they are issued. A resend sends the same bytes, so ingest derives the same event id.</title>
+<rect class="b-now" x="400" y="206" width="140" height="44" rx="8"/><text class="t c" x="470" y="225">outbox</text><text class="s c" x="470" y="241">tickets, bytes as sent</text></g>
+
+<rect class="b-now" x="590" y="98" width="80" height="96" rx="8"/><text class="t c" x="630" y="118">HTTP</text><text class="m c" x="630" y="138">/healthz</text><text class="m c" x="630" y="153">/readyz</text><text class="m c" x="630" y="168">/status</text><text class="m c" x="630" y="183">/metrics</text>
+
+<path class="e-now" d="M120 58 H186" marker-end="url(#ah-now)"/><text class="s c halo" x="153" y="50">GET</text>
+<path class="e-now" d="M340 58 H396" marker-end="url(#ah-now)"/><text class="s c halo" x="368" y="50">store</text>
+<path class="e-now" d="M400 72 H368 V140 H344" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M340 150 H396" marker-end="url(#ah-now)"/>
+<path class="e-now" d="M300 165 V186 H470 V202" marker-end="url(#ah-now)"/><text class="s c halo" x="360" y="180">ticket</text>
+<path class="e-now" d="M400 228 H344" marker-end="url(#ah-now)"/><text class="s c halo" x="372" y="221">oldest</text>
+<path class="e-now" d="M190 220 H124" marker-end="url(#ah-now)"/><text class="s c halo" x="157" y="212">publish</text>
+<path class="e-back" d="M120 238 H186" marker-end="url(#ah-now)"/><text class="s c halo" x="153" y="256">PUBACK</text>
+<path class="e-done" d="M555 145 H586" marker-end="url(#ah)"/>
+<text class="s" x="190" y="282">On PUBACK the forwarder deletes the row, then sends the next one.</text>
+</svg>
+<figcaption>Figure 2. The batch computer writes a ticket and the load’s new stage in one SQLite transaction, so a crash leaves either both or neither. Plan sync and the batch computer never wait for the cloud. Only the forwarder does.</figcaption>
+</figure>
+
+<h3 id="no-loss">What “no loss, no duplicates” rests on</h3>
+<ul>
+<li><strong>Nothing is only in memory.</strong> A ticket exists only once its outbox row is committed. A row goes away only after the broker has acknowledged it. Mosquitto persists what it has acknowledged (decision 3), and ingest keeps a persistent session with manual acks, as it has since M3.</li>
+<li><strong>Order.</strong> One ticket is in flight at a time, so tickets arrive in the order they were issued. Ingest publishes them on one subject per plant, and dispatch applies them one at a time.</li>
+<li><strong>Same input, same id.</strong> A resend carries the stored bytes, including <code>ts_ms</code>, so ingest derives the same event id, <code>{ticket}:{event}:{ts_ms}</code>.</li>
+<li><strong>Duplicates across a long cut.</strong> JetStream drops a repeated id only within its 2-minute window, and the cut is 2 minutes long. A ticket whose PUBACK was lost at the moment of the cut is sent again after the window has passed. Ingest will therefore keep ticket ids in the dedup KV for <code>DEDUP_TTL_DAYS</code>, as it does for order ids (decision 4). There are 3 tickets per load, so the KV stays small.</li>
+<li><strong>Dispatch is idempotent anyway.</strong> A delivery is keyed by order and load number, and a repeated ticket event merges into the delivery and changes nothing.</li>
+</ul>
+
+<h3 id="rules">Batching rules</h3>
+<ul>
+<li>A load is batched once its planned batch time has come. If the agent starts and finds a load more than 15 minutes overdue, which only happens after the agent itself was down, it leaves that load to dispatch and logs it (decision 9).</li>
+<li>A load in <code>batched</code> is never batched again, even if a newer plan moves it to another time or truck. A load that was started before a restart resumes at its stage, and its remaining tickets carry the times at which they were due.</li>
+<li>The fake plant in the simulators stops sending tickets for a plant that has an agent, so each plant has one batch computer (decision 8). Walldorf’s trucks still drive their random trips.</li>
+</ul>
+
+<h2 id="cloud">Changes in the cloud</h2>
+<ul>
+<li><strong>Dispatch:</strong> <code>GET /plants/{id}/plan</code> returns the plant id, the latest version, the time it was made, and that version’s loads at the plant, each with its mix, which the ticket needs. It answers 404 for an unknown plant, and <code>version: null</code> with no loads before the first plan. The response type, <code>PlantPlan</code>, lives in <code>domain</code> with a wire-format test, because dispatch and the agent build in different workspaces and have to agree on the JSON. The batch-ticket payload moves from <code>simulators::plant</code> into <code>domain</code> for the same reason. Ingest keeps its own parser, so a mistake on the sending side can’t slip through unnoticed.</li>
+<li><strong>Ingest:</strong> ticket ids go into the dedup KV (see above).</li>
+<li><strong>Mosquitto:</strong> <code>persistence true</code>, shared by compose and k3d.</li>
+</ul>
+
+<h2 id="health">Health, status and metrics</h2>
+<p><code>/healthz</code> answers once the process is up. <code>/readyz</code> answers once the SQLite file is open and the agent has a plan, either fetched or stored. Readiness doesn’t depend on the cloud link, because an offline plant keeps working. <code>/status</code> returns one JSON line that both people and <code>make chaos</code> can read: the link states, the outbox depth and the age of its oldest ticket, the plan version and its age, and the number of tickets queued and sent.</p>
+<table>
+<thead><tr><th>Metric</th><th>Type, labels</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>pourline_edge_connectivity</code></td><td>gauge; <code>link</code> = mqtt, dispatch</td><td>SPEC’s <code>connectivity</code> metric. MQTT counts as up from the broker’s ConnAck until an error or a missing PUBACK. Dispatch counts as up while the last plan fetch succeeded. With a 10 s keep-alive, the agent notices a dead link within about 15 s.</td></tr>
+<tr><td><code>pourline_edge_outbox_messages</code></td><td>gauge</td><td>Tickets waiting to be sent</td></tr>
+<tr><td><code>pourline_edge_sync_lag_seconds</code></td><td>gauge</td><td>SPEC §8’s “edge sync lag”: the age of the oldest ticket still waiting, or 0 when the outbox is empty</td></tr>
+<tr><td><code>pourline_edge_plan_age_seconds</code></td><td>gauge</td><td>How stale the plan is: the time since the agent last heard from dispatch, not the time since the version was made (decision 10)</td></tr>
+<tr><td><code>pourline_edge_plan_version</code></td><td>gauge</td><td>The version the agent is working from</td></tr>
+<tr><td><code>pourline_edge_tickets_total</code></td><td>counter; <code>outcome</code> = queued, sent</td><td>The difference is the outbox. Its rate shows the drain.</td></tr>
+</tbody>
+</table>
+<p>The agent reuses <code>telemetry::init</code> for console logs and the metrics listener. It creates no spans of its own (decision 11). In compose, Prometheus scrapes it with a <code>plant</code> label, and the dashboard’s new “Edge” row shows connectivity, outbox depth, sync lag and plan age.</p>
+
+<h2 id="k3d">Two k3d clusters</h2>
+<p>This follows SPEC §9. <code>make k8s</code> in this milestone does the following:</p>
+<ol>
+<li>It checks for <code>k3d</code> and <code>kubectl</code> and stops with the install command if one is missing. It also stops if <code>localhost:8080</code> is taken, which happens when the compose stack is up.</li>
+<li>It creates <code>pourline-net</code> with a fixed subnet, so that <code>make chaos</code> can reconnect the plant node with its old IP. k3s doesn’t survive a change of node IP.</li>
+<li>It creates the registry <code>k3d-pourline-registry:5050</code>, builds the five images (ingest, dispatch, simulators, demo, plant-agent), and pushes them as <code>localhost:5050/&lt;service&gt;:dev</code>.</li>
+<li>It creates <code>cloud</code>, with its ingress on <code>127.0.0.1:8080</code>, and <code>plant-walldorf</code>, without Traefik. Both run on a pinned k3s image. The plant cluster gets a host alias, <code>cloud</code>, for the cloud node’s IP on <code>pourline-net</code>, because pods can’t resolve other clusters’ containers by name.</li>
+<li>It applies the manifests in <code>deploy/k3d/</code> with <code>kubectl apply -k</code> (decision 5) and waits for the rollouts. The cloud cluster runs everything from compose except Prometheus, Grafana and Jaeger (decision 6). Mosquitto’s 1883 and dispatch’s ingress reach the plant through the cloud node. The customer mappings become one ConfigMap per customer, named <code>&lt;customer&gt;-mapping</code>, which is the shape M8’s <code>CustomerIntegration</code> expects.</li>
+</ol>
+
+<h3 id="chaos">make chaos</h3>
+<ol>
+<li><strong>Make work for Walldorf.</strong> The <code>demo</code> image gets an <code>edge</code> mode. It runs as a one-off pod in the cloud, places three orders at the ship-tos nearest Walldorf that start as soon as possible, and waits until dispatch plans them at Walldorf. Simulated orders start 2 to 26 hours ahead, so without this step the plant would have nothing to batch during the cut.</li>
+<li><strong>Wait until the agent has that plan,</strong> then disconnect <code>k3d-plant-walldorf-server-0</code> from <code>pourline-net</code>.</li>
+<li><strong>Print the agent’s status every 10 s</strong> for 120 s. The script reads it with <code>docker exec</code> through the plant’s own API server, which still answers while the node is cut off.</li>
+<li><strong>Reconnect the node with the same IP,</strong> print the status every 5 s until the outbox is empty, and finish with a summary.</li>
+</ol>
+<p>Illustrative output:</p>
+<pre><code>Placing three orders near Walldorf, so its bays are busy during the cut…
+  plan v18: 7 loads at plant-walldorf batch within 12 minutes; the agent has v18
+Cutting plant-walldorf off pourline-net for 120 s
+  t+  0 s  links down  outbox 0  sync lag   0 s  plan v18,   4 s old
+  t+ 60 s  links down  outbox 3  sync lag  41 s  plan v18,  64 s old
+  t+120 s  links down  outbox 5  sync lag 101 s  plan v18, 124 s old
+Reconnected
+  t+125 s  links up    outbox 1  sync lag  98 s  plan v19,   2 s old
+  t+130 s  links up    outbox 0  sync lag   0 s  plan v19,   7 s old
+✓ 5 tickets queued during the cut, all sent in order within 8 s of reconnecting</code></pre>
+<p><code>make chaos</code> is a demo. The guarantees are proven by the tests in steps 2 and 4.</p>
+
+<h2 id="layout">Code layout</h2>
+<pre><code>crates/plant-agent/            (new) its own Cargo workspace and Cargo.lock (decision 1)
+├── src/main.rs                config, the three loops, shutdown
+├── src/store.rs               SQLite: plan, batched, outbox
+├── src/sync.rs                plan sync
+├── src/batching.rs            the batch computer
+├── src/forward.rs             the outbox forwarder
+├── src/http.rs                /healthz, /readyz, /status
+├── src/metrics.rs             names and gauges
+└── tests/forward.rs           against a real Mosquitto (testcontainers)
+crates/domain/src/lib.rs       PlantPlan, PlantLoad, and the plant's ticket payload (moved in)
+crates/dispatch/src/api.rs     GET /plants/{id}/plan
+crates/ingest/src/nats.rs      ticket ids in the dedup KV
+crates/simulators/             AGENT_PLANTS keeps the fake plant quiet; demo's edge mode
+deploy/k3d/                    (new) k3d cluster configs, cloud/ and plant-walldorf/ kustomizations, chaos.sh
+deploy/compose/                plant-agent service, Mosquitto persistence, scrape target
+deploy/grafana/dashboards/     the Edge row
+Cargo.toml, .cargo/config.toml root excludes the agent; one shared target/ for both workspaces
+Makefile, Dockerfile, CI, Dependabot   both workspaces; k8s, chaos, and a down that also removes the clusters</code></pre>
+
+<h2 id="config">Configuration</h2>
+<table>
+<thead><tr><th>Variable</th><th>Default</th></tr></thead>
+<tbody>
+<tr><td><code>PLANT_ID</code></td><td><code>plant-walldorf</code>. It must be a plant in the seed, which also gives the agent its bays and batching rate.</td></tr>
+<tr><td><code>DISPATCH_URL</code></td><td><code>http://localhost:8081</code>, with the same meaning as for the demo. Compose sets <code>http://dispatch:8081</code>, and k3d sets <code>http://cloud</code>.</td></tr>
+<tr><td><code>MQTT_URL</code></td><td><code>mqtt://localhost:1883</code>, as for every other service</td></tr>
+<tr><td><code>PLANT_AGENT_DB</code></td><td><code>plant-agent.sqlite</code>. Compose and k3d put it on a volume.</td></tr>
+<tr><td><code>PLANT_AGENT_HTTP_ADDR</code></td><td><code>0.0.0.0:8082</code>. Compose publishes it on <code>127.0.0.1:8082</code>.</td></tr>
+<tr><td><code>PLANT_AGENT_METRICS_ADDR</code></td><td><code>0.0.0.0:9466</code>, prefixed like <code>DISPATCH_METRICS_ADDR</code>, because every service reads the same <code>.env</code></td></tr>
+<tr><td><code>PLAN_POLL_SECS</code></td><td><code>15</code></td></tr>
+<tr><td><code>AGENT_PLANTS</code> (simulators)</td><td>Empty. Compose and k3d set <code>plant-walldorf</code>.</td></tr>
+</tbody>
+</table>
+<p>The MQTT keep-alive (10 s), the PUBACK timeout (10 s), the HTTP timeout (5 s) and the 15-minute grace are constants, each with a <code>ponytail:</code> comment. The sandbox can’t edit <code>.env.*</code> files, so I’ll give you the lines to add to <code>.env.example</code>.</p>
+
+<h2 id="steps">Steps</h2>
+<p>Each step ends green and becomes its own commit.</p>
+
+<h3 id="step-1">Step 1</h3>
+<p><strong>The second workspace and the outbox.</strong> First, check <code>rust-toolchain.toml</code>, the crate versions and the image pins, and pull the advisory database. Then:</p>
+<ul>
+<li>create <code>crates/plant-agent</code> as its own workspace, and add <code>exclude</code> to the root;</li>
+<li>point <code>build.target-dir</code> at the root <code>target/</code>, so both workspaces share one build directory;</li>
+<li>make <code>make test</code> and <code>make audit</code> cover both workspaces (the check that the root never compiles <code>libsqlite3-sys</code> stays);</li>
+<li>add a <code>MANIFEST</code> build argument to the Dockerfile, and add the agent to the CI image matrix and to Dependabot.</li>
+</ul>
+<p>Then <code>store.rs</code>, with only the outbox for now. Its unit tests check that rows come back in insertion order, that they survive closing and reopening the file, and that a delete removes only the acknowledged row.</p>
+
+<h3 id="step-2">Step 2</h3>
+<p><strong>The forwarder against a real broker.</strong> This step adds MQTT QoS 1 with one ticket in flight, deletion on PUBACK, the timeout and reconnect, and the connectivity gauge. <code>tests/forward.rs</code> starts Mosquitto with testcontainers and checks that:</p>
+<ul>
+<li>tickets queued while the broker is paused all arrive after it resumes, in order;</li>
+<li>the same holds when the agent restarts on the same file in between;</li>
+<li>a resent ticket has the same bytes as the first copy.</li>
+</ul>
+
+<h3 id="step-3">Step 3</h3>
+<p><strong>The cloud side.</strong> This step adds:</p>
+<ul>
+<li><code>PlantPlan</code> and the ticket payload in <code>domain</code>, with wire-format tests;</li>
+<li><code>GET /plants/{id}/plan</code>, with API tests: one plant’s loads only, a mix on every load, 404 for an unknown plant, and an empty slice before the first plan;</li>
+<li>ticket ids in ingest’s dedup KV. A test in <code>ingest/tests/bus.rs</code> publishes the same ticket again after its message id has left the stream’s window and expects <code>Duplicate</code>;</li>
+<li>Mosquitto persistence.</li>
+</ul>
+
+<h3 id="step-4">Step 4</h3>
+<p><strong>The agent.</strong> This step adds plan sync with the stored plan, the batch computer, the HTTP endpoints and the metrics. Unit tests, with paused time and an in-memory plan source:</p>
+<ul>
+<li>loads start on time, never more than the bays at once, and the tickets carry the right timings;</li>
+<li>a load is never batched twice: not after a newer plan moves it, and not after a restart, which resumes a load in the middle of batching;</li>
+<li>frozen loads, dropped loads and loads past the grace are skipped;</li>
+<li>with the plan source failing, batching continues from the stored plan, and the plan age grows;</li>
+<li><code>/readyz</code> waits for a plan, and doesn’t depend on the link.</li>
+</ul>
+
+<h3 id="step-5">Step 5</h3>
+<p><strong>Compose and the dashboard.</strong> This step adds the agent service with a volume, <code>AGENT_PLANTS</code> for the simulators, the scrape target and the “Edge” row. The dashboard test can’t depend on the agent’s crate, which lives in the other workspace, so it reads the <code>pourline_edge_</code> names from <code>crates/plant-agent/src/metrics.rs</code>. The README gets an “Edge” section. I check it on a fresh stack: tickets from the agent freeze Walldorf’s loads in dispatch, and the Edge row shows data. I also cut the agent’s container off the compose network for a minute to see the outbox drain.</p>
+
+<h3 id="step-6">Step 6</h3>
+<p><strong>The clusters.</strong> This step adds <code>make k8s</code> as described above, the <code>deploy/k3d/</code> manifests, and a <code>make down</code> that also deletes the clusters, the registry and the network if they exist. I check that every rollout is ready, that the agent in <code>plant-walldorf</code> has the cloud’s latest version, and that its tickets reach dispatch.</p>
+<p>This is the riskiest step, because it depends on the Docker network, DNS across clusters and k3s’s behaviour when a node’s IP comes back. If the node doesn’t recover from a cut, I’ll stop and report what I found instead of working around it.</p>
+
+<h3 id="step-7">Step 7</h3>
+<p><strong>make chaos, and a full run.</strong> This step adds the demo’s <code>edge</code> mode, <code>deploy/k3d/chaos.sh</code>, and the README’s k8s and chaos sections, including the prerequisite check line from SPEC §9. I run <code>make chaos</code> twice. In the second run, I also delete the agent’s pod during the cut, and the new pod finds its queued tickets and its plan in SQLite. After each run I check two things: that dispatch has a delivery for every load the agent started, and that ingest counted each ticket as published exactly once.</p>
+
+<h2 id="decisions">Decisions I need from you</h2>
+<p>I’ll use the default unless you say otherwise.</p>
+<table>
+<thead><tr><th>#</th><th>Question</th><th>My default</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>How do we get a SQLite outbox past the <code>libsqlite3-sys</code> clash with sqlx?</td><td>The plant-agent gets its own workspace and lockfile, with <code>rusqlite</code> 0.42.0 and <code>bundled</code>, which builds SQLite 3.54.1, the patched version. It shares <code>domain</code> and <code>telemetry</code> by path, and the <code>target/</code> directory. The cost is a second <code>Cargo.lock</code>, dependency versions repeated in the agent’s <code>Cargo.toml</code>, and one more line each in the Makefile, Dockerfile and Dependabot config. When sqlx allows <code>libsqlite3-sys</code> 0.39 or later, it merges back by deleting two lines. The alternatives are an older <code>rusqlite</code> in the main workspace, which would mean ignoring an advisory for code we actually compile, or a pure-Rust store such as <code>redb</code>, which departs from SPEC §6, §11 and §14.</td></tr>
+<tr><td>2</td><td>How does the plant talk to the cloud?</td><td>Tickets go over MQTT on the topic the fake plant uses, and the plan comes over HTTP from dispatch. Ingest stays the only way in, with its validation, DLQ, traces and metrics, and nothing changes for the trucks. The alternative is to publish canonical events straight to JetStream, which gives a true end-to-end ack. But it would skip ingest’s checks, need NATS exposed and credentials at every plant, and still hit the 2-minute window.</td></tr>
+<tr><td>3</td><td>When is an outbox row done?</td><td>At the broker’s PUBACK. Mosquitto gets <code>persistence true</code>, so a broker restart keeps what it acknowledged. The alternative is to wait until dispatch confirms the ticket, which needs a channel back to the plant and its own outbox of acks.</td></tr>
+<tr><td>4</td><td>How do we keep a ticket resent after a 2-minute cut from becoming a duplicate?</td><td>Ingest keeps ticket ids in the dedup KV for 7 days, like order ids.</td></tr>
+<tr><td>5</td><td>How do the workloads get into k3d before M8’s Helm charts?</td><td>Plain manifests in <code>deploy/k3d/</code>, applied with <code>kubectl apply -k</code>, which needs no extra tool. M8 turns them into charts. The alternatives are to start the Helm charts now, which is less total work but pulls part of M8 forward, or to let the compose stack act as the cloud and create only the plant cluster in M7.</td></tr>
+<tr><td>6</td><td>What runs in the cloud cluster?</td><td>Postgres, NATS, Mosquitto, the SFTP server, ingest, dispatch and the simulators. Prometheus, Grafana and Jaeger stay in compose for now. On Kubernetes they fit better with M8’s charts, and <code>make chaos</code> prints the agent’s status instead.</td></tr>
+<tr><td>7</td><td>Should a ticket that arrives late, or contradicts the plan, trigger a re-dispatch?</td><td>Not in M7. SPEC §4 lists the triggers. The next re-dispatch freezes the load where the plant actually batched it, because frozen loads come from deliveries. With the simulators’ order rate, that happens within a few minutes. The alternative is a new trigger, <code>load_batched_off_plan</code>, so the plan corrects itself right after the drain.</td></tr>
+<tr><td>8</td><td>A plant with an agent would also have the fake plant sending tickets. What should happen?</td><td>The fake plant goes quiet for plants in <code>AGENT_PLANTS</code>, so each plant has one batch computer, and its bays aren’t used twice.</td></tr>
+<tr><td>9</td><td>What happens to a load that is already overdue when the agent starts?</td><td>If it is up to 15 minutes late, the agent batches it. If it is later than that, the agent leaves it to dispatch and logs it. This only matters after the agent itself was down. While the link is down, the agent batches on time.</td></tr>
+<tr><td>10</td><td>What does “how stale its plan is” measure?</td><td>The time since the agent last heard from dispatch. A plan that hasn’t changed for an hour isn’t stale if dispatch confirmed it 10 s ago.</td></tr>
+<tr><td>11</td><td>Should the agent trace its tickets?</td><td>No. MQTT 3.1.1 has no headers to carry a <code>traceparent</code>, and in k3d the plant can’t reach Jaeger anyway. Ingest’s <code>mqtt message</code> span still starts each ticket’s trace, as it does today.</td></tr>
+</tbody>
+</table>
+
+<h2 id="later">Heads-up: not in M7</h2>
+<ul>
+<li>Dispatch doesn’t know that a plant is cut off. If a re-dispatch runs during the cut, for example for a new order, it can move Walldorf’s overdue loads, even though Walldorf batches them from its last plan. After the drain, the next re-dispatch freezes them where Walldorf batched them (decision 7). If the cloud moved such a load to another plant, it could be batched twice. That can’t happen here yet, because the simulated plants don’t batch planned loads.</li>
+<li>Only Walldorf has an agent. Mannheim and Weinheim stay simulated. Another agent means one more cluster and one more kustomization.</li>
+<li>The plant and the cloud don’t authenticate each other: MQTT is anonymous and HTTP is plain, as in the rest of the dev stack.</li>
+<li><code>make k8s</code> doesn’t install Helm charts, the operator or <code>CustomerIntegration</code>s yet. Those come in M8, and so does the end-to-end test in CI (kind, SPEC §12). CI in M7 builds and tests the agent, but doesn’t run k3d.</li>
+<li><code>make up</code> and <code>make k8s</code> are alternatives. Both use <code>localhost:8080</code>, and together they need more than SPEC’s 8 GB. The first <code>make k8s</code> builds five release images, which takes a while.</li>
+<li>Simulated trucks still drive random trips and don’t follow the plan, as since M2.</li>
+</ul>
+
+<h2 id="deps">New dependencies</h2>
+<table>
+<thead><tr><th>What</th><th>Version</th><th>For</th></tr></thead>
+<tbody>
+<tr><td><code>rusqlite</code> with <code>bundled</code></td><td>0.42.0 (<code>libsqlite3-sys</code> 0.40.0, SQLite 3.54.1)</td><td>The outbox, the stored plan and the batched loads. In the agent’s workspace only. Its lockfile passes <code>cargo audit</code> today.</td></tr>
+<tr><td>Everything else the agent uses</td><td>the root workspace’s versions</td><td>tokio, axum, reqwest, rumqttc, serde, chrono, metrics, tracing, anyhow, thiserror, and testcontainers for the tests. These are repeated in its <code>Cargo.toml</code>, because a second workspace can’t inherit them.</td></tr>
+<tr><td><code>rancher/k3s</code>, the registry image</td><td>pinned in step 6</td><td>k3d 5.9.0 defaults to k3s v1.35.5-k3s1. I’ll pin the latest patch release and an exact registry tag.</td></tr>
+</tbody>
+</table>
+<p>There are no new crates in the root workspace.</p>
+
+</div>
+</article>
+</div></div></div></div></div>
+</main>
+</div>
+</body>
+</html>
