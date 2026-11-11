@@ -29,6 +29,7 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+metrics-exporter-prometheus.workspace = true
 proptest.workspace = true
 telemetry = { workspace = true, features = ["testing"] }
 testcontainers.workspace = true

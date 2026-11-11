@@ -96,6 +96,12 @@ async fn main() -> anyhow::Result<()> {
     let bus = Bus::connect(&config.nats_url, config.dedup_ttl).await?;
     info!(nats = %config.nats_url, "connected to NATS JetStream");
 
+    // The integrations that can dead-letter: every mapping, plus MQTT's telematics and plants.
+    let integrations: Vec<String> = mappings
+        .iter()
+        .map(|m| m.integration.clone())
+        .chain(["telematics".to_owned(), "plants".to_owned()])
+        .collect();
     let (sftp, webhooks): (Vec<Mapping>, Vec<Mapping>) = mappings
         .into_iter()
         .partition(|m| m.channel == Channel::Sftp);
@@ -116,7 +122,7 @@ async fn main() -> anyhow::Result<()> {
     tasks.spawn(async move { Ok(sources::run_mqtt(&mqtt_url, mqtt_bus, mqtt_seed).await?) });
     let dlq_bus = bus.clone();
     tasks.spawn(async move {
-        ingest::metrics::watch_dlq(dlq_bus, Duration::from_secs(15)).await;
+        ingest::metrics::watch_dlq(dlq_bus, Duration::from_secs(15), integrations).await;
         anyhow::Ok(())
     });
     // ponytail: one SFTP account for every SFTP integration; give each its own when a second one appears.

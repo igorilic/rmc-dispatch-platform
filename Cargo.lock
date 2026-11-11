@@ -2139,6 +2139,7 @@ dependencies = [
  "domain",
  "futures",
  "metrics",
+ "metrics-exporter-prometheus",
  "proptest",
  "quick-xml",
  "rumqttc",
