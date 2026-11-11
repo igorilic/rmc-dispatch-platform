@@ -19,6 +19,11 @@ criterion = { version = "0.8.2", default-features = false, features = ["cargo_be
 csv = "1.4.0"
 domain = { path = "crates/domain" }
 futures = "0.3.34"
+metrics = "0.24.6"
+metrics-exporter-prometheus = { version = "0.18.3", default-features = false, features = ["http-listener"] } # no push gateway, no TLS
+opentelemetry = { version = "0.33.1", default-features = false, features = ["trace", "internal-logs"] }
+opentelemetry-otlp = { version = "0.33.1", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client", "internal-logs"] } # OTLP/HTTP: no gRPC stack
+opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["trace", "internal-logs"] }
 proptest = "1.12.0"
 quick-xml = { version = "0.42.0", features = ["serialize"] }
 rand = "0.10.3"
@@ -31,11 +36,13 @@ serde-saphyr = "2.1.1"
 serde_json = { version = "1.0.154", features = ["float_roundtrip"] } # exact f64 round trips (plans, events)
 sha2 = "0.11.1"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono", "json"] } # no TLS: local Postgres
+telemetry = { path = "crates/telemetry" }
 testcontainers = "0.28.0"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tower = { version = "0.5.3", features = ["util"] }
 tracing = "0.1.44"
+tracing-opentelemetry = { version = "0.34.0", default-features = false }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 utoipa = { version = "6.0.0", features = ["chrono", "axum_extras"] }
 utoipa-swagger-ui = { version = "10.0.2", default-features = false, features = ["axum", "vendored"] } # vendored: no download at build

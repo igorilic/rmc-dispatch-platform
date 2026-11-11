@@ -59,6 +59,7 @@ services:
       SFTP_HOST: sftp
       SFTP_PORT: "2222"
       MAPPINGS_DIR: /customers
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
     # Mapping configs are files, not code: edit, then `docker compose restart ingest`.
     volumes: ["../../customers:/customers:ro"]
     ports: ["127.0.0.1:8080:8080"]
@@ -76,6 +77,7 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-pourline}:${POSTGRES_PASSWORD:-pourline}@postgres:5432/${POSTGRES_DB:-pourline}
       NATS_URL: nats://nats:4222
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
     ports: ["127.0.0.1:8081:8081"]
     depends_on:
       postgres: { condition: service_healthy }
@@ -123,7 +125,7 @@ services:
     ports: ["127.0.0.1:9090:9090"]
 
   grafana:
-    image: grafana/grafana:13.2.5
+    image: grafana/grafana:13.3.1
     ports: ["127.0.0.1:3000:3000"]
 
   jaeger:

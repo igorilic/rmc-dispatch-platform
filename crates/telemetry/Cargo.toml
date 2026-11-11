@@ -1,0 +1,27 @@
+[package]
+name = "telemetry"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+# In-memory span capture for other crates' tests.
+testing = ["opentelemetry_sdk/testing"]
+
+[dependencies]
+async-nats.workspace = true
+metrics-exporter-prometheus.workspace = true
+opentelemetry.workspace = true
+opentelemetry-otlp.workspace = true
+opentelemetry_sdk.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-opentelemetry.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
+
+[lints]
+workspace = true

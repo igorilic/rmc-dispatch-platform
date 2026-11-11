@@ -2,6 +2,7 @@
 //! events to NATS JetStream. All settings come from environment variables; see `Config`.
 
 use std::fmt::Display;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -14,11 +15,11 @@ use ingest::nats::Bus;
 use ingest::sources::{self, SftpSource, Webhooks};
 use tokio::task::JoinSet;
 use tracing::info;
-use tracing_subscriber::EnvFilter;
 
 /// Settings from the environment. Every variable is optional; `.env.example` lists the defaults.
 struct Config {
     http_addr: String,
+    metrics_addr: SocketAddr,
     nats_url: String,
     mqtt_url: String,
     sftp: SftpSource,
@@ -56,6 +57,7 @@ impl Config {
         };
         Ok(Config {
             http_addr: var("HTTP_ADDR", "0.0.0.0:8080"),
+            metrics_addr: parsed("METRICS_ADDR", &var("METRICS_ADDR", "0.0.0.0:9464"))?,
             nats_url: var("NATS_URL", "nats://localhost:4222"),
             mqtt_url: var("MQTT_URL", "mqtt://localhost:1883"),
             sftp: SftpSource {
@@ -83,13 +85,9 @@ where
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
     let lookup = |key: &str| std::env::var(key).ok();
     let config = Config::from_lookup(lookup)?;
+    let _telemetry = telemetry::init("ingest", config.metrics_addr)?;
     let seed = Arc::new(Seed::rhine_neckar()?);
     let mappings = Mapping::load_all(&config.mappings_dir)?;
     let names: Vec<&str> = mappings.iter().map(|m| m.integration.as_str()).collect();
@@ -167,6 +165,7 @@ mod tests {
     fn config_has_working_defaults() {
         let config = Config::from_lookup(env(&[])).unwrap();
         assert_eq!(config.http_addr, "0.0.0.0:8080");
+        assert_eq!(config.metrics_addr, SocketAddr::from(([0, 0, 0, 0], 9464)));
         assert_eq!(config.nats_url, "nats://localhost:4222");
         assert_eq!(config.mqtt_url, "mqtt://localhost:1883");
         assert_eq!(
@@ -200,5 +199,6 @@ mod tests {
         assert!(Config::from_lookup(env(&[("SFTP_POLL_SECS", "0")])).is_err());
         assert!(Config::from_lookup(env(&[("MAX_IN_FLIGHT", "lots")])).is_err());
         assert!(Config::from_lookup(env(&[("SFTP_PORT", "ssh")])).is_err());
+        assert!(Config::from_lookup(env(&[("METRICS_ADDR", "9464")])).is_err());
     }
 }

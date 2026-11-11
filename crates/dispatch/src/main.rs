@@ -12,7 +12,6 @@ use dispatch::store::Store;
 use dispatch::{api, intake, worker};
 use domain::Seed;
 use tracing::info;
-use tracing_subscriber::EnvFilter;
 
 fn var(key: &str, default: &str) -> String {
     std::env::var(key)
@@ -49,11 +48,11 @@ fn settings() -> anyhow::Result<Settings> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    let metrics_addr = var("DISPATCH_METRICS_ADDR", "0.0.0.0:9465");
+    let metrics_addr = metrics_addr.parse().with_context(|| {
+        format!("DISPATCH_METRICS_ADDR must be host:port, not {metrics_addr:?}")
+    })?;
+    let _telemetry = telemetry::init("dispatch", metrics_addr)?;
     let http_addr = var("DISPATCH_HTTP_ADDR", "0.0.0.0:8081");
     let database_url = var(
         "DATABASE_URL",
