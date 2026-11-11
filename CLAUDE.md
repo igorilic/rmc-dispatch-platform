@@ -70,6 +70,6 @@ Each one ends with a runnable repo, green CI and a commit.
 4. [x] **Dispatch v1**: data model + migrations, construction heuristic, REST API with OpenAPI, property tests.
 5. [x] **Re-dispatch**: event handling, local search, frozen loads, plan versions + diffs, benchmarks. `make demo` works end to end.
 6. [x] **Observability**: traces end to end, metrics, Grafana dashboard.
-7. [ ] **Edge**: `plant-agent` with SQLite outbox, two k3d clusters, `make chaos`.
+7. [x] **Edge**: `plant-agent` with SQLite outbox, two k3d clusters, `make chaos`.
 8. [ ] **Operator**: `CustomerIntegration` CRD + controller, Helm charts, e2e test in CI.
 9. [ ] **Polish**: architecture doc with diagrams, 4–6 ADRs, demo GIF, README walkthrough.
