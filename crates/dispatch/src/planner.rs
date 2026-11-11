@@ -108,6 +108,37 @@ pub struct Metrics {
     pub minutes_over_gap_limit: f64,
     /// Kilometres trucks drive empty to reach their loading plant.
     pub empty_km: f64,
+    /// Every wait at a site, counted by its length: the pour-gap distribution (SPEC §8).
+    pub pour_gaps: GapCounts,
+}
+
+/// Waits between consecutive loads of an order, counted per range of minutes. A wait on a
+/// boundary counts in the lower range.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct GapCounts {
+    pub up_to_5: usize,
+    pub up_to_10: usize,
+    pub up_to_20: usize,
+    pub up_to_30: usize,
+    pub longer: usize,
+}
+
+impl GapCounts {
+    fn add(&mut self, minutes: f64) {
+        let range = match minutes {
+            m if m <= 5.0 => &mut self.up_to_5,
+            m if m <= 10.0 => &mut self.up_to_10,
+            m if m <= 20.0 => &mut self.up_to_20,
+            m if m <= 30.0 => &mut self.up_to_30,
+            _ => &mut self.longer,
+        };
+        *range += 1;
+    }
+
+    /// How many waits there are: one fewer than the loads, for each planned order.
+    pub fn total(&self) -> usize {
+        self.up_to_5 + self.up_to_10 + self.up_to_20 + self.up_to_30 + self.longer
+    }
 }
 
 /// Batching at the plant's rate, then 3 minutes to load the truck.
@@ -599,6 +630,7 @@ impl<'a> Planner<'a> {
                 m.gap_minutes += gap;
                 m.minutes_over_gap_limit += (gap - limit).max(0.0);
                 m.max_gap_minutes = m.max_gap_minutes.max(gap);
+                m.pour_gaps.add(gap);
                 if gap > limit {
                     m.gaps_over_limit += 1;
                 }
@@ -942,7 +974,32 @@ mod tests {
             (plan.metrics.lateness_minutes, plan.metrics.max_gap_minutes),
             (0.0, 0.0)
         );
+        assert_eq!(
+            plan.metrics.pour_gaps,
+            GapCounts {
+                up_to_5: 4,
+                ..GapCounts::default()
+            }
+        );
         assert!(plan.unplanned.is_empty());
+    }
+
+    #[test]
+    fn gap_counts_put_each_boundary_in_the_lower_range() {
+        let mut counts = GapCounts::default();
+        for gap in [0.0, 5.0, 5.5, 10.0, 20.0, 30.0, 30.5, 95.0] {
+            counts.add(gap);
+        }
+        assert_eq!(
+            counts,
+            GapCounts {
+                up_to_5: 2,
+                up_to_10: 2,
+                up_to_20: 1,
+                up_to_30: 1,
+                longer: 2,
+            }
+        );
     }
 
     #[test]
@@ -980,6 +1037,14 @@ mod tests {
         assert_eq!(
             plan.metrics.gaps_over_limit, 1,
             "a long gap is allowed but counted (soft)"
+        );
+        let gaps = &plan.metrics.pour_gaps;
+        assert_eq!(
+            (
+                gaps.up_to_5 + gaps.up_to_10 + gaps.up_to_20,
+                gaps.up_to_30 + gaps.longer
+            ),
+            (0, 1)
         );
     }
 
@@ -1114,6 +1179,11 @@ mod tests {
         assert!(
             second.loads[2].eta_on_site >= discharge_end(&frozen[1], &o),
             "the rest follows the frozen loads"
+        );
+        assert_eq!(
+            second.metrics.pour_gaps.total(),
+            4,
+            "frozen loads count too"
         );
     }
 

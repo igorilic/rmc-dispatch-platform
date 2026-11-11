@@ -88,6 +88,7 @@ async fn main() -> anyhow::Result<()> {
     let lookup = |key: &str| std::env::var(key).ok();
     let config = Config::from_lookup(lookup)?;
     let _telemetry = telemetry::init("ingest", config.metrics_addr)?;
+    ingest::metrics::describe();
     let seed = Arc::new(Seed::rhine_neckar()?);
     let mappings = Mapping::load_all(&config.mappings_dir)?;
     let names: Vec<&str> = mappings.iter().map(|m| m.integration.as_str()).collect();
@@ -113,6 +114,11 @@ async fn main() -> anyhow::Result<()> {
     tasks.spawn(async move { Ok(axum::serve(listener, router).await?) });
     let (mqtt_bus, mqtt_seed, mqtt_url) = (bus.clone(), Arc::clone(&seed), config.mqtt_url.clone());
     tasks.spawn(async move { Ok(sources::run_mqtt(&mqtt_url, mqtt_bus, mqtt_seed).await?) });
+    let dlq_bus = bus.clone();
+    tasks.spawn(async move {
+        ingest::metrics::watch_dlq(dlq_bus, Duration::from_secs(15)).await;
+        anyhow::Ok(())
+    });
     // ponytail: one SFTP account for every SFTP integration; give each its own when a second one appears.
     for mapping in sftp {
         let (source, bus, seed) = (config.sftp.clone(), bus.clone(), Arc::clone(&seed));

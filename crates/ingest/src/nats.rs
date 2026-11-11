@@ -14,6 +14,7 @@
 //! Each event is published inside a `publish` span, whose trace context goes along in the
 //! `traceparent` header, so dispatch continues the trace (SPEC §8).
 
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::future::Future;
 use std::time::Duration;
@@ -23,12 +24,14 @@ use async_nats::header::NATS_MESSAGE_ID;
 use async_nats::jetstream::{self, kv, stream};
 use chrono::{DateTime, Utc};
 use domain::{Channel, Event, EventEnvelope, Seed};
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::field::Empty;
 use tracing::{Instrument, info_span, warn};
 
 use crate::mapping::{Delivery, Mapping};
+use crate::metrics;
 
 pub const EVENTS: &str = "EVENTS";
 pub const DLQ: &str = "DLQ";
@@ -134,6 +137,11 @@ impl Bus {
             .await;
         if let Ok(outcome) = published {
             span.record("duplicate", outcome == Published::Duplicate);
+            let counted = match outcome {
+                Published::New => "published",
+                Published::Duplicate => "duplicate",
+            };
+            metrics::record(&event.source.integration, counted);
         }
         published
     }
@@ -205,6 +213,7 @@ impl Bus {
         })
         .instrument(span)
         .await?;
+        metrics::record(&letter.integration, "dead_lettered");
         Ok(())
     }
 
@@ -270,6 +279,22 @@ impl Bus {
             .await
             .map_err(err("remove a dead letter"))?;
         Ok(())
+    }
+
+    /// How many dead letters each integration has, by the DLQ's subjects.
+    pub async fn dead_letter_counts(&self) -> Result<HashMap<String, u64>, BusError> {
+        let dlq = self.js.get_stream(DLQ).await.map_err(err("open the DLQ"))?;
+        let mut subjects = dlq
+            .info_with_subjects("dlq.>")
+            .await
+            .map_err(err("read the DLQ's subjects"))?;
+        let mut counts = HashMap::new();
+        while let Some(entry) = subjects.next().await {
+            let (subject, count) = entry.map_err(err("read the DLQ's subjects"))?;
+            let integration = subject.strip_prefix("dlq.").unwrap_or(&subject);
+            counts.insert(integration.to_owned(), count as u64);
+        }
+        Ok(counts)
     }
 
     /// How many messages a stream holds.

@@ -64,6 +64,10 @@ async fn main() -> anyhow::Result<()> {
     let store = Store::connect(&database_url).await?;
     store.import_master_data(&Seed::rhine_neckar()?).await?;
     info!("connected to Postgres, master data imported");
+    dispatch::metrics::describe();
+    if let Some(latest) = store.plan(None).await? {
+        dispatch::metrics::current_plan(latest.version, &latest.plan);
+    }
     // Connects in the background, so dispatch starts even while NATS is still coming up.
     let nats = async_nats::ConnectOptions::new()
         .retry_on_initial_connect()

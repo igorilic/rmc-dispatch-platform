@@ -154,9 +154,13 @@ async fn poison_messages_land_in_the_dlq_with_every_error() {
         letter.raw
     );
 
+    let counts = bus.dead_letter_counts().await.unwrap();
+    assert_eq!(counts, [("rheinbau-gmbh".to_owned(), 1)].into());
+
     bus.remove_dead_letter(letters[0].sequence).await.unwrap();
     assert!(bus.dead_letters().await.unwrap().is_empty());
     assert_eq!(bus.count(DLQ).await.unwrap(), 0);
+    assert!(bus.dead_letter_counts().await.unwrap().is_empty());
 }
 
 #[tokio::test]

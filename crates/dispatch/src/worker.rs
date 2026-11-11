@@ -11,6 +11,9 @@
 //!
 //! Tracing (SPEC §8): each job carries the span it was sent from. The `redispatch` span is a child
 //! of the first job's span, so it joins that trace; the other jobs of the batch become links.
+//! Each run is timed, and each new version sets the plan gauges ([`crate::metrics`]).
+
+use std::time::Instant;
 
 use chrono::{DateTime, SubsecRound, TimeDelta, Utc};
 use domain::Load;
@@ -18,6 +21,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::field::Empty;
 use tracing::{Instrument, Span, error, info, info_span};
 
+use crate::metrics;
 use crate::planner::delivered_load;
 use crate::redispatch::{Request, Settings, Trigger, redispatch};
 use crate::store::{DELIVERY_WINDOW, Store, StoreError};
@@ -121,17 +125,17 @@ pub async fn run(
         for job in &batch[1..] {
             span.follows_from(&job.span);
         }
+        let started = Instant::now();
         let reply = once(&store, &triggers, &settings, clock().trunc_subsecs(0))
             .instrument(span.clone())
             .await;
-        span.record(
-            "outcome",
-            match reply {
-                Ok(Some(_)) => "new_version",
-                Ok(None) => "unchanged",
-                Err(_) => "failed",
-            },
-        );
+        let outcome = match reply {
+            Ok(Some(_)) => "new_version",
+            Ok(None) => "unchanged",
+            Err(_) => "failed",
+        };
+        span.record("outcome", outcome);
+        metrics::redispatched(outcome, started.elapsed(), &triggers);
         let reply = reply.map_err(|e| {
             span.record("otel.status_code", "ERROR");
             error!(error = %e, ?triggers, "re-dispatch failed, the previous plan stays");
@@ -225,6 +229,7 @@ async fn once(
     let span = Span::current();
     span.record("version", version);
     span.record("changes", outcome.diff.changes.len());
+    metrics::current_plan(version, &outcome.plan);
     info!(
         version,
         changes = outcome.diff.changes.len(),

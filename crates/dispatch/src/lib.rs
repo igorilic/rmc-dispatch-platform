@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod intake;
+pub mod metrics;
 pub mod planner;
 pub mod redispatch;
 pub mod search;
