@@ -27,6 +27,7 @@ spec:
             - { name: NATS_URL, value: "nats://nats:4222" }
             - { name: MQTT_URL, value: "mqtt://mosquitto:1883" }
             - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://jaeger:4318" }
+            - { name: CLOCK_OFFSET_HOURS, value: {{ $.Values.clockOffsetHours | quote }} }
           ports: [{ name: http, containerPort: 8080 }, { name: metrics, containerPort: 9464 }]
           readinessProbe:
             httpGet: { path: /healthz, port: http }
@@ -50,6 +51,7 @@ spec:
             - { name: DATABASE_URL, valueFrom: { secretKeyRef: { name: dev-credentials, key: DATABASE_URL } } }
             - { name: NATS_URL, value: "nats://nats:4222" }
             - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://jaeger:4318" }
+            - { name: CLOCK_OFFSET_HOURS, value: {{ $.Values.clockOffsetHours | quote }} }
           ports: [{ name: http, containerPort: 8081 }, { name: metrics, containerPort: 9465 }]
           readinessProbe:
             httpGet: { path: /healthz, port: http }
@@ -78,6 +80,7 @@ spec:
           image: {{ .Values.images.simulators }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           env:
+            - { name: CLOCK_OFFSET_HOURS, value: {{ $.Values.clockOffsetHours | quote }} }
             {{- with .Values.simulators }}
             - { name: MQTT_URL, value: "mqtt://mosquitto:1883" }
             - { name: SFTP_HOST, value: sftp }

@@ -28,6 +28,7 @@ spec:
             - { name: DISPATCH_URL, value: {{ .Values.dispatchUrl | quote }} }
             - { name: MQTT_URL, value: {{ .Values.mqttUrl | quote }} }
             - { name: PLANT_AGENT_DB, value: /data/plant-agent.sqlite }
+            - { name: CLOCK_OFFSET_HOURS, value: {{ $.Values.clockOffsetHours | quote }} }
           ports:
             - { name: http, containerPort: 8082 }
             - { name: metrics, containerPort: 9466 }

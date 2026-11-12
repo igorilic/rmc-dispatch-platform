@@ -1,6 +1,9 @@
 # make k8s sets this to the digest it just pushed to the local registry.
 image: k3d-pourline-registry:5050/plant-agent:dev
 imagePullPolicy: IfNotPresent
+# Shifts the simulated world's clock by whole hours (domain::clock), the same in every service.
+# make k8s gives it the cloud's value when it's outside the plants' opening hours in Berlin.
+clockOffsetHours: 0
 # A plant in the seed, which also gives the agent its loading bays and batching rate.
 plantId: plant-walldorf
 # The cloud, from the plant: `cloud` is the host alias make k8s gives the plant cluster for the

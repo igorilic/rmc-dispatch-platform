@@ -8,6 +8,11 @@ images:
   operator: k3d-pourline-registry:5050/operator:dev
 imagePullPolicy: IfNotPresent
 
+# Shifts the simulated world's clock by whole hours (domain::clock), the same in every service; the
+# operator passes it on to each integration. make k8s sets it when it's outside the plants'
+# opening hours in Berlin.
+clockOffsetHours: 0
+
 # The same throwaway local defaults as compose; the clusters only listen on 127.0.0.1.
 credentials:
   postgres: { user: pourline, password: pourline, database: pourline }

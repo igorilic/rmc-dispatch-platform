@@ -66,12 +66,13 @@ spec:
           image: {{ .Values.images.operator }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           env:
-            # The workloads run this image, and get the four connection settings below.
+            # The workloads run this image, and get the settings below.
             - { name: INGEST_IMAGE, value: {{ .Values.images.ingest | quote }} }
             - { name: NATS_URL, value: "nats://nats:4222" }
             - { name: SFTP_HOST, value: sftp }
             - { name: SFTP_PORT, value: "2222" }
             - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://jaeger:4318" }
+            - { name: CLOCK_OFFSET_HOURS, value: {{ $.Values.clockOffsetHours | quote }} }
           ports: [{ name: metrics, containerPort: 9467 }]
           # Up once its metrics listener is, which telemetry::init opens at startup.
           readinessProbe:

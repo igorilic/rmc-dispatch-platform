@@ -6,6 +6,12 @@ export DOCKER_HOST ?= $(shell docker context inspect --format '{{.Endpoints.dock
 COMPOSE := docker compose -f deploy/compose/compose.yaml $(if $(wildcard .env),--env-file .env)
 # The plant-agent is its own Cargo workspace; crates/plant-agent/Cargo.toml says why.
 AGENT := --manifest-path crates/plant-agent/Cargo.toml
+# The plants batch 05:00-20:00 Berlin time (Weinheim 06:00-18:00). Outside 06:00-16:00, make demo and
+# make k8s shift the simulated world's clock (domain::clock) to about 10:00, so there is something to
+# batch. Set CLOCK_OFFSET_HOURS to choose the shift yourself; 0 keeps the real clock.
+DAYTIME_OFFSET = $(shell h=$$((1$$(TZ=Europe/Berlin date +%H) - 100)); \
+	if [ $$h -ge 6 ] && [ $$h -lt 16 ]; then echo 0; else echo $$((10 - h)); fi)
+demo k8s: export CLOCK_OFFSET_HOURS ?= $(DAYTIME_OFFSET)
 
 .PHONY: up down demo logs k8s chaos e2e test bench audit sqlx-prepare
 

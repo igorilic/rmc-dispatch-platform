@@ -70,13 +70,15 @@ done
 kubectl --context k3d-cloud apply --server-side --force-conflicts -f deploy/helm/pourline/crds/
 helm upgrade --install pourline deploy/helm/pourline --skip-crds --kube-context k3d-cloud \
   --namespace pourline --create-namespace --wait --timeout 5m \
-  "${images[@]}" --set simulators.agentPlants=plant-walldorf
+  "${images[@]}" --set simulators.agentPlants=plant-walldorf \
+  --set "clockOffsetHours=${CLOCK_OFFSET_HOURS:-0}"
 kubectl kustomize --load-restrictor LoadRestrictionsNone deploy/integrations |
   kubectl --context k3d-cloud apply -f -
 kubectl --context k3d-cloud -n pourline wait customerintegration --all \
   --for=jsonpath='{.status.phase}'=Running --timeout=180s
 helm upgrade --install plant-agent deploy/helm/plant-agent --kube-context k3d-plant-walldorf \
-  --namespace pourline --create-namespace --wait --timeout 5m --set "image=$plant_image"
+  --namespace pourline --create-namespace --wait --timeout 5m --set "image=$plant_image" \
+  --set "clockOffsetHours=${CLOCK_OFFSET_HOURS:-0}"
 
 kubectl --context k3d-cloud -n pourline get customerintegrations
 cat <<EOF
@@ -92,3 +94,6 @@ Pourline runs in two k3d clusters on $NETWORK:
   kubectl --context k3d-plant-walldorf -n pourline logs deploy/plant-agent -f
   make chaos       cuts plant-walldorf off the cloud for 2 minutes
 EOF
+if [ "${CLOCK_OFFSET_HOURS:-0}" != 0 ]; then
+  echo "The world's clock is shifted by ${CLOCK_OFFSET_HOURS} h (CLOCK_OFFSET_HOURS), so the plants are open."
+fi

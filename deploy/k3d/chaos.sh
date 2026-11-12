@@ -36,13 +36,16 @@ report() {
     "$(field plan_version "$s")" "$(field plan_age_seconds "$s")"
 }
 
+# The order pod runs on the same world clock as the cloud, which make k8s may have shifted.
+offset=$(kubectl --context k3d-cloud -n pourline get deploy dispatch \
+  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="CLOCK_OFFSET_HOURS")].value}')
 echo "Placing three orders near Walldorf, so its bays are busy during the cut…"
 orders=$(kubectl --context k3d-cloud -n pourline run "chaos-orders-$(date +%s)" --rm -i \
   --restart=Never --quiet --image k3d-pourline-registry:5050/demo:dev --image-pull-policy=Always \
   --env DISPATCH_URL=http://dispatch:8081 \
   --env BAUWERK_WEBHOOK_URL=http://ingest-bauwerk-ag:8080/webhooks/bauwerk-ag \
   --env NECKAR_WEBHOOK_URL=http://ingest-neckar-infra:8080/webhooks/neckar-infra \
-  --env MQTT_URL=mqtt://mosquitto:1883 -- edge) || { echo "$orders"; exit 1; }
+  --env MQTT_URL=mqtt://mosquitto:1883 --env "CLOCK_OFFSET_HOURS=${offset:-0}" -- edge) || { echo "$orders"; exit 1; }
 grep -v '^PLAN_VERSION=' <<<"$orders"
 version=$(sed -n 's/^PLAN_VERSION=//p' <<<"$orders")
 [ -n "$version" ] || { echo "the orders weren't planned"; exit 1; }

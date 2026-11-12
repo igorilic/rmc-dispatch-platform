@@ -59,6 +59,9 @@ services:
       SFTP_HOST: sftp
       SFTP_PORT: "2222"
       MAPPINGS_DIR: /customers
+      # The simulated world's clock (domain::clock), the same in every service. make demo shifts it
+      # when it's outside the plants' opening hours in Berlin.
+      CLOCK_OFFSET_HOURS: ${CLOCK_OFFSET_HOURS:-0}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
     # Mapping configs are files, not code: edit, then `docker compose restart ingest`.
     volumes: ["../../customers:/customers:ro"]
@@ -78,6 +81,7 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-pourline}:${POSTGRES_PASSWORD:-pourline}@postgres:5432/${POSTGRES_DB:-pourline}
       NATS_URL: nats://nats:4222
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      CLOCK_OFFSET_HOURS: ${CLOCK_OFFSET_HOURS:-0}
     ports: ["127.0.0.1:8081:8081"]
     depends_on:
       postgres: { condition: service_healthy }
@@ -99,6 +103,7 @@ services:
       ORDER_INTERVAL_SECS: ${ORDER_INTERVAL_SECS:-180}
       # Walldorf's plant-agent is its batch computer, so its fake one stays quiet.
       AGENT_PLANTS: plant-walldorf
+      CLOCK_OFFSET_HOURS: ${CLOCK_OFFSET_HOURS:-0}
     depends_on:
       mosquitto: { condition: service_healthy }
       sftp: { condition: service_healthy }
@@ -118,6 +123,7 @@ services:
       DISPATCH_URL: http://dispatch:8081
       MQTT_URL: mqtt://mosquitto:1883
       PLANT_AGENT_DB: /data/plant-agent.sqlite
+      CLOCK_OFFSET_HOURS: ${CLOCK_OFFSET_HOURS:-0}
     volumes: ["plant-agent:/data"]
     networks: [default, edge]
     ports: ["127.0.0.1:8082:8082"]
@@ -136,6 +142,7 @@ services:
     environment:
       DISPATCH_URL: http://dispatch:8081
       DISPATCH_PUBLIC_URL: http://localhost:8081
+      CLOCK_OFFSET_HOURS: ${CLOCK_OFFSET_HOURS:-0}
       BAUWERK_WEBHOOK_URL: http://ingest:8080/webhooks/bauwerk-ag
       NECKAR_WEBHOOK_URL: http://ingest:8080/webhooks/neckar-infra
       MQTT_URL: mqtt://mosquitto:1883

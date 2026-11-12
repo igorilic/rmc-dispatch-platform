@@ -304,15 +304,22 @@ doesn't read as lost concrete: when trucks change, an order may need fewer, full
 example:
 
 ```text
-3. truck-01, which carries load #2 of 10001001/DEMO-195622-A, breaks down.
-   v2 · truck-01 out of service
+4. The pump at 10001003/DEMO-101542-B's site (50001028) is 30 minutes late.
+   v3 · site 50001028 delayed 30 min
    order                    load  m³        truck                  plant                ETA             reason
-   10001001/DEMO-195622-A   #2    8         truck-01 → truck-05    mannheim             05:46           truck-01 is out of service
-   10001001/DEMO-195622-A   #5    6         truck-05 → truck-09    mannheim             06:40           re-planned along with #2
+   10001003/DEMO-101542-B   #1    9 → 15    truck-06 → truck-17    mannheim → weinheim  11:15 → 11:45   site 50001028 is delayed 30 min
+   10001003/DEMO-101542-B   #2    8 → 12    truck-07 → truck-09    mannheim             11:33 → 12:15   site 50001028 is delayed 30 min
+   10001003/DEMO-101542-B   #3    9         truck-08               mannheim             11:49 → removed site 50001028 is delayed 30 min
+   10001003/DEMO-101542-B   #4    1         truck-09               mannheim             12:07 → removed site 50001028 is delayed 30 min
 ```
 
-Run it between 05:00 and 18:00 Berlin time. The plants close at 18:00 or 20:00, and outside
-their hours the demo's orders wait for the next morning, so step 4 has nothing to move.
+The plants batch only during their opening hours: Mannheim and Walldorf 05:00–20:00, Weinheim
+06:00–18:00, Berlin time. Outside 06:00–16:00, `make demo` shifts the simulated world's clock to
+about 10:00, so its orders can be batched right away, and the demo says so at the top. Every service
+reads the same shift from `CLOCK_OFFSET_HOURS`, in whole hours, default 0. Set it yourself to choose
+the shift, or to 0 for the real clock: `make demo CLOCK_OFFSET_HOURS=0`. Only the world moves:
+orders, plans, tickets and telematics. Traces, metrics and an integration's last ingest keep the
+real time.
 
 It ends with a Jaeger link to the first order's trace and the Grafana dashboard's address (see
 [Observability](#observability)). When it's done, the simulators go back to the normal order
@@ -474,6 +481,9 @@ kubectl --context k3d-cloud -n pourline get pods
 kubectl --context k3d-plant-walldorf -n pourline logs deploy/plant-agent -f
 curl -s localhost:8080/plants/plant-walldorf/plan | jq '.version, (.loads | length)'
 ```
+
+Like `make demo`, `make k8s` shifts the world's clock when it's outside the plants' hours (see
+[`make demo`](#make-demo)), and `make chaos` reads that shift from the cloud cluster.
 
 `make k8s` is safe to run again. It creates what is missing, rebuilds and pushes the images, and
 upgrades both releases, so every service whose image changed rolls out. The infrastructure keeps
