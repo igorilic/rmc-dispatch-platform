@@ -1,0 +1,108 @@
+# Pourline's own services. Customer integrations aren't here: each CustomerIntegration runs as its
+# own workload, which the operator creates (operator.yaml).
+#
+# Ingest here handles only MQTT: truck telematics and the plants' batch tickets, plus the DLQ
+# gauges. One replica, because it keeps one persistent MQTT session.
+#
+# Every pod has enableServiceLinks off: Kubernetes would otherwise set variables such as
+# SFTP_PORT=tcp://10.43.0.12:2222 for each Service, which clash with the services' own settings.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingest
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: ingest } }
+  template:
+    metadata: { labels: { app: ingest } }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: ingest
+          image: {{ .Values.images.ingest }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          env:
+            - { name: INGEST_MODE, value: mqtt }
+            - { name: NATS_URL, value: "nats://nats:4222" }
+            - { name: MQTT_URL, value: "mqtt://mosquitto:1883" }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://jaeger:4318" }
+          ports: [{ name: http, containerPort: 8080 }, { name: metrics, containerPort: 9464 }]
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dispatch
+spec:
+  selector: { matchLabels: { app: dispatch } }
+  template:
+    metadata: { labels: { app: dispatch } }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: dispatch
+          image: {{ .Values.images.dispatch }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          env:
+            - { name: DATABASE_URL, valueFrom: { secretKeyRef: { name: dev-credentials, key: DATABASE_URL } } }
+            - { name: NATS_URL, value: "nats://nats:4222" }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://jaeger:4318" }
+          ports: [{ name: http, containerPort: 8081 }, { name: metrics, containerPort: 9465 }]
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dispatch
+spec:
+  selector: { app: dispatch }
+  ports: [{ port: 8081 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: simulators
+spec:
+  selector: { matchLabels: { app: simulators } }
+  template:
+    metadata: { labels: { app: simulators } }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: simulators
+          image: {{ .Values.images.simulators }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          env:
+            {{- with .Values.simulators }}
+            - { name: MQTT_URL, value: "mqtt://mosquitto:1883" }
+            - { name: SFTP_HOST, value: sftp }
+            - { name: SFTP_PORT, value: "2222" }
+            - { name: SFTP_USER, valueFrom: { secretKeyRef: { name: dev-credentials, key: SFTP_USER } } }
+            - { name: SFTP_PASSWORD, valueFrom: { secretKeyRef: { name: dev-credentials, key: SFTP_PASSWORD } } }
+            - { name: BAUWERK_WEBHOOK_URL, value: {{ .bauwerkWebhookUrl | quote }} }
+            - { name: NECKAR_WEBHOOK_URL, value: {{ .neckarWebhookUrl | quote }} }
+            - { name: ORDER_INTERVAL_SECS, value: {{ .orderIntervalSecs | quote }} }
+            - { name: RHEINBAU_DROP_INTERVAL_SECS, value: {{ .rheinbauDropIntervalSecs | quote }} }
+            - { name: AGENT_PLANTS, value: {{ .agentPlants | quote }} }
+            {{- end }}
+{{- if .Values.ingress.enabled }}
+---
+# The cluster's ingress: http://localhost:8080 from the host with k3d, and http://cloud from the
+# plant cluster. Each webhook integration adds an Ingress of its own for /webhooks/<name>.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pourline
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: dispatch, port: { number: 8081 } } }
+{{- end }}

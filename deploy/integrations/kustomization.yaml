@@ -1,0 +1,28 @@
+# The three example customers (SPEC §5), onboarded the way any customer is: the mapping as a
+# ConfigMap, the credentials as a Secret, and a CustomerIntegration that names both. The operator
+# does the rest. make k8s and make e2e apply this with
+# `kubectl kustomize --load-restrictor LoadRestrictionsNone`, so the mappings come straight from
+# customers/, the same files compose and ingest-cli use.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: pourline
+resources:
+  - customer-integrations.yaml
+generatorOptions:
+  # Stable names, because the CustomerIntegrations refer to them.
+  disableNameSuffixHash: true
+configMapGenerator:
+  - name: bauwerk-ag-mapping
+    files: [mapping.yaml=../../customers/bauwerk-ag/mapping.yaml]
+  - name: neckar-infra-mapping
+    files: [mapping.yaml=../../customers/neckar-infra/mapping.yaml]
+  - name: rheinbau-gmbh-mapping
+    files: [mapping.yaml=../../customers/rheinbau-gmbh/mapping.yaml]
+secretGenerator:
+  # The throwaway dev defaults that ingest and the simulators fall back to in compose.
+  - name: bauwerk-ag-credentials
+    literals: [token=dev-token-bauwerk-ag]
+  - name: neckar-infra-credentials
+    literals: [token=dev-token-neckar-infra]
+  - name: rheinbau-gmbh-credentials
+    literals: [username=pourline, password=pourline]

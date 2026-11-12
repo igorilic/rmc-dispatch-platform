@@ -1,0 +1,79 @@
+# The operator (SPEC §7): runs each CustomerIntegration in this namespace as its own ingest
+# workload. It may touch only this namespace (a Role, not a ClusterRole). One replica, replaced
+# with Recreate, so two operators never reconcile at once and it needs no leader election.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: operator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: operator
+rules:
+  - apiGroups: [pourline.dev]
+    resources: [customerintegrations]
+    verbs: [get, list, watch, patch, update]
+  - apiGroups: [pourline.dev]
+    resources: [customerintegrations/status]
+    verbs: [get, patch, update]
+  - apiGroups: [pourline.dev]
+    resources: [customerintegrations/finalizers]
+    verbs: [update]
+  # Your mappings, read; its own copies, written.
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, list, watch, create, patch, update, delete]
+  # Watched as metadata only, read only to check the keys.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, create, patch, update, delete]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create, patch, update, delete]
+  - apiGroups: [batch]
+    resources: [cronjobs]
+    verbs: [get, list, watch, create, patch, update, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, create, patch, update, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: operator
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: operator }
+subjects: [{ kind: ServiceAccount, name: operator }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: operator
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: operator } }
+  template:
+    metadata: { labels: { app: operator } }
+    spec:
+      serviceAccountName: operator
+      enableServiceLinks: false
+      containers:
+        - name: operator
+          image: {{ .Values.images.operator }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          env:
+            # The workloads run this image, and get the four connection settings below.
+            - { name: INGEST_IMAGE, value: {{ .Values.images.ingest | quote }} }
+            - { name: NATS_URL, value: "nats://nats:4222" }
+            - { name: SFTP_HOST, value: sftp }
+            - { name: SFTP_PORT, value: "2222" }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://jaeger:4318" }
+          ports: [{ name: metrics, containerPort: 9467 }]
+          # Up once its metrics listener is, which telemetry::init opens at startup.
+          readinessProbe:
+            tcpSocket: { port: metrics }
+            periodSeconds: 2

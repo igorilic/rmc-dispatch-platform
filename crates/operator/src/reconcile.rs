@@ -147,7 +147,15 @@ pub async fn reconcile(ci: Arc<CustomerIntegration>, ctx: Arc<Context>) -> Resul
         }
     })
     .await
-    .map_err(|e| Error::Finalizer(Box::new(e)))
+    .or_else(|error| match error {
+        // A reconcile queued while cleanup was finishing: the integration is already gone.
+        kube::runtime::finalizer::Error::RemoveFinalizer(kube::Error::Api(status))
+            if status.is_not_found() =>
+        {
+            Ok(Action::await_change())
+        }
+        error => Err(Error::Finalizer(Box::new(error))),
+    })
 }
 
 fn error_policy(ci: Arc<CustomerIntegration>, error: &Error, _: Arc<Context>) -> Action {

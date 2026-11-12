@@ -1,0 +1,32 @@
+# Images of Pourline's own services. make k8s sets each to the digest it just pushed to the local
+# registry; the e2e test sets them to the images it loaded into kind. The operator runs every
+# CustomerIntegration with `images.ingest`, so integrations run the same build as ingest.
+images:
+  ingest: k3d-pourline-registry:5050/ingest:dev
+  dispatch: k3d-pourline-registry:5050/dispatch:dev
+  simulators: k3d-pourline-registry:5050/simulators:dev
+  operator: k3d-pourline-registry:5050/operator:dev
+imagePullPolicy: IfNotPresent
+
+# The same throwaway local defaults as compose; the clusters only listen on 127.0.0.1.
+credentials:
+  postgres: { user: pourline, password: pourline, database: pourline }
+  sftp: { user: pourline, password: pourline }
+
+simulators:
+  orderIntervalSecs: 180
+  rheinbauDropIntervalSecs: 300
+  # Plants whose batch computer is a plant-agent, so the simulated plant leaves them alone.
+  agentPlants: ""
+  # Each webhook integration has its own Service, ingest-<name>, which the operator creates.
+  bauwerkWebhookUrl: http://ingest-bauwerk-ag:8080/webhooks/bauwerk-ag
+  neckarWebhookUrl: http://ingest-neckar-infra:8080/webhooks/neckar-infra
+
+mosquitto:
+  # LoadBalancer: k3s opens 1883 on the cloud node, where the plant cluster reaches it. Without a
+  # load balancer (kind), ClusterIP, or `helm --wait` waits for an address forever.
+  serviceType: LoadBalancer
+
+# Everything but /webhooks/<name>, which each webhook integration adds, goes to dispatch.
+ingress:
+  enabled: true

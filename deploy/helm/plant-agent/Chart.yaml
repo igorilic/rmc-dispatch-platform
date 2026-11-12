@@ -1,0 +1,8 @@
+apiVersion: v2
+name: plant-agent
+description: >-
+  A batching plant's edge service (SPEC §6): plan sync, the batch computer, and the SQLite outbox
+  that forwards batch tickets to the cloud.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

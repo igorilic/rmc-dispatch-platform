@@ -88,8 +88,7 @@ spec:
               deadLetterCount:
                 default: 0
                 description: Dead letters waiting for a replay (`ingest-cli dlq replay`).
-                format: uint64
-                minimum: 0.0
+                format: int64
                 type: integer
               lastSuccessfulIngest:
                 description: The last delivery in which a record was published or recognised as a duplicate.

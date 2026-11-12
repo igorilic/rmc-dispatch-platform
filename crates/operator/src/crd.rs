@@ -95,6 +95,7 @@ pub struct CustomerIntegrationStatus {
     pub last_successful_ingest: Option<DateTime<Utc>>,
     /// Dead letters waiting for a replay (`ingest-cli dlq replay`).
     #[serde(default)]
+    #[schemars(with = "i64")] // Kubernetes knows int64, not uint64
     pub dead_letter_count: u64,
 }
 

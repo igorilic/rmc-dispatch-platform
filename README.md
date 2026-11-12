@@ -24,10 +24,10 @@ sets. When a truck breaks down or a site runs late, it re-plans. The full design
   integration tests start NATS and Postgres containers with testcontainers.
 - **Rust** via [rustup](https://rustup.rs). `rust-toolchain.toml` pins 1.99.1, and rustup installs it on first use.
 - Optional: `cargo install cargo-audit --locked` for `make audit`.
-- For `make k8s` and `make chaos`: **k3d** and **kubectl**, and Docker with at least 4 CPUs and
-  8 GB of memory. On macOS: `brew install k3d kubectl`; on Linux, Docker Engine and the
-  [k3d install script](https://k3d.io). Check with `k3d version && kubectl version --client`.
-  Helm joins them with milestone 8.
+- For `make k8s` and `make chaos`: **k3d**, **kubectl** and **Helm**, and Docker with at least 4
+  CPUs and 8 GB of memory. On macOS: `brew install k3d kubectl helm`; on Linux, Docker Engine,
+  the [k3d install script](https://k3d.io) and [Helm's](https://helm.sh/docs/intro/install/).
+  Check with `k3d version && kubectl version --client && helm version`.
 
 ## Commands
 
@@ -149,6 +149,7 @@ To see a replay end to end, break a mapping, let orders fail, fix it, and replay
 | `MAX_IN_FLIGHT` | `64` | Webhook requests processed at once. More get `503` with `Retry-After` |
 | `DEDUP_TTL_DAYS` | `7` | How long order keys are remembered for duplicate detection |
 | `WEBHOOK_TOKEN_<INTEGRATION>` | `dev-token-<integration>` | Bearer token per webhook integration |
+| `INGEST_MODE` | `all` | What the process runs: `all` (compose), `mqtt` (telematics and batch tickets), `webhooks`, or `sftp-once` (one poll of each SFTP mapping, then exit 1 if a poll failed). In Kubernetes the chart runs `mqtt`, and the operator runs each customer integration in one of the last two |
 
 ## Planning
 
@@ -401,31 +402,90 @@ are alternatives.
 2. It creates the clusters from `deploy/k3d/cloud.yaml` and `deploy/k3d/plant-walldorf.yaml`, on
    that network, with a pinned k3s. The plant cluster gets a host alias, `cloud`, for the cloud
    node's address.
-3. It builds the five images, pushes them as `localhost:5050/<service>:dev`, and applies the
-   manifests in `deploy/k3d/cloud/` and `deploy/k3d/plant-walldorf/` with
-   `kubectl kustomize --load-restrictor LoadRestrictionsNone`. That way the Mosquitto config and
-   the customer mappings come from the same files compose uses.
+3. It builds the six images and pushes them as `localhost:5050/<service>:dev`.
+4. It applies the CRD, installs the Helm chart `deploy/helm/pourline` into `cloud` with each image
+   pinned to the digest it just pushed, and applies the three example customers from
+   `deploy/integrations/`. It waits until the operator reports all three as `Running`.
+5. It installs `deploy/helm/plant-agent` into `plant-walldorf`.
 
 | Cluster | Runs | Reach it |
 |---|---|---|
-| `cloud` | Postgres, NATS, Mosquitto, SFTP, Jaeger, ingest, dispatch, the simulators | http://localhost:8080: webhooks under `/webhooks`, the dispatch API everywhere else; `kubectl --context k3d-cloud` (API on `127.0.0.1:6550`) |
+| `cloud` | Postgres, NATS, Mosquitto, SFTP, Jaeger, ingest (MQTT), dispatch, the simulators, the operator, and one workload per customer integration | http://localhost:8080: webhooks at `/webhooks/<name>`, the dispatch API everywhere else; `kubectl --context k3d-cloud` (API on `127.0.0.1:6550`) |
 | `plant-walldorf` | the plant-agent, with its SQLite file on a volume | `kubectl --context k3d-plant-walldorf` (API on `127.0.0.1:6551`) |
 
 The plant-agent fetches its plan from `http://cloud` through the cloud's ingress, and sends its
 tickets to `mqtt://cloud:1883`, which the cloud's Mosquitto opens on its node. Prometheus and
-Grafana run only in compose for now; Jaeger runs in both:
+Grafana run only in compose; Jaeger runs in both:
 `kubectl --context k3d-cloud -n pourline port-forward svc/jaeger 16686`.
 
 ```sh
+kubectl --context k3d-cloud -n pourline get customerintegrations
 kubectl --context k3d-cloud -n pourline get pods
 kubectl --context k3d-plant-walldorf -n pourline logs deploy/plant-agent -f
 curl -s localhost:8080/plants/plant-walldorf/plan | jq '.version, (.loads | length)'
 ```
 
 `make k8s` is safe to run again. It creates what is missing, rebuilds and pushes the images, and
-restarts ingest, dispatch, the simulators and the agent. The infrastructure keeps its data.
-`SKIP_BUILD=1 make k8s` skips the images, for a change to the manifests only. The manifests are
-plain YAML until milestone 8 turns them into Helm charts.
+upgrades both releases, so every service whose image changed rolls out. The infrastructure keeps
+its data. `SKIP_BUILD=1 make k8s` skips the images, for a change to the charts only. Clusters
+created before milestone 8 hold plain manifests that Helm won't take over: `make k8s` says so,
+and one `make down` fixes it.
+
+### The operator
+
+Each customer integration is a `CustomerIntegration` resource (SPEC §7), and the operator in
+`crates/operator` runs it as its own ingest workload. You onboard a customer with three objects,
+as `deploy/integrations/` does for the three examples: the mapping as a ConfigMap, the credentials
+as a Secret, and the resource that names both.
+
+```yaml
+apiVersion: pourline.dev/v1alpha1
+kind: CustomerIntegration
+metadata:
+  name: rheinbau-gmbh                # the integration, as in customers/rheinbau-gmbh/
+spec:
+  channel: sftp                      # sftp | webhook; must match the mapping, can't change
+  mappingConfigMap: rheinbau-gmbh-mapping
+  credentialsSecret: rheinbau-gmbh-credentials   # sftp: username, password; webhook: token
+  schedule: "*/5 * * * *"            # sftp only, and required for it
+  replicas: 1                        # webhook pods; sftp allows only 1
+  paused: false
+```
+
+```text
+$ kubectl --context k3d-cloud -n pourline get customerintegrations
+NAME            CHANNEL   PHASE     DEAD LETTERS   LAST INGEST   AGE
+bauwerk-ag      webhook   Running   0              40s           12m
+neckar-infra    webhook   Running   0              2m            12m
+rheinbau-gmbh   sftp      Running   0              3m            12m
+```
+
+- A webhook integration runs as a Deployment, `ingest-<name>`, in `INGEST_MODE=webhooks`, with a
+  Service and an Ingress for `/webhooks/<name>`. An sftp integration runs as a CronJob in
+  `INGEST_MODE=sftp-once`: one poll per run, never two at once.
+- Before a rollout the operator checks the mapping with ingest's own parser, checks that its
+  channel matches, and checks that the Secret has the channel's keys. If a check fails, the phase
+  is `Failed` and the message says why. The workload keeps running on the last valid mapping,
+  because it mounts the operator's copy, not your ConfigMap. Fix the ConfigMap and the operator
+  rolls it out. A changed mapping or Secret rolls the pods.
+- `paused: true` scales a webhook integration to 0 or suspends the CronJob; `false` resumes it.
+- The status is at most 30 s old. `deadLetterCount` counts the integration's dead letters.
+  `lastSuccessfulIngest` is its last delivery in which a record was published or recognised as a
+  duplicate, which ingest records in the NATS KV bucket `ingest-status`.
+- Deleting an integration stops its workload before the resource goes (a finalizer), then
+  removes its last ingest from NATS. Its dead letters stay, so a re-created integration can still
+  replay them. Delete integrations before uninstalling the operator, or their finalizers keep them.
+- The operator only acts in its own namespace (a Role), as one replica without leader election.
+
+`ingest-cli` has no image yet. To replay dead letters in k3d, run
+`kubectl --context k3d-cloud -n pourline port-forward svc/nats 4222` and use `ingest-cli`
+locally with the mappings in `customers/`.
+
+| Variable (operator) | Default | Effect |
+|---|---|---|
+| `INGEST_IMAGE` | `k3d-pourline-registry:5050/ingest:dev` | The image every integration runs. The chart sets it to its ingest image |
+| `NATS_URL`, `SFTP_HOST`, `SFTP_PORT`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `RUST_LOG` | as for ingest | Passed on to every integration's workload; the operator reads NATS itself |
+| `OPERATOR_METRICS_ADDR` | `0.0.0.0:9467` | Metrics listener |
 
 ### `make chaos`
 

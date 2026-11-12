@@ -1,6 +1,6 @@
 # Infrastructure, with the same pinned images as deploy/compose. Dependabot only bumps compose's,
-# so bump these with them. Data lives in emptyDir volumes:
-# it survives a container restart, not a deleted pod, like compose's `make down -v`.
+# so bump these with them. Data lives in emptyDir volumes: it survives a container restart, not a
+# deleted pod, like compose's `make down -v`.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -56,7 +56,8 @@ metadata:
   name: nats
 spec:
   selector: { app: nats }
-  ports: [{ port: 4222 }]
+  # 8222 is NATS's monitoring endpoint, which the e2e test reads through the API server's proxy.
+  ports: [{ name: client, port: 4222 }, { name: monitoring, port: 8222 }]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -81,14 +82,14 @@ spec:
         - { name: config, configMap: { name: mosquitto-config } }
         - { name: data, emptyDir: {} }
 ---
-# A LoadBalancer, so k3s's service load balancer opens 1883 on the cloud node, where the plant
-# cluster reaches it over pourline-net. Inside the cluster it is mosquitto:1883 as usual.
+# With k3s, a LoadBalancer: its service load balancer opens 1883 on the cloud node, where the
+# plant cluster reaches it over pourline-net. Inside the cluster it is mosquitto:1883 as usual.
 apiVersion: v1
 kind: Service
 metadata:
   name: mosquitto
 spec:
-  type: LoadBalancer
+  type: {{ .Values.mosquitto.serviceType }}
   selector: { app: mosquitto }
   ports: [{ port: 1883 }]
 ---
@@ -148,3 +149,25 @@ metadata:
 spec:
   selector: { app: jaeger }
   ports: [{ name: ui, port: 16686 }, { name: otlp-http, port: 4318 }]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mosquitto-config
+data:
+  mosquitto.conf: |
+{{ .Files.Get "files/mosquitto.conf" | indent 4 }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dev-credentials
+stringData:
+  {{- with .Values.credentials }}
+  POSTGRES_USER: {{ .postgres.user | quote }}
+  POSTGRES_PASSWORD: {{ .postgres.password | quote }}
+  POSTGRES_DB: {{ .postgres.database | quote }}
+  DATABASE_URL: {{ printf "postgres://%s:%s@postgres:5432/%s" .postgres.user .postgres.password .postgres.database | quote }}
+  SFTP_USER: {{ .sftp.user | quote }}
+  SFTP_PASSWORD: {{ .sftp.password | quote }}
+  {{- end }}

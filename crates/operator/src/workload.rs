@@ -232,6 +232,9 @@ fn pod_template(
                 ..Default::default()
             }]),
             restart_policy: (!webhook).then(|| "Never".into()),
+            // Otherwise Kubernetes sets SFTP_PORT=tcp://<ip>:2222 and the like, one set per
+            // Service, which clash with ingest's own settings.
+            enable_service_links: Some(false),
             security_context: Some(PodSecurityContext {
                 run_as_non_root: Some(true),
                 ..Default::default()
@@ -624,6 +627,12 @@ mod tests {
             "ingest-bauwerk-ag"
         );
         assert!(ingest.readiness_probe.is_some());
+        let pod = spec.template.spec.as_ref().unwrap();
+        assert_eq!(
+            pod.enable_service_links,
+            Some(false),
+            "no SFTP_PORT=tcp://… from Services"
+        );
 
         let service = service(&ci).spec.unwrap();
         assert_eq!(service.selector, Some(selector(&ci)));

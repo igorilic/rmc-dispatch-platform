@@ -1,13 +1,11 @@
-# The plant-agent reaches the cloud as `cloud`, a host alias make k8s gives this cluster for the
-# cloud node on pourline-net: the plan through its ingress on port 80, tickets through Mosquitto
-# on 1883. Its SQLite file lives on a volume, so the outbox and the plan survive a new pod.
+# The plant-agent. Its SQLite file lives on a volume, so the outbox and the plan survive a new pod.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: plant-agent
 spec:
   accessModes: [ReadWriteOnce]
-  resources: { requests: { storage: 100Mi } }
+  resources: { requests: { storage: {{ .Values.storage }} } }
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -23,11 +21,12 @@ spec:
       securityContext: { runAsNonRoot: true, fsGroup: 65532 }
       containers:
         - name: plant-agent
-          image: k3d-pourline-registry:5050/plant-agent:dev
+          image: {{ .Values.image }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
           env:
-            - { name: PLANT_ID, value: plant-walldorf }
-            - { name: DISPATCH_URL, value: "http://cloud" }
-            - { name: MQTT_URL, value: "mqtt://cloud:1883" }
+            - { name: PLANT_ID, value: {{ .Values.plantId | quote }} }
+            - { name: DISPATCH_URL, value: {{ .Values.dispatchUrl | quote }} }
+            - { name: MQTT_URL, value: {{ .Values.mqttUrl | quote }} }
             - { name: PLANT_AGENT_DB, value: /data/plant-agent.sqlite }
           ports:
             - { name: http, containerPort: 8082 }

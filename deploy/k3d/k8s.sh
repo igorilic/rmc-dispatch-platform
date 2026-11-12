@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 # make k8s (SPEC §9): the Docker network pourline-net, a local registry, the k3d clusters `cloud`
-# and `plant-walldorf`, Pourline's images, and the manifests in deploy/k3d. It creates only what
-# is missing, so it is safe to run again: it then rebuilds the images, and the services whose image
-# changed roll out. SKIP_BUILD=1 reuses the images pushed last, for a change to the manifests only.
+# and `plant-walldorf`, Pourline's images, the Helm charts in deploy/helm, and the example
+# CustomerIntegrations in deploy/integrations. It creates only what is missing, so it is safe to
+# run again: it then rebuilds the images, and the services whose image changed roll out.
+# SKIP_BUILD=1 reuses the images pushed last, for a change to the charts only.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 NETWORK=pourline-net
 SUBNET=172.28.0.0/24 # fixed, so make chaos can reconnect the plant node with its old IP
 REGISTRY=pourline-registry
-SERVICES=(ingest dispatch simulators demo plant-agent)
+SERVICES=(ingest dispatch simulators demo plant-agent operator)
 
-for tool in docker k3d kubectl; do
+for tool in docker k3d kubectl helm; do
   command -v "$tool" >/dev/null || {
-    echo "make k8s needs $tool. On macOS: brew install k3d kubectl (and Docker). Check: k3d version && kubectl version --client"
+    echo "make k8s needs $tool. On macOS: brew install k3d kubectl helm (and Docker). Check: k3d version && kubectl version --client && helm version"
     exit 1
   }
 done
@@ -37,33 +38,56 @@ if [ "${SKIP_BUILD:-}" != 1 ]; then
   done
 fi
 
-# The manifests name images by their `:dev` tag; each one is deployed by the digest just pushed.
-# A pod then runs exactly that build, a new build rolls out by itself, and a plant pod that
-# restarts while its cluster is cut off starts from the image cached on its node.
-pin=()
-for service in "${SERVICES[@]}"; do
-  digest=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "localhost:5050/$service:dev" |
-    sed -n "s#^localhost:5050/$service@##p" | head -1)
-  [ -n "$digest" ] || { echo "localhost:5050/$service:dev was never pushed: run make k8s without SKIP_BUILD"; exit 1; }
-  pin+=(-e "s#k3d-pourline-registry:5050/$service:dev#k3d-pourline-registry:5050/$service@$digest#")
+# Each image is deployed by the digest just pushed. A pod then runs exactly that build, a new build
+# rolls out by itself, and a plant pod that restarts while its cluster is cut off starts from the
+# image cached on its node.
+image() {
+  local digest
+  digest=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "localhost:5050/$1:dev" |
+    sed -n "s#^localhost:5050/$1@##p" | head -1)
+  [ -n "$digest" ] || { echo "localhost:5050/$1:dev was never pushed: run make k8s without SKIP_BUILD" >&2; exit 1; }
+  echo "k3d-pourline-registry:5050/$1@$digest"
+}
+images=()
+for service in ingest dispatch simulators operator; do
+  ref=$(image "$service") # a plain assignment, so a missing image stops the script
+  images+=(--set "images.$service=$ref")
+done
+plant_image=$(image plant-agent)
+
+# M7 applied plain manifests, and Helm won't take over objects it didn't create.
+for cluster in cloud plant-walldorf; do
+  if kubectl --context "k3d-$cluster" -n pourline get deployments -o name 2>/dev/null | grep -q . &&
+    ! kubectl --context "k3d-$cluster" -n pourline get deployments \
+      -o jsonpath='{.items[*].metadata.annotations.meta\.helm\.sh/release-name}' | grep -q .; then
+    echo "The $cluster cluster still runs the plain manifests from before the Helm charts. Run make down once, then make k8s."
+    exit 1
+  fi
 done
 
-# deploy CLUSTER: applies the cluster's manifests and waits until everything is ready.
-deploy() {
-  kubectl kustomize --load-restrictor LoadRestrictionsNone "deploy/k3d/$1" | sed "${pin[@]}" |
-    kubectl --context "k3d-$1" apply -f -
-  kubectl --context "k3d-$1" -n pourline rollout status deployment --timeout=300s
-}
-deploy cloud
-deploy plant-walldorf
+# Helm installs crds/ once and never upgrades it, so this script owns the CRD: it applies it first,
+# server-side, and Helm skips it. A plain `helm install` of the chart still installs it.
+kubectl --context k3d-cloud apply --server-side --force-conflicts -f deploy/helm/pourline/crds/
+helm upgrade --install pourline deploy/helm/pourline --skip-crds --kube-context k3d-cloud \
+  --namespace pourline --create-namespace --wait --timeout 5m \
+  "${images[@]}" --set simulators.agentPlants=plant-walldorf
+kubectl kustomize --load-restrictor LoadRestrictionsNone deploy/integrations |
+  kubectl --context k3d-cloud apply -f -
+kubectl --context k3d-cloud -n pourline wait customerintegration --all \
+  --for=jsonpath='{.status.phase}'=Running --timeout=180s
+helm upgrade --install plant-agent deploy/helm/plant-agent --kube-context k3d-plant-walldorf \
+  --namespace pourline --create-namespace --wait --timeout 5m --set "image=$plant_image"
 
+kubectl --context k3d-cloud -n pourline get customerintegrations
 cat <<EOF
 
 Pourline runs in two k3d clusters on $NETWORK:
-  cloud            ingest and dispatch at http://localhost:8080 (webhooks under /webhooks,
-                   the dispatch API everywhere else, Swagger UI at /swagger-ui/)
+  cloud            the operator runs the three customer integrations; webhooks at
+                   http://localhost:8080/webhooks/<name>, the dispatch API everywhere else
+                   (Swagger UI at /swagger-ui/)
   plant-walldorf   the plant-agent, which reaches the cloud as \`cloud\` ($cloud_ip)
 
+  kubectl --context k3d-cloud -n pourline get customerintegrations
   kubectl --context k3d-cloud -n pourline get pods
   kubectl --context k3d-plant-walldorf -n pourline logs deploy/plant-agent -f
   make chaos       cuts plant-walldorf off the cloud for 2 minutes

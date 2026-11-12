@@ -1,0 +1,11 @@
+# make k8s sets this to the digest it just pushed to the local registry.
+image: k3d-pourline-registry:5050/plant-agent:dev
+imagePullPolicy: IfNotPresent
+# A plant in the seed, which also gives the agent its loading bays and batching rate.
+plantId: plant-walldorf
+# The cloud, from the plant: `cloud` is the host alias make k8s gives the plant cluster for the
+# cloud node. The plan comes through its ingress, the tickets go to its Mosquitto.
+dispatchUrl: http://cloud
+mqttUrl: mqtt://cloud:1883
+# The SQLite file: the outbox and the last plan, which survive a new pod.
+storage: 100Mi

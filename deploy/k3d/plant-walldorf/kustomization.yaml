@@ -1,7 +1,0 @@
-# The Walldorf plant's workloads (SPEC §6): only the plant-agent.
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-namespace: pourline
-resources:
-  - ../cloud/namespace.yaml
-  - plant-agent.yaml

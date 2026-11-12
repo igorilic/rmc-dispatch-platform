@@ -1,0 +1,30 @@
+# One CustomerIntegration per customer (SPEC §7). The operator runs a webhook integration as a
+# Deployment behind /webhooks/<name>, and an sftp integration as a CronJob on its schedule.
+apiVersion: pourline.dev/v1alpha1
+kind: CustomerIntegration
+metadata:
+  name: bauwerk-ag
+spec:
+  channel: webhook
+  mappingConfigMap: bauwerk-ag-mapping
+  credentialsSecret: bauwerk-ag-credentials
+---
+apiVersion: pourline.dev/v1alpha1
+kind: CustomerIntegration
+metadata:
+  name: neckar-infra
+spec:
+  channel: webhook
+  mappingConfigMap: neckar-infra-mapping
+  credentialsSecret: neckar-infra-credentials
+---
+# The simulated rheinbau drops a CSV every 5 minutes, so it polls every 5 minutes.
+apiVersion: pourline.dev/v1alpha1
+kind: CustomerIntegration
+metadata:
+  name: rheinbau-gmbh
+spec:
+  channel: sftp
+  mappingConfigMap: rheinbau-gmbh-mapping
+  credentialsSecret: rheinbau-gmbh-credentials
+  schedule: "*/5 * * * *"
