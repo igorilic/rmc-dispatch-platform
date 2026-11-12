@@ -27,15 +27,90 @@ jobs:
           tool: cargo-audit
       - run: make audit
 
-  # Prove every service image still builds.
+  # SPEC §12: every service image for amd64 and arm64, each on a native runner, because a Rust
+  # release build under QEMU takes many times longer. Pull requests only build. On main, each job
+  # pushes its image by digest, untagged, and `publish` tags it once everything has passed.
   image:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        bin: [simulators, ingest, dispatch, demo, plant-agent, operator]
+        arch: [amd64, arm64]
+        include:
+          - { arch: amd64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-26.04-arm }
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}/${{ matrix.bin }}
+      PUSH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      # OCI labels; org.opencontainers.image.source links the package to this repository.
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+      - if: env.PUSH == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          build-args: BIN=${{ matrix.bin }}
+          platforms: linux/${{ matrix.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=${{ env.PUSH }}
+      - if: env.PUSH == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: mkdir digests && touch "digests/${DIGEST#sha256:}"
+      - if: env.PUSH == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.bin }}-${{ matrix.arch }}
+          path: digests/*
+          retention-days: 1
+
+  # Joins each binary's two digests into one multi-arch image and tags it, only on main and only
+  # once tests, audit, e2e and every image build have passed, so a tag never points at a build
+  # that failed. Tags: sha-<7 chars> and main; never latest.
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test, audit, e2e, image]
     runs-on: ubuntu-latest
     strategy:
       matrix:
         bin: [simulators, ingest, dispatch, demo, plant-agent, operator]
+    permissions:
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}/${{ matrix.bin }}
     steps:
-      - uses: actions/checkout@v7
-      - run: docker build --build-arg BIN=${{ matrix.bin }} -t pourline/${{ matrix.bin }}:ci .
+      - uses: actions/download-artifact@v8
+        with:
+          path: digests
+          pattern: digests-${{ matrix.bin }}-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - working-directory: digests
+        run: |
+          digests=(*)
+          docker buildx imagetools create -t "$IMAGE:sha-${GITHUB_SHA::7}" -t "$IMAGE:main" \
+            --annotation "index:org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            "${digests[@]/#/$IMAGE@sha256:}"
+          docker buildx imagetools inspect "$IMAGE:sha-${GITHUB_SHA::7}"
 
   # SPEC §12: the cloud chart on kind, the three example customers, the demo scenario, then a plan
   # and an empty DLQ. make e2e runs the same script locally.
