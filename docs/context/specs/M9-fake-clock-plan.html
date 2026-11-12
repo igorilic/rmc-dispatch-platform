@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Fake clock plan</title>
+<link rel="stylesheet" href="../../.design/styles.css">
+</head>
+<body>
+<div class="sp-layout__bg"><div><div></div></div></div>
+<div class="sp-layout__fg">
+<main class="sp-layout__main">
+<div class="sp-container-outer sp-article"><div class="sp-container-outer__in">
+<div class="sp-container-inner"><div class="sp-container-inner__in">
+<div class="sp-article__col">
+<article>
+<header class="sp-article__header">
+<h1 class="sp-h1">Plan: a fake clock for the whole stack</h1>
+<time class="sp-article__date" datetime="2026-11-12"><span class="sp-bar"></span><span style="margin-left:.75rem">November 12, 2026</span></time>
+</header>
+<div class="sp-prose" style="margin-top:2rem">
+
+<p>The plants batch only during their opening hours: Weinheim 06:00–18:00, Mannheim and Walldorf 05:00–20:00, Berlin time. In the evening, <code>make demo</code>’s orders wait for the next morning, the late pump has nothing to move, and <code>make chaos</code> has no ticket due during its cut. Recording the GIF would only work in the daytime. This plan lets the whole simulated world run at a different time of day, with the same shift in every service, so the hours stay real and the demo still has something to show.</p>
+
+<p><strong>Done when:</strong></p>
+<ul>
+<li>With <code>CLOCK_OFFSET_HOURS</code> set, every Pourline service reads the same shifted time: dispatch, ingest (including the operator’s integration workloads), the simulators, the demo, the plant-agent and <code>ingest-cli</code>. It defaults to 0, so nothing changes unless it is set.</li>
+<li>Run in the evening, <code>make demo</code> shifts the world into the daytime by itself: the orders are planned for today, and the late pump moves loads. <code>make k8s</code> does the same, so <code>make chaos</code> has tickets falling due during the cut.</li>
+<li>Times that operators read stay real: traces, metrics, and <code>lastSuccessfulIngest</code> (kubectl’s <code>LAST INGEST</code> column).</li>
+<li><code>make test</code> is green. <code>make demo</code> after 18:00 shows a diff for the late pump. CI’s e2e job is unchanged and stays green.</li>
+</ul>
+
+<h2 id="how">How</h2>
+<ul>
+<li><strong><code>domain::clock</code></strong>: <code>init_from_env()</code> reads <code>CLOCK_OFFSET_HOURS</code> once at startup, and an invalid value stops the service with a clear error. <code>now()</code> returns the wall clock plus that offset. It goes in <code>domain</code> because every binary already depends on it, the plant-agent included.</li>
+<li><strong>Dispatch</strong> already takes its clock as a function (<code>worker::run</code>, <code>api::router</code>), so <code>main</code> passes <code>domain::clock::now</code> instead of <code>Utc::now</code>.</li>
+<li><strong>Simulators and the plant-agent</strong> start their existing <code>Clock</code> from <code>domain::clock::now()</code>. The demo and <code>ingest-cli</code> use it for their order times and replays.</li>
+<li><strong>Ingest</strong> stamps <code>received_at</code> with <code>domain::clock::now()</code>, because it becomes <code>occurred_at</code> for customers that send no revision, and dispatch orders revisions by it. The <code>ingest-status</code> KV gets the real time instead (decision 3).</li>
+<li><strong>Configuration</strong>: compose passes <code>CLOCK_OFFSET_HOURS</code> to every service. Both charts get <code>clockOffsetHours</code> (default 0). The operator adds the variable to the variables it hands to each integration workload, and <code>chaos.sh</code> passes it to its order pod.</li>
+<li><strong>Makefile</strong>: when <code>CLOCK_OFFSET_HOURS</code> isn’t set and Berlin time is outside 06:00–16:00, <code>make demo</code> and <code>make k8s</code> pick the offset that puts the world at about 10:00, and say so. <code>make up</code> keeps the real clock.</li>
+<li>The README’s and the tape’s “record between 05:00 and 18:00” notes go. The README explains the variable, and you add one line to <code>.env.example</code>.</li>
+</ul>
+
+<h2 id="steps">Steps</h2>
+<h3 id="step-1">Step 1</h3>
+<p><strong>The clock and the services.</strong> I write the tests first: <code>domain::clock</code> parses the offset and applies it, and rejects anything that isn’t a whole number of hours. Then every binary uses the clock, and the operator passes the variable on, with a test on the workload it builds. <code>make test</code>.</p>
+<h3 id="step-2">Step 2</h3>
+<p><strong>Compose, charts, Makefile, docs.</strong> Then I run <code>make demo</code> tonight and check that the late pump moves loads. I run <code>make k8s</code> and <code>make chaos</code> and check that tickets wait out the cut, and that <code>LAST INGEST</code> reads seconds, not hours. Then you re-record the GIF whenever you like.</p>
+
+<h2 id="decisions">Decisions I need from you</h2>
+<table>
+<thead><tr><th>#</th><th>Question</th><th>My default</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>How is the shift given?</td><td>As a whole number of hours, the same in every service: <code>CLOCK_OFFSET_HOURS=-10</code>. The alternative is a time of day, “start at 10:00”, but each service would work out its own offset when it starts, so services that start seconds apart would disagree by those seconds.</td></tr>
+<tr><td>2</td><td>Who sets it?</td><td><code>make demo</code> and <code>make k8s</code> shift automatically when it’s evening, night or early morning in Berlin. Set by hand, <code>CLOCK_OFFSET_HOURS</code> always wins, including 0 to keep the real clock. The alternative is never to shift automatically, so you pass it yourself and the README says when.</td></tr>
+<tr><td>3</td><td>Which times stay real?</td><td>Traces, metrics and <code>lastSuccessfulIngest</code>, because they describe the system rather than the simulated world. Everything about orders, plans, tickets and trucks moves.</td></tr>
+</tbody>
+</table>
+
+<h2 id="later">Heads-up</h2>
+<ul>
+<li>While the world is shifted, plan times in the API and the demo don’t match the clock on the wall, but Jaeger and Grafana do. The demo prints the shift at the top.</li>
+<li>A shifted world keeps running on: started at 20:00 with −10 h, it reaches the plants’ closing time around 04:00 real time.</li>
+</ul>
+
+</div>
+</article>
+</div></div></div></div></div>
+</main>
+</div>
+</body>
+</html>
