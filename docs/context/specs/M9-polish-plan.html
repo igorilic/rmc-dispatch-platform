@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Milestone 9 plan</title>
+<link rel="stylesheet" href="../../.design/styles.css">
+<style>
+/* Diagram styles: Spotlight tokens only (zinc greys, one teal accent). */
+.dg{display:block;width:100%;height:auto}
+.dg text{font-family:var(--font-sans);font-size:12px;fill:var(--text-body)}
+.dg .t{fill:var(--text-strong);font-weight:600;font-size:13px}
+.dg .s{fill:var(--text-muted);font-size:11px}
+.dg .c{text-anchor:middle}
+.dg .halo{paint-order:stroke;stroke:var(--surface-column);stroke-width:3px;stroke-linejoin:round}
+.dg .b-done{fill:var(--surface-solid);stroke:var(--zinc-500);stroke-width:1}
+.dg .b-now{fill:color-mix(in oklab,var(--accent) 14%,var(--surface-column));stroke:var(--accent);stroke-width:1.5}
+.dg .e-now{fill:none;stroke:var(--accent);stroke-width:1.5}
+.dg .e-back{fill:none;stroke:var(--accent);stroke-width:1.5;stroke-dasharray:4 3}
+.dg .e-done{fill:none;stroke:var(--zinc-400);stroke-width:1.5}
+.ah{fill:var(--zinc-400)}
+.ah-now{fill:var(--accent)}
+.sp-prose figure{margin-left:0;margin-right:0}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+<defs>
+<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0 1 L9 5 L0 9 z"/></marker>
+<marker id="ah-now" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-now" d="M0 1 L9 5 L0 9 z"/></marker>
+</defs>
+</svg>
+<div class="sp-layout__bg"><div><div></div></div></div>
+<div class="sp-layout__fg">
+<main class="sp-layout__main">
+<div class="sp-container-outer sp-article"><div class="sp-container-outer__in">
+<div class="sp-container-inner"><div class="sp-container-inner__in">
+<div class="sp-article__col">
+<article>
+<header class="sp-article__header">
+<h1 class="sp-h1">Milestone 9 plan: polish</h1>
+<time class="sp-article__date" datetime="2026-11-12"><span class="sp-bar"></span><span style="margin-left:.75rem">November 12, 2026</span></time>
+</header>
+<div class="sp-prose" style="margin-top:2rem">
+
+<p>Milestone 9 is for the reader who lands on the repository. They get an architecture doc with diagrams, the six ADRs from SPEC §14, a GIF of the demo, and a README that walks them through the system instead of only listing its parts (SPEC §13). Two things carry over from M8 and come first, because both change CI. The e2e job goes back to <code>ubuntu-latest</code> once we know why Mosquitto can’t read its config on Ubuntu 26.04. The images get built for amd64 and arm64 and pushed to GHCR on <code>main</code> (SPEC §12), which no milestone has done so far.</p>
+
+<p><strong>One thing to decide first.</strong> SPEC §10 puts the architecture doc at <code>docs/architecture.md</code>, with Mermaid diagrams, and the ADRs in <code>docs/adr/</code>. Your global rule, and the <code>adr</code> skill, say docs and ADRs are HTML from the Spotlight template. These two docs are for strangers reading on GitHub. GitHub renders Markdown and Mermaid, but it shows an HTML file as source code, and the Spotlight stylesheet is licensed and never committed. My default is Markdown at SPEC’s paths, using the <code>adr</code> skill’s sections (decision 1). Plans like this one stay HTML.</p>
+
+<p><strong>Done when:</strong></p>
+<ul>
+<li>The e2e job runs on <code>ubuntu-latest</code> again and passes, and the commit that fixes it says what the cause was. If the fix would mean relaxing the chart’s security, or the cause is a bug in the runner image, the pin stays, and its comment links the evidence instead of saying “unknown” (decision 7).</li>
+<li>Every push to <code>main</code> that passes test, audit, e2e and every image build publishes six multi-arch images (<code>linux/amd64</code> and <code>linux/arm64</code>) to <code>ghcr.io/igorilic/rmc-dispatch-platform/&lt;binary&gt;</code>, tagged <code>sha-&lt;7 chars&gt;</code> and <code>main</code>. Anyone can pull them anonymously.</li>
+<li>Pull requests build both architectures and push nothing.</li>
+<li><code>docs/adr/</code> holds six ADRs, and each one is true to the code as it is now, not as SPEC first imagined it.</li>
+<li><code>docs/architecture.md</code> explains the system with Mermaid diagrams that render on GitHub, and every crate, subject, bucket and table it names exists.</li>
+<li><code>docs/demo.gif</code> shows the re-dispatch scenario, and <code>docs/demo.tape</code> re-records it.</li>
+<li>The README opens with what Pourline is and the GIF, then a walkthrough. I’ve followed the walkthrough on a fresh stack, exactly as written.</li>
+<li><code>make test</code>, <code>make audit</code> and CI are green, and <code>make up</code> is healthy.</li>
+</ul>
+
+<h2 id="mosquitto">Carry-over 1: Mosquitto on Ubuntu 26.04</h2>
+<p>What we know: on <code>ubuntu-latest</code>, which is now 26.04, Mosquitto 2.1.2 in kind exits with “Unable to open config file”. That happens whether the ConfigMap is mounted as one file through <code>subPath</code> or as the whole directory. The same chart works locally on kind and k3d, and compose works too. The <code>test</code> job’s Mosquitto passes on 26.04, but it runs the image’s built-in config, so it says nothing about mounts. On <code>ubuntu-24.04</code> the e2e job passes in 7 minutes.</p>
+<p>The evidence may already exist. The failed run on <code>d31c4bb</code> (run 43248228548) included your <code>see_inside</code>, which lists the mount as the container sees it and tries to read the file. Job logs need a signed-in <code>gh</code>, which the sandbox can’t use, so step 2 starts with you running:</p>
+<pre><code>! gh run view 43248228548 --log-failed | grep -A40 -- '--- inside mosquitto'</code></pre>
+<p>If that doesn’t settle it, a throwaway branch, <code>probe/ubuntu-26.04</code>, gets a one-job workflow on <code>ubuntu-latest</code>. The job builds nothing, so it takes about 3 minutes. It creates kind and applies only Mosquitto and its ConfigMap, rendered from the chart with <code>helm template --show-only</code>. Then it prints the host’s kernel, <code>aa-status</code> and <code>dmesg</code>’s AppArmor denials, and runs three variants, each of which rules out one layer:</p>
+<ul>
+<li>the pod with <code>appArmorProfile: Unconfined</code>, to test AppArmor;</li>
+<li>the file through a <code>hostPath</code> instead of a ConfigMap, to test the kubelet’s ConfigMap volume;</li>
+<li>plain <code>docker run</code> with a bind mount on the runner itself, to test kind.</li>
+</ul>
+<p>I’ll ask before pushing the branch, and delete it afterwards. I’ll stop after two probe runs either way. There’s no deadline pressure: GitHub finishes moving <code>ubuntu-latest</code> by November 19, and the <code>ubuntu-24.04</code> label keeps working after that.</p>
+
+<h2 id="ghcr">Carry-over 2: multi-arch images on GHCR</h2>
+
+<figure>
+<svg class="dg" viewBox="0 0 680 290" role="img" aria-labelledby="f1t f1d">
+<title id="f1t">CI after milestone 9</title>
+<desc id="f1d">A push or pull request starts four kinds of jobs: test, audit, e2e and twelve image builds, one per binary and architecture, each on a native runner. On main, each image build pushes its image by digest without a tag. When all four kinds of jobs pass, six publish jobs, one per binary, join the two digests into one multi-arch image and tag it sha and main on GHCR.</desc>
+
+<g><title>push to main, a pull request, or the weekly schedule, as today</title>
+<rect class="b-done" x="10" y="110" width="120" height="60" rx="8"/><text class="t c" x="70" y="136">push or PR</text><text class="s c" x="70" y="154">as today</text></g>
+
+<path class="e-done" d="M130 140 H155 V42 H176" marker-end="url(#ah)"/>
+<path class="e-done" d="M155 98 H176" marker-end="url(#ah)"/>
+<path class="e-done" d="M155 154 H176" marker-end="url(#ah)"/>
+<path class="e-done" d="M155 140 V217 H176" marker-end="url(#ah)"/>
+
+<g><title>make test: fmt, clippy, unit, property and integration tests</title>
+<rect class="b-done" x="180" y="20" width="170" height="44" rx="8"/><text class="t c" x="265" y="39">test</text><text class="s c" x="265" y="55">unchanged</text></g>
+<g><title>make audit</title>
+<rect class="b-done" x="180" y="76" width="170" height="44" rx="8"/><text class="t c" x="265" y="95">audit</text><text class="s c" x="265" y="111">unchanged</text></g>
+<g><title>make e2e on kind, back on ubuntu-latest once the Mosquitto problem is understood</title>
+<rect class="b-now" x="180" y="132" width="170" height="44" rx="8"/><text class="t c" x="265" y="151">e2e</text><text class="s c" x="265" y="167">ubuntu-latest again</text></g>
+<g><title>Was one amd64 build per binary. Now each binary also builds on ubuntu-26.04-arm, natively, with the same Dockerfile. On main, each job pushes its image by digest, without a tag.</title>
+<rect class="b-now" x="180" y="188" width="170" height="58" rx="8"/><text class="t c" x="265" y="207">image × 12</text><text class="s c" x="265" y="223">6 binaries × amd64, arm64</text><text class="s c" x="265" y="238">native runners, no QEMU</text></g>
+
+<path class="e-now" d="M350 42 H380 M350 98 H380 M350 154 H380 M350 217 H380 M380 42 V217"/>
+<path class="e-now" d="M380 140 H406" marker-end="url(#ah-now)"/>
+
+<g><title>One job per binary, main only, after every job on the left passed: docker buildx imagetools create joins the amd64 and arm64 digests into one index and tags it.</title>
+<rect class="b-now" x="410" y="104" width="120" height="72" rx="8"/><text class="t c" x="470" y="126">publish × 6</text><text class="s c" x="470" y="143">main only, once</text><text class="s c" x="470" y="157">all four have</text><text class="s c" x="470" y="170">passed</text></g>
+
+<path class="e-now" d="M530 140 H556" marker-end="url(#ah-now)"/>
+
+<g><title>ghcr.io/igorilic/rmc-dispatch-platform/&lt;binary&gt;, public, tagged sha-&lt;7 chars&gt; and main. No latest tag.</title>
+<rect class="b-now" x="560" y="104" width="110" height="72" rx="8"/><text class="t c" x="615" y="126">GHCR</text><text class="s c" x="615" y="143">:sha-1a2b3c4</text><text class="s c" x="615" y="157">:main</text></g>
+
+<path class="e-back" d="M350 236 H615 V180" marker-end="url(#ah-now)"/>
+<text class="s c halo" x="480" y="232">digests, untagged (main only)</text>
+
+<rect class="b-done" x="10" y="266" width="16" height="12" rx="3"/><text class="s" x="32" y="276">exists</text>
+<rect class="b-now" x="110" y="266" width="16" height="12" rx="3"/><text class="s" x="132" y="276">new or changed in M9</text>
+</svg>
+<figcaption>Figure 1. A tag appears only once everything passed, so <code>:main</code> never points at a build that failed e2e. Hover a box for details.</figcaption>
+</figure>
+
+<ul>
+<li><strong>Native arm64, not QEMU.</strong> Public repositories get <code>ubuntu-26.04-arm</code> runners for free. A release build under QEMU emulation takes many times longer than a native one, and today each image takes 2 to 4 minutes natively. The Dockerfile stays as it is, because <code>rust:1.99.1-slim-trixie</code> and distroless <code>cc-debian13</code> already ship both architectures.</li>
+<li><strong>The <code>image</code> job</strong> becomes a matrix of binary × runner, using <code>docker/setup-buildx-action</code>, <code>docker/metadata-action</code> for the OCI labels, and <code>docker/build-push-action</code>. The <code>org.opencontainers.image.source</code> label links each package to the repository. On <code>main</code> it logs in with <code>GITHUB_TOKEN</code>, pushes by digest, and uploads the digest as an artifact. On a pull request it only builds.</li>
+<li><strong>A new <code>publish</code> job</strong>, one per binary, runs only on <code>main</code> and needs <code>test</code>, <code>audit</code>, <code>e2e</code> and <code>image</code>. It runs <code>docker buildx imagetools create</code> on the two digests with both tags, then <code>imagetools inspect</code>, so the log shows both platforms.</li>
+<li><strong>Permissions:</strong> the workflow keeps <code>contents: read</code>. Only <code>image</code> and <code>publish</code> get <code>packages: write</code>.</li>
+<li><strong>Who uses the images:</strong> nothing in the repo yet (decision 6). <code>make up</code>, <code>make k8s</code> and <code>make e2e</code> keep building from source, so they always test the code you have. The README shows how to install the cloud chart from GHCR with <code>--set images.*</code>.</li>
+</ul>
+
+<h2 id="docs">The docs</h2>
+<table>
+<thead><tr><th>What</th><th>Where</th><th>Contents</th></tr></thead>
+<tbody>
+<tr><td>ADRs</td><td><code>docs/adr/0001-…md</code> to <code>0006-…md</code></td><td>The six from SPEC §14. Each has a status, the date the decision was really made (from git history), the context, the decision, its consequences, and the alternatives with why they lost, plus links into the code. They record what was built. For example, the plant-agent forwards over MQTT rather than NATS, and lives in its own Cargo workspace. The ADRs say so, and why.</td></tr>
+<tr><td>Architecture</td><td><code>docs/architecture.md</code></td><td>Mermaid diagrams: the system and its neighbours; the services, streams and buckets; an order’s path from webhook to plan diff, as one trace; a re-dispatch (freeze, repair, local search, checker, new version and diff); the edge’s outbox while the link is down and after it comes back; compose next to the two clusters with the operator; the domain model with the order and delivery status machines. Then the cross-cutting rules (idempotency keys, backpressure, configuration, telemetry) and links to the ADRs.</td></tr>
+<tr><td>Demo GIF</td><td><code>docs/demo.gif</code>, <code>docs/demo.tape</code></td><td>A <a href="https://github.com/charmbracelet/vhs">VHS</a> recording of the demo scenario’s output: the two orders, the frozen load, the breakdown and the site delay, each with its diff. The tape starts the stack off camera, so the GIF shows only the scenario, under 5 MB.</td></tr>
+<tr><td>README</td><td><code>README.md</code></td><td>A new opening: what Pourline is, the GIF, links to the architecture doc, the ADRs and SPEC. The stale “milestone 7 of 9” status goes. A walkthrough follows Prerequisites (see below). The existing reference sections stay below it, trimmed where the architecture doc now says the same thing. A short section lists the GHCR images.</td></tr>
+</tbody>
+</table>
+
+<h3 id="walkthrough">The walkthrough</h3>
+<p>Each step is a command, what to look at, and a link to the reference section that explains it:</p>
+<ol>
+<li><code>make up</code>, then Grafana’s Dispatch overview fills in as orders arrive.</li>
+<li>The Swagger UI and <code>GET /plans/latest</code>: loads, trucks, plants, ETAs.</li>
+<li><code>make demo</code>: the diffs with a reason per load, as in the GIF.</li>
+<li>The Jaeger link the demo prints: one trace from the webhook to the re-dispatch.</li>
+<li>Break neckar-infra’s mapping, watch its orders land in the DLQ with <code>ingest-cli dlq list</code>, fix the mapping, and replay them, as the Ingest section already describes.</li>
+<li><code>make k8s</code>, then <code>kubectl get customerintegrations</code>, pausing and resuming one.</li>
+<li><code>make chaos</code>: the plant keeps batching offline, and its outbox drains once the link is back.</li>
+<li><code>make e2e</code>: what CI proves on every push.</li>
+</ol>
+
+<h2 id="steps">Steps</h2>
+<p>Each step ends green and becomes its own commit. Steps 2 and 3 only prove themselves in CI, so each needs a push, and I’ll ask before each one.</p>
+
+<h3 id="step-1">Step 1</h3>
+<p><strong>Versions.</strong> Check <code>rust-toolchain.toml</code>, the crate versions in both workspaces, the image pins (compose, the charts, the Dockerfile, kind’s node image) and the action versions. Pull the advisory database. Bump whatever has a newer stable release, then run <code>make test</code> and <code>make audit</code>.</p>
+
+<h3 id="step-2">Step 2</h3>
+<p><strong>Mosquitto on 26.04.</strong> Read the <code>see_inside</code> output you fetch, then run the probe if needed (see above). Fix the cause, unpin the e2e job, drop its <code>ponytail:</code> comment, and push. Done when e2e passes on <code>ubuntu-latest</code>. If the probe points at something we shouldn’t fix in the chart, I stop with the evidence.</p>
+
+<h3 id="step-3">Step 3</h3>
+<p><strong>GHCR.</strong> The new <code>image</code> and <code>publish</code> jobs. Locally I can only lint the workflow, so the proof comes after the push:</p>
+<ul>
+<li><code>docker buildx imagetools inspect ghcr.io/igorilic/rmc-dispatch-platform/dispatch:main</code> lists <code>linux/amd64</code> and <code>linux/arm64</code>, and the same goes for the other five;</li>
+<li>an anonymous <code>docker pull</code> works. New packages may start private. If they do, you switch each one to public once in its package settings, which I can’t do from here;</li>
+<li>on your Mac, the arm64 image runs natively and the amd64 image runs under emulation, and each gets as far as its first connection attempt.</li>
+</ul>
+
+<h3 id="step-4">Step 4</h3>
+<p><strong>The six ADRs.</strong> Before writing each one, I read the code and the plan that made the decision, so the ADR describes what is there. One commit, <code>docs(adr): …</code>.</p>
+
+<h3 id="step-5">Step 5</h3>
+<p><strong>The architecture doc.</strong> I check that every Mermaid diagram parses with <code>@mermaid-js/mermaid-cli</code> through <code>npx</code>. If the sandbox won’t run it, I check the GitHub preview after a push. I grep for every name the doc uses (crates, subjects, buckets, tables, env vars, ports), so none of them is invented.</p>
+
+<h3 id="step-6">Step 6</h3>
+<p><strong>The demo GIF.</strong> I write <code>docs/demo.tape</code>. VHS needs <code>brew install vhs</code>, which I can’t run from the sandbox. VHS also drives a headless Chromium, which the sandbox may block. If it does, you run <code>vhs docs/demo.tape</code> once, and I check the GIF’s length, size and legibility.</p>
+
+<h3 id="step-7">Step 7</h3>
+<p><strong>README and wrap-up.</strong> The new opening, the walkthrough and the GHCR section. I follow the walkthrough on a fresh stack exactly as written, and fix the README wherever reality differs. Then I tick milestone 9 in <code>CLAUDE.md</code>. No new variables are planned, so <code>.env.example</code> shouldn’t change.</p>
+
+<h2 id="decisions">Decisions I need from you</h2>
+<p>I’ll use the default unless you say otherwise.</p>
+<table>
+<thead><tr><th>#</th><th>Question</th><th>My default</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Should the architecture doc and ADRs be Markdown, as SPEC §10 says, or HTML, as your global rule and the <code>adr</code> skill say?</td><td>Markdown with Mermaid, at SPEC’s paths, using the <code>adr</code> skill’s sections. GitHub renders that for every reader. HTML would show as source on GitHub, and its stylesheet can’t be committed. The alternative is HTML from the template, readable only in a local checkout that has <code>docs/.design</code>.</td></tr>
+<tr><td>2</td><td>Which ADRs?</td><td>All six from SPEC §14, which is the upper end of “4–6”. Each covers something that was built. The alternative is to replace the weakest one (the monorepo) with M8’s “one workload per <code>CustomerIntegration</code>”, which the operator is built around.</td></tr>
+<tr><td>3</td><td>What does the GIF show, and what makes it?</td><td>The demo scenario in a terminal, recorded with VHS from a committed tape, so it can be re-recorded after a change. The alternatives are asciinema plus agg (a real session, no script), or a browser GIF of Grafana and Jaeger, which I can record with the Chrome extension. That browser GIF could be a second one later.</td></tr>
+<tr><td>4</td><td>What are the images called and tagged, and how do they get built?</td><td><code>ghcr.io/igorilic/rmc-dispatch-platform/&lt;binary&gt;</code>, tagged <code>sha-&lt;7 chars&gt;</code> and <code>main</code>, with no <code>latest</code>, in line with “pin exact tags”. They’re built on native arm64 runners and tagged only after every job passes. The alternative is one QEMU build per binary for both platforms. That’s fewer jobs, but much slower.</td></tr>
+<tr><td>5</td><td>Which binaries get published?</td><td>All six: dispatch, ingest, simulators, demo, plant-agent and operator. The plant-agent’s arm64 image matters most, because plant edge boxes are often ARM. The alternative is to leave out <code>demo</code>.</td></tr>
+<tr><td>6</td><td>Should <code>make up</code>, <code>make k8s</code> or <code>make e2e</code> use the GHCR images?</td><td>No. They keep building from source, so they test your working tree. The README shows a <code>helm install</code> from GHCR. The alternative is a switch such as <code>IMAGES=ghcr</code>, which skips the roughly 10-minute local build for a visitor.</td></tr>
+<tr><td>7</td><td>What if the Mosquitto fix needs a looser security setting in the chart, such as an unconfined AppArmor profile, or the cause is in the runner image?</td><td>I don’t loosen the chart for a CI quirk. The pin stays, its comment links the evidence (and an upstream issue, if there is one), and I report back. The alternative is to set the looser setting only in <code>deploy/e2e/values.yaml</code>, which keeps the chart strict but tests something slightly different from what you deploy.</td></tr>
+</tbody>
+</table>
+
+<h2 id="later">Heads-up: not in M9</h2>
+<ul>
+<li>The e2e job still builds its own five images rather than reusing the <code>image</code> job’s. Reusing them would shorten the job, but e2e would then have to wait for the image builds and receive their images as artifacts.</li>
+<li>Untagged digests from <code>main</code> runs that failed later stay in GHCR. A cleanup job can come once there are enough to matter.</li>
+<li>The Helm charts aren’t published as OCI artifacts, and SPEC doesn’t ask for it.</li>
+<li>SPEC §9’s optional Tiltfile and devcontainer don’t exist and aren’t planned.</li>
+</ul>
+
+<h2 id="deps">New tools and actions</h2>
+<table>
+<thead><tr><th>What</th><th>Version</th><th>For</th></tr></thead>
+<tbody>
+<tr><td><code>docker/setup-buildx-action</code>, <code>docker/login-action</code>, <code>docker/metadata-action</code>, <code>docker/build-push-action</code>, <code>actions/upload-artifact</code>, <code>actions/download-artifact</code></td><td>Latest majors, which Dependabot already tracks</td><td>Building, pushing and joining the images</td></tr>
+<tr><td>VHS</td><td>Latest, <code>brew install vhs</code> (you)</td><td>Recording the GIF from the tape</td></tr>
+<tr><td><code>@mermaid-js/mermaid-cli</code></td><td>Latest, through <code>npx</code>, never added to the repo</td><td>Checking that the diagrams parse</td></tr>
+</tbody>
+</table>
+<p>No new crates or container images.</p>
+
+</div>
+</article>
+</div></div></div></div></div>
+</main>
+</div>
+</body>
+</html>
