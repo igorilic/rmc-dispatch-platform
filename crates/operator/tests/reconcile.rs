@@ -7,10 +7,11 @@
 #![allow(clippy::unwrap_used)]
 
 use std::future::Future;
+use std::ops::RangeInclusive;
 use std::path::Path;
 use std::time::Duration;
 
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, DurationRound, TimeDelta, TimeZone, Utc};
 use domain::Seed;
 use ingest::mapping::{Delivery, Mapping};
 use ingest::nats::{Bus, StatusReader};
@@ -211,12 +212,18 @@ fn at(minute: u32) -> DateTime<Utc> {
 }
 
 /// One ingested order and one dead letter for bauwerk-ag, so the status has something to report.
-async fn seed_nats(nats_url: &str) {
+/// The deliveries carry the world's time; returns the real time around them, which the status's
+/// last ingest reports.
+async fn seed_nats(nats_url: &str) -> RangeInclusive<DateTime<Utc>> {
     let bus = Bus::connect(nats_url, Duration::from_secs(3600))
         .await
         .unwrap();
     let mapping = Mapping::load(&customers(), "bauwerk-ag").unwrap();
     let seed = Seed::rhine_neckar().unwrap();
+    // The last ingest is stored to the millisecond.
+    let before = Utc::now()
+        .duration_trunc(TimeDelta::milliseconds(1))
+        .unwrap();
     for (file, minute) in [("order.json", 10), ("broken.json", 20)] {
         let body = std::fs::read(customers().join("bauwerk-ag/samples").join(file)).unwrap();
         let delivery = Delivery {
@@ -227,6 +234,7 @@ async fn seed_nats(nats_url: &str) {
         };
         bus.deliver(&mapping, &seed, &delivery).await.unwrap();
     }
+    before..=Utc::now()
 }
 
 fn template_annotations(deployment: &Deployment) -> Value {
@@ -244,7 +252,7 @@ fn template_annotations(deployment: &Deployment) -> Value {
 #[tokio::test]
 async fn a_webhook_integration_is_applied_paused_guarded_and_cleaned_up() {
     let ((_k3s, client), (_nats, nats_url)) = tokio::join!(k3s(), nats());
-    seed_nats(&nats_url).await;
+    let ingested = seed_nats(&nats_url).await;
     let _operator = start_operator(&client, &nats_url).await;
     let integrations = Api::<CustomerIntegration>::default_namespaced(client.clone());
     let deployments = Api::<Deployment>::default_namespaced(client.clone());
@@ -283,12 +291,17 @@ async fn a_webhook_integration_is_applied_paused_guarded_and_cleaned_up() {
         s.last_successful_ingest.is_some()
     })
     .await;
+    let last_ingest = status.last_successful_ingest.unwrap();
+    assert!(
+        ingested.contains(&last_ingest),
+        "{last_ingest} is real time"
+    );
     assert_eq!(
         status,
         CustomerIntegrationStatus {
             phase: Phase::Pending,
             message: Some("0 of 2 replicas ready".into()),
-            last_successful_ingest: Some(at(10)),
+            last_successful_ingest: Some(last_ingest),
             dead_letter_count: 1,
         }
     );

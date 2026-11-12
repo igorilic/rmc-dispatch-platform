@@ -122,6 +122,10 @@ async fn main() -> anyhow::Result<()> {
     let lookup = |key: &str| std::env::var(key).ok();
     let config = Config::from_lookup(lookup)?;
     let _telemetry = telemetry::init("ingest", config.metrics_addr)?;
+    info!(
+        offset_hours = domain::clock::init_from_env()?.num_hours(),
+        "world clock (CLOCK_OFFSET_HOURS)"
+    );
     ingest::metrics::describe();
     let seed = Arc::new(Seed::rhine_neckar()?);
     // The MQTT-only ingest serves no customer, so it needs no mappings.

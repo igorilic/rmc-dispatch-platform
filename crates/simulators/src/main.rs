@@ -12,7 +12,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, ensure};
-use chrono::Utc;
 use domain::{PlantId, Seed};
 use rand::{SeedableRng, rngs::StdRng};
 use rumqttc::{AsyncClient, MqttOptions};
@@ -110,7 +109,11 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let config = Config::from_lookup(|key| std::env::var(key).ok())?;
     let world = Arc::new(Seed::rhine_neckar()?);
-    let clock = Clock::start(Utc::now());
+    info!(
+        offset_hours = domain::clock::init_from_env()?.num_hours(),
+        "world clock (CLOCK_OFFSET_HOURS)"
+    );
+    let clock = Clock::start(domain::clock::now());
     let seed = |n: u64| StdRng::seed_from_u64(config.seed.wrapping_add(n));
 
     let (tx, rx) = mpsc::channel(4096);

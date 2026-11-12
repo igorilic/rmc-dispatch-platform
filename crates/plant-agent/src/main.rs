@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, ensure};
-use chrono::Utc;
 use domain::Seed;
 use plant_agent::forward::{self, Settings};
 use plant_agent::store::Store;
@@ -72,6 +71,10 @@ where
 async fn main() -> anyhow::Result<()> {
     let config = Config::from_lookup(|key| std::env::var(key).ok())?;
     let _telemetry = telemetry::init("plant_agent", config.metrics_addr)?;
+    info!(
+        offset_hours = domain::clock::init_from_env()?.num_hours(),
+        "world clock (CLOCK_OFFSET_HOURS)"
+    );
     metrics::describe();
     let seed = Seed::rhine_neckar()?;
     let plant = seed
@@ -80,7 +83,11 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("PLANT_ID={} is not a plant in the seed", config.plant))?;
     let store =
         Store::open(&config.db).with_context(|| format!("opening {}", config.db.display()))?;
-    let agent = Arc::new(Agent::new(plant, store, Clock::start(Utc::now()))?);
+    let agent = Arc::new(Agent::new(
+        plant,
+        store,
+        Clock::start(domain::clock::now()),
+    )?);
     let status = agent.status()?;
     info!(
         plant = %config.plant,

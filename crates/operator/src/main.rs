@@ -17,6 +17,7 @@ const PASSED_ON: &[&str] = &[
     "SFTP_PORT",
     "OTEL_EXPORTER_OTLP_ENDPOINT",
     "RUST_LOG",
+    "CLOCK_OFFSET_HOURS",
 ];
 
 /// Settings from the environment. Every variable is optional; `.env.example` lists the defaults.
@@ -139,5 +140,19 @@ mod tests {
         );
         assert_eq!(config.settings.ingest_image, "registry/ingest@sha256:abc");
         assert!(Config::from_lookup(env(&[("OPERATOR_METRICS_ADDR", "9467")])).is_err());
+    }
+
+    /// An integration's ingest stamps orders in the world's time, so it must share the shift.
+    #[test]
+    fn the_workloads_run_on_the_worlds_clock() {
+        let config = Config::from_lookup(env(&[("CLOCK_OFFSET_HOURS", "-10")])).unwrap();
+        assert!(
+            config
+                .settings
+                .env
+                .contains(&("CLOCK_OFFSET_HOURS".to_owned(), "-10".to_owned())),
+            "{:?}",
+            config.settings.env
+        );
     }
 }

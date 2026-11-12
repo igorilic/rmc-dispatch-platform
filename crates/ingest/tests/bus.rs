@@ -7,7 +7,7 @@ mod common;
 
 use std::time::Duration;
 
-use chrono::{TimeZone, Utc};
+use chrono::{DurationRound, TimeDelta, TimeZone, Utc};
 use common::{customers, nats, sample};
 use domain::{
     Channel, DeliveryStatus, Event, EventEnvelope, EventSource, LoadRef, Location, MixCode,
@@ -225,33 +225,50 @@ async fn the_status_reader_reports_the_last_successful_ingest_and_dead_letters_p
         Mapping::load(&customers(), "bauwerk-ag").unwrap(),
         Seed::rhine_neckar().unwrap(),
     );
-    let at = |minute| Utc.with_ymd_and_hms(2026, 11, 9, 9, minute, 0).unwrap();
-    let deliver = |body: Vec<u8>, minute| {
+    // Deliveries are stamped in the world's time (domain::clock), which CLOCK_OFFSET_HOURS can
+    // shift hours away. The last ingest describes the system, so it is the real time of delivery.
+    let world_time = Utc.with_ymd_and_hms(2026, 11, 9, 9, 10, 0).unwrap();
+    let deliver = |body: Vec<u8>| {
         let (bus, mapping, seed) = (&bus, &mapping, &seed);
         async move {
             let delivery = Delivery {
-                received_at: at(minute),
+                received_at: world_time,
                 ..delivery(mapping, &body)
             };
-            bus.deliver(mapping, seed, &delivery).await.unwrap()
+            // The time is stored to the millisecond.
+            let before = Utc::now()
+                .duration_trunc(TimeDelta::milliseconds(1))
+                .unwrap();
+            let summary = bus.deliver(mapping, seed, &delivery).await.unwrap();
+            (summary, before..=Utc::now())
         }
     };
 
-    deliver(sample("bauwerk-ag", "order.json"), 10).await;
-    let status = |dead_letters, minute| IntegrationStatus {
-        last_successful_ingest: Some(at(minute)),
-        dead_letters,
-    };
-    assert_eq!(reader.status("bauwerk-ag").await.unwrap(), status(0, 10));
+    let (_, delivered) = deliver(sample("bauwerk-ag", "order.json")).await;
+    let first = reader.status("bauwerk-ag").await.unwrap();
+    assert_eq!(first.dead_letters, 0);
+    let first_ingest = first.last_successful_ingest.unwrap();
+    assert!(
+        delivered.contains(&first_ingest),
+        "{first_ingest} is the real time of delivery"
+    );
 
     // Every record dead-lettered: the integration hasn't ingested anything.
-    deliver(sample("bauwerk-ag", "broken.json"), 20).await;
-    assert_eq!(reader.status("bauwerk-ag").await.unwrap(), status(1, 10));
+    deliver(sample("bauwerk-ag", "broken.json")).await;
+    assert_eq!(
+        reader.status("bauwerk-ag").await.unwrap(),
+        IntegrationStatus {
+            last_successful_ingest: Some(first_ingest),
+            dead_letters: 1
+        }
+    );
 
     // A duplicate got through: the customer's system reached us and we have the order.
-    let duplicate = deliver(sample("bauwerk-ag", "order.json"), 30).await;
+    let (duplicate, delivered) = deliver(sample("bauwerk-ag", "order.json")).await;
     assert_eq!(duplicate.duplicates, 1);
-    assert_eq!(reader.status("bauwerk-ag").await.unwrap(), status(1, 30));
+    let last = reader.status("bauwerk-ag").await.unwrap();
+    assert_eq!(last.dead_letters, 1);
+    assert!(delivered.contains(&last.last_successful_ingest.unwrap()));
 
     assert_eq!(
         reader.status("neckar-infra").await.unwrap(),

@@ -135,7 +135,7 @@ async fn receive(
     let Ok(_permit) = hooks.in_flight.try_acquire() else {
         return busy(2);
     };
-    let received_at = Utc::now();
+    let received_at = domain::clock::now();
     let reference = format!(
         "webhook {}",
         received_at.to_rfc3339_opts(SecondsFormat::Millis, true)
@@ -224,7 +224,7 @@ pub async fn run_mqtt(url: &str, bus: Bus, seed: Arc<Seed>) -> Result<(), Source
 }
 
 async fn handle_mqtt(bus: &Bus, seed: &Seed, client: &AsyncClient, publish: Publish) {
-    let received_at = Utc::now();
+    let received_at = domain::clock::now();
     let topic = publish.topic.as_str();
     let outcome = telematics::map(topic, &publish.payload, received_at, seed);
     // GPS and drum readings, about two a second, would bury every other trace. Dead letters are
@@ -385,7 +385,7 @@ pub async fn poll_sftp(
                 body: &body,
                 channel: Channel::Sftp,
                 reference: name,
-                received_at: Utc::now(),
+                received_at: domain::clock::now(),
             };
             let summary = bus.deliver(mapping, seed, &delivery).await?;
             record_summary(&Span::current(), &summary);

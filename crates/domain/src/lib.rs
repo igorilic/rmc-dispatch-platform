@@ -7,6 +7,7 @@
 //! planned [`Load`]s, one per truck trip. A [`Delivery`] only exists once batching for a load starts.
 //! Until then an order has no deliveries at all.
 
+pub mod clock;
 mod edge;
 mod events;
 mod seed;

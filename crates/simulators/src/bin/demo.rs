@@ -56,6 +56,18 @@ struct Demo {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let offset = domain::clock::init_from_env()?;
+    if !offset.is_zero() {
+        println!(
+            "The world's clock runs {} h {} the wall clock (CLOCK_OFFSET_HOURS), so the plants are open.\n",
+            offset.num_hours().abs(),
+            if offset < TimeDelta::zero() {
+                "behind"
+            } else {
+                "ahead of"
+            }
+        );
+    }
     let mqtt_url = env("MQTT_URL", "mqtt://localhost:1883");
     let options = MqttOptions::parse_url(format!(
         "{mqtt_url}?client_id=pourline-demo-{}",
@@ -104,7 +116,7 @@ impl Demo {
         println!("Pourline demo: re-dispatch\n");
         self.wait_until_up().await?;
         let seed = Seed::rhine_neckar()?;
-        let now = Utc::now();
+        let now = domain::clock::now();
         let start = round_up_to_5_minutes(now + TimeDelta::minutes(45));
         let stamp = now.with_timezone(&Berlin).format("%H%M%S");
         let bauwerk_site = seed.sites_of("10001001")[0].id.0.clone();
@@ -297,7 +309,7 @@ impl Demo {
             .collect();
         nearest.sort_by(|a, b| a.0.total_cmp(&b.0));
 
-        let now = Utc::now();
+        let now = domain::clock::now();
         // Already too late to arrive on time, so dispatch batches the first loads right away.
         let start = now + TimeDelta::minutes(5);
         let stamp = now.with_timezone(&Berlin).format("%H%M%S");
@@ -351,7 +363,7 @@ impl Demo {
             })
             .await?;
         // Any order's loads keep the bays busy, and an earlier run's orders may already fill them.
-        let soon = Utc::now() + TimeDelta::minutes(15);
+        let soon = domain::clock::now() + TimeDelta::minutes(15);
         let at_walldorf = planned["loads"]
             .as_array()
             .into_iter()

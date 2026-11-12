@@ -5,7 +5,6 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::Context;
-use chrono::Utc;
 use dispatch::redispatch::Settings;
 use dispatch::search::{Budget, Weights};
 use dispatch::store::Store;
@@ -53,6 +52,10 @@ async fn main() -> anyhow::Result<()> {
         format!("DISPATCH_METRICS_ADDR must be host:port, not {metrics_addr:?}")
     })?;
     let _telemetry = telemetry::init("dispatch", metrics_addr)?;
+    info!(
+        offset_hours = domain::clock::init_from_env()?.num_hours(),
+        "world clock (CLOCK_OFFSET_HOURS)"
+    );
     let http_addr = var("DISPATCH_HTTP_ADDR", "0.0.0.0:8081");
     let database_url = var(
         "DATABASE_URL",
@@ -74,14 +77,19 @@ async fn main() -> anyhow::Result<()> {
         .connect(&nats_url)
         .await?;
     let (jobs, queue) = worker::channel();
-    tokio::spawn(worker::run(store.clone(), queue, settings, Utc::now));
+    tokio::spawn(worker::run(
+        store.clone(),
+        queue,
+        settings,
+        domain::clock::now,
+    ));
     let js = async_nats::jetstream::new(nats);
     tokio::spawn(intake::run(js.clone(), store.clone(), jobs.clone()));
     tokio::spawn(intake::run_fleet(js, store.clone(), jobs.clone()));
 
     let listener = tokio::net::TcpListener::bind(&http_addr).await?;
     info!(addr = %http_addr, "API listening, Swagger UI at /swagger-ui/");
-    axum::serve(listener, api::router(store, jobs, Utc::now))
+    axum::serve(listener, api::router(store, jobs, domain::clock::now))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     info!("shutting down");

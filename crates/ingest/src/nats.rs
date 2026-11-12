@@ -270,9 +270,8 @@ impl Bus {
             }
         }
         if summary.published + summary.duplicates > 0 {
-            let at = delivery
-                .received_at
-                .to_rfc3339_opts(SecondsFormat::Millis, true);
+            // Real time, not the world's (domain::clock): kubectl shows it as an age.
+            let at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
             retry("record the last ingest", || {
                 self.status
                     .put(mapping.integration.as_str(), at.clone().into_bytes().into())
