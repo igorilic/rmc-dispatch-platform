@@ -115,13 +115,7 @@ jobs:
   # SPEC §12: the cloud chart on kind, the three example customers, the demo scenario, then a plan
   # and an empty DLQ. make e2e runs the same script locally.
   e2e:
-    # ponytail: pinned. Ubuntu 26.04 (ubuntu-latest since October 2026) enforces a host AppArmor
-    # profile named `mosquitto`. kind's pods run unconfined, so the host kernel attaches that
-    # profile to /usr/sbin/mosquitto by path, and it denies reading /mosquitto/config/ (dmesg:
-    # apparmor="DENIED" profile="mosquitto"). The chart and kind are fine; plain docker run is
-    # confined by docker-default and unaffected. Evidence: run 43275152538. To unpin, unload
-    # that host profile in this job first.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: helm/kind-action@v1
@@ -131,4 +125,13 @@ jobs:
       - uses: azure/setup-helm@v5
         with:
           version: v4.3.1
+      # Ubuntu 26.04 enforces a host AppArmor profile named `mosquitto`. kind's pods run
+      # unconfined, so the host kernel attaches that profile to /usr/sbin/mosquitto by path, and it
+      # denies reading /mosquitto/config/ (run 43275152538). The runner doesn't run Mosquitto
+      # itself, so the profile goes; on an image without it, this does nothing.
+      - name: Unload the host's AppArmor profile for Mosquitto
+        run: |
+          if sudo grep -q '^mosquitto ' /sys/kernel/security/apparmor/profiles; then
+            echo -n mosquitto | sudo tee /sys/kernel/security/apparmor/.remove >/dev/null
+          fi
       - run: make e2e

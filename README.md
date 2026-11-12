@@ -555,7 +555,9 @@ unless `E2E_KEEP=1`. `SKIP_BUILD=1` reuses the `pourline/<service>:e2e` images, 
 most of the run time.
 
 On an Ubuntu 26.04 host, Mosquitto can't start in kind: the host's AppArmor profile `mosquitto`
-attaches to it and denies reading its config. CI therefore runs this job on Ubuntu 24.04.
+attaches to it and denies reading its config. CI unloads that profile first. On your own machine,
+`echo -n mosquitto | sudo tee /sys/kernel/security/apparmor/.remove` does the same until the
+next reboot.
 
 ### `make chaos`
 
