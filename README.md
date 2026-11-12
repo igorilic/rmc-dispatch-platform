@@ -4,19 +4,26 @@
 
 A ready-mix concrete dispatch platform in Rust. It plans which truck carries which load from
 which batching plant, so every pour stays continuous and every load is discharged before it
-sets. When a truck breaks down or a site runs late, it re-plans. The full design is in [SPEC.md](SPEC.md).
+sets. When a truck breaks down or a site runs late, it repairs the plan and says why each load
+moved.
 
-> **Status: milestone 7 of 9 (edge).** A simulated world of 25 trucks, three batching plants and
-> three contractors sends orders and telematics. Ingest turns all of it into canonical events on
-> NATS JetStream, with no duplicates, and keeps a dead-letter queue for anything it can't map.
-> Dispatch keeps every order in Postgres and re-plans by itself when something changes: a new or
-> changed order, a truck breaking down, a plant going offline, a site running late. Loads that are
-> already batching never move, every plan version passes a hard-constraint checker, and every diff
-> says why each load moved. One trace in Jaeger follows an order from the webhook to the
-> re-dispatch that planned it, and Grafana shows the plan, re-dispatching, ingest and the edge at
-> a glance. At the Walldorf plant, a plant-agent batches from its slice of the plan and sends its
-> tickets through a SQLite outbox, so a cut link loses nothing. `make demo` shows re-dispatch end
-> to end, and `make k8s` with `make chaos` cuts the plant off its cloud.
+![make demo: two orders are planned, a load starts batching and freezes, a truck breaks down and a site's pump is late; each re-dispatch prints its diff with a reason per load](docs/demo.gif)
+
+A simulated world of 25 trucks, three batching plants and three contractors sends orders and
+telematics. Ingest turns every customer's format into canonical events on NATS JetStream, through
+a YAML mapping per customer, with no duplicates and a dead-letter queue for anything it can't map.
+Dispatch keeps the orders in Postgres and re-plans by itself whenever something changes. It never
+moves a load that is already batching, and every plan version passes a hard-constraint checker
+before it is stored. One trace in Jaeger follows an order from the webhook to the re-dispatch that
+planned it, and Grafana shows the plan, ingest and the edge at a glance. At the plant, a
+plant-agent batches from its slice of the plan and keeps its tickets in a SQLite outbox, so a cut
+link loses nothing. On Kubernetes, an operator runs each customer integration from a
+`CustomerIntegration` resource.
+
+- [Architecture](docs/architecture.md): how it fits together, with diagrams
+- [Decisions](docs/adr/): six ADRs, from NATS over Kafka to haversine travel times
+- [SPEC.md](SPEC.md): what it was built to do
+- [Walkthrough](#walkthrough): see it all running in about half an hour
 
 ## Prerequisites
 
@@ -29,6 +36,43 @@ sets. When a truck breaks down or a site runs late, it re-plans. The full design
   the [k3d install script](https://k3d.io) and [Helm's](https://helm.sh/docs/intro/install/).
   Check with `k3d version && kubectl version --client && helm version`.
 - For `make e2e`, also **kind** and **jq**: `brew install kind jq`.
+
+## Walkthrough
+
+Steps 1 to 5 need only Docker and Rust; steps 6 to 8 also need the Kubernetes tools above. Each
+step links to the section that explains what you see.
+
+1. **Start the world.** `make up` builds the images and starts everything; the first build takes
+   a while. Open Grafana at http://localhost:3000. The Dispatch overview fills in as the
+   simulated customers send orders. ([Local services](#local-services),
+   [Metrics](#metrics))
+2. **Look at the plan.** Open the Swagger UI at http://localhost:8081/swagger-ui/, or ask for the
+   latest plan: `curl -s localhost:8081/plans/latest | jq '.version, (.loads | length), .loads[0]'`.
+   Each load names its order, plant, truck, batch time and ETA. ([Planning](#planning))
+3. **Change reality.** `make demo` restarts the stack with empty volumes and plays the scenario
+   in the GIF above: two orders, a load that starts batching and freezes, a truck breakdown and a
+   late pump. Each re-dispatch prints its diff, with a reason per load. ([`make demo`](#make-demo))
+4. **Follow one order.** Open the Jaeger link the demo prints at the end. One trace runs from the
+   customer's webhook through NATS to the re-dispatch that planned the order. ([Traces](#traces))
+5. **Break a mapping.** Follow the three steps under [Watching ingest](#watching-ingest): change
+   one path in neckar-infra's mapping, watch its orders land in the dead-letter queue with
+   `ingest-cli dlq list`, then fix the mapping and replay them.
+6. **Move to Kubernetes.** `make down`, then `make k8s`. The operator runs each customer from a
+   `CustomerIntegration` resource. Pause one and watch its phase change:
+   ```sh
+   kubectl --context k3d-cloud -n pourline get customerintegrations
+   kubectl --context k3d-cloud -n pourline patch customerintegration bauwerk-ag --type merge -p '{"spec":{"paused":true}}'
+   kubectl --context k3d-cloud -n pourline patch customerintegration bauwerk-ag --type merge -p '{"spec":{"paused":false}}'
+   ```
+   ([Kubernetes](#kubernetes), [The operator](#the-operator))
+7. **Cut the plant off.** `make chaos` disconnects the Walldorf plant for two minutes. The
+   plant-agent keeps batching, its outbox fills, and it drains in order once the link is back. On
+   a fresh cluster the first cut can end before any ticket falls due; the script then says so, and
+   the next `make chaos` catches some. ([`make chaos`](#make-chaos))
+8. **Run what CI runs.** `make e2e` installs the cloud chart on a fresh kind cluster, plays the
+   demo there and checks for a plan and an empty dead-letter queue. ([`make e2e`](#make-e2e))
+
+`make down` removes everything again.
 
 ## Commands
 
@@ -70,8 +114,8 @@ These credentials are throwaway local defaults. To override them, copy `.env.exa
 The simulated world lives in [`deploy/seed/rhine-neckar.json`](deploy/seed/rhine-neckar.json),
 around Heidelberg and Mannheim. It holds our master data: 3 customers and their 40 ship-tos
 (sites), each with an address. 6 of the ship-tos have no coordinates and are placed at their
-postal code's centroid. The world also has 3 plants, 25 trucks and 4 mix designs. The milestone 2
-plan in `docs/context/specs/` has diagrams of how it fits together.
+postal code's centroid. The world also has 3 plants, 25 trucks and 4 mix designs. The [architecture doc](docs/architecture.md#context)
+shows how it fits together.
 
 ```sh
 make logs                                                         # status changes, tickets, orders, SFTP drops
@@ -113,8 +157,8 @@ To run the simulators outside Docker, stop the container first (`docker compose 
 
 Ingest turns every order, telematics message and batch ticket into a canonical event on the
 `EVENTS` stream (subjects `events.orders.*`, `events.trucks.*`, `events.plants.*`). Duplicates
-are skipped, and anything it can't map goes to the `DLQ` stream with every error. The milestone 3
-plan in `docs/context/specs/` has diagrams of the pipeline.
+are skipped, and anything it can't map goes to the `DLQ` stream with every error. The [architecture doc](docs/architecture.md#an-orders-path)
+follows an order through the pipeline.
 
 ```sh
 make logs                                    # simulators; for ingest: docker logs -f pourline-ingest-1
@@ -186,7 +230,7 @@ only moves that lower a weighted cost. That cost counts minutes beyond an order'
 joints, weighted heaviest), every gap minute, lateness and empty kilometres. Every candidate is
 built with the heuristic's own slot search, so local search never breaks a hard constraint. At the
 simulators' default order rate, demand still outgrows 25 trucks within hours, so most orders end up
-planned late. The milestone 4 plan in `docs/context/specs/` has diagrams.
+planned late. [ADR 0002](docs/adr/0002-repair-based-redispatch.md) says why it repairs rather than re-optimises.
 
 | Variable | Default | Effect |
 |---|---|---|
@@ -241,7 +285,7 @@ An order with a delivery reads as `in_progress`. In the live stack, Walldorf's
 [plant-agent](#edge) batches Walldorf's planned loads on time, so they freeze as they would at a
 real plant. Mannheim and Weinheim stay simulated: they batch for random trips without naming a
 load. The simulated trucks still make random trips too, rather than following the plan. The
-milestone 5 plan in `docs/context/specs/` has diagrams.
+[architecture doc](docs/architecture.md#re-dispatch) has a diagram of the steps.
 
 ### `make demo`
 
@@ -548,6 +592,37 @@ During a cut, dispatch doesn't know the plant is cut off. If something else trig
 re-dispatch meanwhile, such as a new order, the re-dispatch may move a Walldorf load whose batch
 time passed without a ticket, although Walldorf batched it from its last plan. Once the tickets
 arrive, the next re-dispatch freezes the load where Walldorf actually batched it.
+
+## Images
+
+Every push to `main` that passes all of CI publishes each service as a multi-arch image, for
+`linux/amd64` and `linux/arm64`:
+
+```text
+ghcr.io/igorilic/rmc-dispatch-platform/dispatch
+ghcr.io/igorilic/rmc-dispatch-platform/ingest
+ghcr.io/igorilic/rmc-dispatch-platform/simulators
+ghcr.io/igorilic/rmc-dispatch-platform/demo
+ghcr.io/igorilic/rmc-dispatch-platform/plant-agent
+ghcr.io/igorilic/rmc-dispatch-platform/operator
+```
+
+Each image is tagged `sha-<first 7 characters of the commit>`, and `main` points at the newest.
+There is no `latest`. The `make` targets always build from your checkout. To install the cloud
+chart from the published images instead, on a cluster of your own:
+
+```sh
+kubectl apply --server-side -f deploy/helm/pourline/crds/
+helm upgrade --install pourline deploy/helm/pourline --skip-crds -n pourline --create-namespace \
+  --set images.ingest=ghcr.io/igorilic/rmc-dispatch-platform/ingest:main \
+  --set images.dispatch=ghcr.io/igorilic/rmc-dispatch-platform/dispatch:main \
+  --set images.simulators=ghcr.io/igorilic/rmc-dispatch-platform/simulators:main \
+  --set images.operator=ghcr.io/igorilic/rmc-dispatch-platform/operator:main \
+  --set imagePullPolicy=Always
+kubectl kustomize --load-restrictor LoadRestrictionsNone deploy/integrations | kubectl apply -f -
+```
+
+On a cluster without a load balancer, such as kind, also set `mosquitto.serviceType=ClusterIP`.
 
 ## Dependencies and security
 
