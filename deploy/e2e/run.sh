@@ -43,7 +43,26 @@ diagnose() {
       jq -c '.status.containerStatuses[] | {name, restartCount, state, lastState}' || true
     kubectl -n "$NS" logs "$pod" --previous --tail=40 2>/dev/null ||
       kubectl -n "$NS" logs "$pod" --tail=40 || true
+    see_inside "$pod"
   done
+}
+# What a crashing pod's container sees: a copy of the pod runs a shell instead of its command and
+# lists its mounts and reads their files, so an unreadable file shows its error. It needs a shell
+# in the image, so it shows nothing for the distroless Pourline images.
+see_inside() {
+  local container mounts
+  container=$(kubectl -n "$NS" get pod "$1" -o jsonpath='{.spec.containers[0].name}')
+  # Not the service account's token.
+  mounts=$(kubectl -n "$NS" get pod "$1" -o jsonpath='{.spec.containers[0].volumeMounts[*].mountPath}' |
+    tr ' ' '\n' | grep -v '^/var/run/secrets' | tr '\n' ' ')
+  kubectl -n "$NS" debug "$1" --copy-to="$1-inside" --container="$container" --attach=false \
+    --quiet -- sh -c "id; for m in $mounts; do echo \"== \$m\"; ls -la \"\$m\"; \
+      for f in \"\$m\"/*; do [ -f \"\$f\" ] && { echo \"-- \$f\"; head -c 300 \"\$f\"; echo; }; done; done" \
+    >/dev/null 2>&1 || return 0
+  kubectl -n "$NS" wait --for=jsonpath='{.status.phase}'=Succeeded "pod/$1-inside" --timeout=60s \
+    >/dev/null 2>&1 || true
+  echo "--- inside $1"
+  kubectl -n "$NS" logs "$1-inside" -c "$container" 2>&1 || true
 }
 finish() {
   local status=$?
