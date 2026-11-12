@@ -554,6 +554,9 @@ On failure it prints the integrations, pods, events and logs. It deletes the clu
 unless `E2E_KEEP=1`. `SKIP_BUILD=1` reuses the `pourline/<service>:e2e` images, which saves
 most of the run time.
 
+On an Ubuntu 26.04 host, Mosquitto can't start in kind: the host's AppArmor profile `mosquitto`
+attaches to it and denies reading its config. CI therefore runs this job on Ubuntu 24.04.
+
 ### `make chaos`
 
 `make chaos` runs `deploy/k3d/chaos.sh`:

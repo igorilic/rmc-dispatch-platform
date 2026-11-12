@@ -115,9 +115,12 @@ jobs:
   # SPEC §12: the cloud chart on kind, the three example customers, the demo scenario, then a plan
   # and an empty DLQ. make e2e runs the same script locally.
   e2e:
-    # ponytail: pinned because on ubuntu-26.04 (ubuntu-latest since October 2026) Mosquitto can't
-    # open its config file from the ConfigMap, though it can locally. Unpin once that
-    # is understood.
+    # ponytail: pinned. Ubuntu 26.04 (ubuntu-latest since October 2026) enforces a host AppArmor
+    # profile named `mosquitto`. kind's pods run unconfined, so the host kernel attaches that
+    # profile to /usr/sbin/mosquitto by path, and it denies reading /mosquitto/config/ (dmesg:
+    # apparmor="DENIED" profile="mosquitto"). The chart and kind are fine; plain docker run is
+    # confined by docker-default and unaffected. Evidence: run 43275152538. To unpin, unload
+    # that host profile in this job first.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
