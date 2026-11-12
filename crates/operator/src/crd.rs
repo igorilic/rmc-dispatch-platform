@@ -48,7 +48,9 @@ impl Channel {
 #[x_kube(validation = Rule::new("self.channel == 'webhook' || self.replicas == 1").message("an sftp integration polls with one replica: two would race to move the same files"))]
 #[serde(rename_all = "camelCase")]
 pub struct CustomerIntegrationSpec {
-    /// Must match the mapping's own `channel`.
+    /// Must match the mapping's own `channel`. It can't change: delete and re-create the
+    /// integration instead.
+    #[x_kube(validation = Rule::new("self == oldSelf").message("the channel can't change: delete the integration and create it again"))]
     pub channel: Channel,
     /// The ConfigMap with the integration's `mapping.yaml`.
     pub mapping_config_map: String,

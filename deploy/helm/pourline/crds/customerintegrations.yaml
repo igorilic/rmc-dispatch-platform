@@ -40,11 +40,16 @@ spec:
               `customers/<name>/`.
             properties:
               channel:
-                description: Must match the mapping's own `channel`.
+                description: |-
+                  Must match the mapping's own `channel`. It can't change: delete and re-create the
+                  integration instead.
                 enum:
                 - webhook
                 - sftp
                 type: string
+                x-kubernetes-validations:
+                - message: "the channel can't change: delete the integration and create it again"
+                  rule: self == oldSelf
               credentialsSecret:
                 description: "The Secret with the credentials: `token` for a webhook, `username` and `password` for sftp."
                 type: string
