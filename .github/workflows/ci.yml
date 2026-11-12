@@ -40,7 +40,10 @@ jobs:
   # SPEC §12: the cloud chart on kind, the three example customers, the demo scenario, then a plan
   # and an empty DLQ. make e2e runs the same script locally.
   e2e:
-    runs-on: ubuntu-latest
+    # ponytail: pinned because on ubuntu-26.04 (ubuntu-latest since October 2026) Mosquitto can't
+    # open its config file from the ConfigMap, though it can locally. Unpin once that
+    # is understood.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: helm/kind-action@v1
