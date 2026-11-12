@@ -8,7 +8,7 @@ use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
 /// Same image as deploy/compose. Keep the container alive for as long as the test uses it.
 pub async fn nats() -> (ContainerAsync<GenericImage>, String) {
-    let container = GenericImage::new("nats", "2.15.2-alpine")
+    let container = GenericImage::new("nats", "2.15.3-alpine")
         .with_exposed_port(4222.tcp())
         .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
         .with_cmd(["--jetstream"])

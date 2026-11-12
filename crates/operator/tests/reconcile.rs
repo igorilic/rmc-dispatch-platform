@@ -85,7 +85,7 @@ async fn k3s() -> (ContainerAsync<GenericImage>, Client) {
 
 /// Same image as deploy/compose.
 async fn nats() -> (ContainerAsync<GenericImage>, String) {
-    let container = GenericImage::new("nats", "2.15.2-alpine")
+    let container = GenericImage::new("nats", "2.15.3-alpine")
         .with_exposed_port(4222.tcp())
         .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
         .with_cmd(["--jetstream"])
