@@ -1,0 +1,16 @@
+# The cloud chart on kind, for the e2e test (deploy/e2e/run.sh).
+images:
+  ingest: pourline/ingest:e2e
+  dispatch: pourline/dispatch:e2e
+  simulators: pourline/simulators:e2e
+  operator: pourline/operator:e2e
+# Loaded into kind with `kind load`, never pulled.
+imagePullPolicy: Never
+simulators:
+  # Orders soon and drops often, so rheinbau's CronJob has a file to ingest within a minute or two
+  # (an empty order book drops nothing). The demo skips plan versions that other orders cause.
+  orderIntervalSecs: 30
+  rheinbauDropIntervalSecs: 30
+mosquitto:
+  # kind has no load balancer, so a LoadBalancer would never get an address.
+  serviceType: ClusterIP

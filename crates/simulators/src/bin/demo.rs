@@ -382,7 +382,16 @@ impl Demo {
                 .await;
             Ok(up.is_ok_and(|r| r.status().is_success()))
         })
-        .await
+        .await?;
+        // Any answer will do, even 405: in Kubernetes a webhook's Service can take a moment to
+        // route to a pod that just became ready.
+        for url in [&self.bauwerk_webhook, &self.neckar_webhook] {
+            self.wait_for(&format!("{url} to answer"), || async {
+                Ok(self.http.get(url).send().await.is_ok())
+            })
+            .await?;
+        }
+        Ok(())
     }
 
     /// Batching, loading and loaded tickets for `load`, naming the order and load number. The

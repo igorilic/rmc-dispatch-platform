@@ -28,6 +28,7 @@ sets. When a truck breaks down or a site runs late, it re-plans. The full design
   CPUs and 8 GB of memory. On macOS: `brew install k3d kubectl helm`; on Linux, Docker Engine,
   the [k3d install script](https://k3d.io) and [Helm's](https://helm.sh/docs/intro/install/).
   Check with `k3d version && kubectl version --client && helm version`.
+- For `make e2e`, also **kind** and **jq**: `brew install kind jq`.
 
 ## Commands
 
@@ -42,7 +43,8 @@ sets. When a truck breaks down or a site runs late, it re-plans. The full design
 | `make sqlx-prepare` | Refreshes `.sqlx/` after a query or migration changes (needs `make up` and `cargo install sqlx-cli --locked`) |
 | `make k8s` | Runs Pourline in two k3d clusters, `cloud` and `plant-walldorf`: see [Kubernetes](#kubernetes) |
 | `make chaos` | Cuts `plant-walldorf` off the cloud for 2 minutes, then reconnects it, and shows its outbox draining (after `make k8s`): see [`make chaos`](#make-chaos) |
-| `make down` | Stops everything and deletes the volumes, and deletes the k3d clusters, their registry and network |
+| `make e2e` | Installs the cloud chart and the three customers on a fresh kind cluster, plays the demo, and checks for a plan and an empty DLQ, as CI does: see [`make e2e`](#make-e2e) |
+| `make down` | Stops everything and deletes the volumes, and deletes the k3d and kind clusters, the registry and the network |
 
 ## Local services
 
@@ -486,6 +488,27 @@ locally with the mappings in `customers/`.
 | `INGEST_IMAGE` | `k3d-pourline-registry:5050/ingest:dev` | The image every integration runs. The chart sets it to its ingest image |
 | `NATS_URL`, `SFTP_HOST`, `SFTP_PORT`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `RUST_LOG` | as for ingest | Passed on to every integration's workload; the operator reads NATS itself |
 | `OPERATOR_METRICS_ADDR` | `0.0.0.0:9467` | Metrics listener |
+
+### `make e2e`
+
+CI's `e2e` job runs `make e2e` (SPEC §12), and so can you, with kind (`brew install kind`) and
+`jq` on top of the Kubernetes prerequisites. `deploy/e2e/run.sh`:
+
+1. creates the kind cluster `pourline-e2e` from a pinned node image, with its kubeconfig in
+   `target/e2e/`, so `~/.kube/config` stays as it is;
+2. lints both charts, builds five images (no plant-agent: one cluster tests the cloud) and loads
+   them into kind;
+3. installs the cloud chart with `deploy/e2e/values.yaml` and the three customers from
+   `deploy/integrations/`, sets rheinbau's schedule to every minute, and waits until all three
+   integrations are `Running`;
+4. plays the demo scenario in a pod, which fails if an order isn't planned, a frozen load moves
+   or a diff is missing;
+5. checks that rheinbau's CronJob ingested a drop, that the latest plan has loads, that the DLQ
+   holds nothing, and that every integration reports 0 dead letters.
+
+On failure it prints the integrations, pods, events and logs. It deletes the cluster at the end,
+unless `E2E_KEEP=1`. `SKIP_BUILD=1` reuses the `pourline/<service>:e2e` images, which saves
+most of the run time.
 
 ### `make chaos`
 

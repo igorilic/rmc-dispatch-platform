@@ -36,3 +36,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: docker build --build-arg BIN=${{ matrix.bin }} -t pourline/${{ matrix.bin }}:ci .
+
+  # SPEC §12: the cloud chart on kind, the three example customers, the demo scenario, then a plan
+  # and an empty DLQ. make e2e runs the same script locally.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: helm/kind-action@v1
+        with:
+          version: v0.33.0
+          install_only: true
+      - uses: azure/setup-helm@v5
+        with:
+          version: v4.3.1
+      - run: make e2e

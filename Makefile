@@ -7,13 +7,16 @@ COMPOSE := docker compose -f deploy/compose/compose.yaml $(if $(wildcard .env),-
 # The plant-agent is its own Cargo workspace; crates/plant-agent/Cargo.toml says why.
 AGENT := --manifest-path crates/plant-agent/Cargo.toml
 
-.PHONY: up down demo logs k8s chaos test bench audit sqlx-prepare
+.PHONY: up down demo logs k8s chaos e2e test bench audit sqlx-prepare
 
 up: ## Build and start the local stack, and wait until it is up
 	$(COMPOSE) up -d --wait --build
 
-down: ## Stop the stack and delete its volumes; delete the k3d clusters, registry and network too
+down: ## Stop the stack and delete its volumes; delete the k3d and kind clusters, registry and network too
 	$(COMPOSE) down -v --remove-orphans
+	@if command -v kind >/dev/null && kind get clusters 2>/dev/null | grep -qx pourline-e2e; then \
+		kind delete cluster --name pourline-e2e; \
+	fi
 	@if command -v k3d >/dev/null; then \
 		for cluster in cloud plant-walldorf; do \
 			k3d cluster get $$cluster >/dev/null 2>&1 && k3d cluster delete $$cluster; \
@@ -27,6 +30,9 @@ k8s: ## Two k3d clusters, cloud and plant-walldorf, with Pourline deployed (need
 
 chaos: ## Cut plant-walldorf off the cloud for 2 minutes and watch its outbox drain (after make k8s)
 	deploy/k3d/chaos.sh
+
+e2e: ## The cloud chart on a fresh kind cluster, the demo, then checks for a plan and an empty DLQ (needs kind, helm, jq)
+	deploy/e2e/run.sh
 
 demo: ## Fresh stack, then a scripted scenario: two orders, a batching load, a breakdown, a site delay
 	$(COMPOSE) down -v --remove-orphans
