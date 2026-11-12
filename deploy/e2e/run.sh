@@ -32,6 +32,18 @@ diagnose() {
     echo "--- logs of $deployment"
     kubectl -n "$NS" logs "deploy/$deployment" --tail=40 || true
   done
+  # Every running pod that restarted or isn't ready: why its container last stopped, and its log
+  # from before that, which is where a crash says what went wrong.
+  local pods
+  pods=$(kubectl -n "$NS" get pods -o json | jq -r '.items[] | select(.status.phase != "Succeeded")
+    | select(any(.status.containerStatuses[]?; (.ready | not) or .restartCount > 0)) | .metadata.name') || true
+  for pod in $pods; do
+    echo "--- $pod"
+    kubectl -n "$NS" get pod "$pod" -o json |
+      jq -c '.status.containerStatuses[] | {name, restartCount, state, lastState}' || true
+    kubectl -n "$NS" logs "$pod" --previous --tail=40 2>/dev/null ||
+      kubectl -n "$NS" logs "$pod" --tail=40 || true
+  done
 }
 finish() {
   local status=$?
