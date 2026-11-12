@@ -7,7 +7,7 @@ which batching plant, so every pour stays continuous and every load is discharge
 sets. When a truck breaks down or a site runs late, it repairs the plan and says why each load
 moved.
 
-![make demo: two orders are planned, a load starts batching and freezes, a truck breaks down and a site's pump is late; each re-dispatch prints its diff with a reason per load](docs/demo.gif)
+![Three scenes: a truck breaks down, then a pump is late, and each re-dispatch says why each load moved; a broken mapping sends an order to the dead-letter queue with the reason, and a replay fixes it; on Kubernetes the operator runs each customer, and a plant cut off from the cloud keeps batching and catches up](docs/demo.gif)
 
 A simulated world of 25 trucks, three batching plants and three contractors sends orders and
 telematics. Ingest turns every customer's format into canonical events on NATS JetStream, through
@@ -50,8 +50,9 @@ step links to the section that explains what you see.
    latest plan: `curl -s localhost:8081/plans/latest | jq '.version, (.loads | length), .loads[0]'`.
    Each load names its order, plant, truck, batch time and ETA. ([Planning](#planning))
 3. **Change reality.** `make demo` restarts the stack with empty volumes and plays the scenario
-   in the GIF above: two orders, a load that starts batching and freezes, a truck breakdown and a
-   late pump. Each re-dispatch prints its diff, with a reason per load. ([`make demo`](#make-demo))
+   behind the GIF's first scene: two orders, a load that starts batching and freezes, a truck
+   breakdown and a late pump. Each re-dispatch prints its diff, with a reason and a volume per
+   load. ([`make demo`](#make-demo))
 4. **Follow one order.** Open the Jaeger link the demo prints at the end. One trace runs from the
    customer's webhook through NATS to the re-dispatch that planned the order. ([Traces](#traces))
 5. **Break a mapping.** Follow the three steps under [Watching ingest](#watching-ingest): change
