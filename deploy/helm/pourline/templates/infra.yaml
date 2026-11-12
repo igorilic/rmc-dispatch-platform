@@ -75,8 +75,10 @@ spec:
           readinessProbe:
             tcpSocket: { port: 1883 }
             periodSeconds: 2
+          # The whole ConfigMap as the config directory, not one file through subPath: on GitHub's
+          # Ubuntu 26.04 runners, Mosquitto couldn't open a subPath-mounted config file.
           volumeMounts:
-            - { name: config, mountPath: /mosquitto/config/mosquitto.conf, subPath: mosquitto.conf }
+            - { name: config, mountPath: /mosquitto/config, readOnly: true }
             - { name: data, mountPath: /mosquitto/data }
       volumes:
         - { name: config, configMap: { name: mosquitto-config } }
