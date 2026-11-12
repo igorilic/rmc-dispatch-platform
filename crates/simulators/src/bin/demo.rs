@@ -576,24 +576,36 @@ fn short(plant: &str) -> &str {
     plant.trim_start_matches("plant-")
 }
 
+/// A load's volume in m³, to one decimal, without a trailing `.0`.
+fn m3(load: &Value) -> String {
+    let v = format!("{:.1}", load["volume_m3"].as_f64().unwrap_or_default());
+    v.strip_suffix(".0")
+        .map_or_else(|| v.clone(), str::to_owned)
+}
+
 fn print_plan(plan: &Value, ours: &[&str]) {
     println!(
-        "   Plan v{}:\n   {:<24} {:<5} {:<10} {:<10} {:<6} {:<6}",
-        plan["version"], "order", "load", "truck", "plant", "batch", "ETA"
+        "   Plan v{}:\n   {:<24} {:<5} {:<5} {:<10} {:<10} {:<6} {:<6}",
+        plan["version"], "order", "load", "m³", "truck", "plant", "batch", "ETA"
     );
     for id in ours {
         for l in loads(plan, id) {
-            println!(
-                "   {:<24} #{:<4} {:<10} {:<10} {:<6} {:<6}",
-                id,
-                l["sequence"].as_u64().unwrap_or_default(),
-                str_of(l, "planned_truck"),
-                short(str_of(l, "planned_plant")),
-                time_of(l, "planned_batch_at"),
-                time_of(l, "eta_on_site")
-            );
+            println!("{}", plan_row(id, l));
         }
     }
+}
+
+fn plan_row(id: &str, l: &Value) -> String {
+    format!(
+        "   {:<24} #{:<4} {:<5} {:<10} {:<10} {:<6} {:<6}",
+        id,
+        l["sequence"].as_u64().unwrap_or_default(),
+        m3(l),
+        str_of(l, "planned_truck"),
+        short(str_of(l, "planned_plant")),
+        time_of(l, "planned_batch_at"),
+        time_of(l, "eta_on_site")
+    )
 }
 
 /// `before → after`, or one side when the other is the same or missing.
@@ -628,27 +640,15 @@ fn print_diff(version: i64, diff: &Value, ours: &[&str]) {
         .collect();
     println!("   v{version} · {}", triggers.join("; "));
     println!(
-        "   {:<24} {:<5} {:<22} {:<20} {:<15} reason",
-        "order", "load", "truck", "plant", "ETA"
+        "   {:<24} {:<5} {:<9} {:<22} {:<20} {:<15} reason",
+        "order", "load", "m³", "truck", "plant", "ETA"
     );
     let changes: Vec<&Value> = diff["changes"].as_array().into_iter().flatten().collect();
     let (mine, others): (Vec<&Value>, Vec<&Value>) = changes
         .into_iter()
         .partition(|c| ours.iter().any(|id| c["order"] == *id));
     for c in &mine {
-        let (b, a) = (
-            c.get("before").filter(|v| !v.is_null()),
-            c.get("after").filter(|v| !v.is_null()),
-        );
-        println!(
-            "   {:<24} #{:<4} {:<22} {:<20} {:<15} {}",
-            str_of(c, "order"),
-            c["sequence"].as_u64().unwrap_or_default(),
-            change(b, a, |l| str_of(l, "planned_truck").to_owned()),
-            change(b, a, |l| short(str_of(l, "planned_plant")).to_owned()),
-            eta_change(b, a),
-            str_of(c, "reason")
-        );
+        println!("{}", change_row(c));
     }
     if !others.is_empty() {
         println!("   + {} knock-on changes to other orders", others.len());
@@ -664,4 +664,80 @@ fn print_diff(version: i64, diff: &Value, ours: &[&str]) {
         num(mb, "lateness_minutes"),
         num(ma, "lateness_minutes")
     );
+}
+
+/// One changed load. The m³ column shows a removed load's volume too, so it doesn't read as lost
+/// concrete: another load of the order carries it now.
+fn change_row(c: &Value) -> String {
+    let (b, a) = (
+        c.get("before").filter(|v| !v.is_null()),
+        c.get("after").filter(|v| !v.is_null()),
+    );
+    format!(
+        "   {:<24} #{:<4} {:<9} {:<22} {:<20} {:<15} {}",
+        str_of(c, "order"),
+        c["sequence"].as_u64().unwrap_or_default(),
+        change(b, a, m3),
+        change(b, a, |l| str_of(l, "planned_truck").to_owned()),
+        change(b, a, |l| short(str_of(l, "planned_plant")).to_owned()),
+        eta_change(b, a),
+        str_of(c, "reason")
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn load(sequence: u32, volume_m3: f64, truck: &str) -> Value {
+        json!({
+            "order": "10001003/DEMO-B", "sequence": sequence, "volume_m3": volume_m3,
+            "planned_truck": truck, "planned_plant": "plant-mannheim",
+            "planned_batch_at": "2026-11-12T17:00:00Z", "eta_on_site": "2026-11-12T17:30:00Z"
+        })
+    }
+
+    fn columns(row: &str) -> Vec<&str> {
+        row.split_whitespace().collect()
+    }
+
+    #[test]
+    fn a_plan_row_shows_the_load_volume() {
+        let row = plan_row("10001003/DEMO-B", &load(1, 8.5, "truck-07"));
+        assert_eq!(
+            columns(&row)[..4],
+            ["10001003/DEMO-B", "#1", "8.5", "truck-07"],
+            "{row}"
+        );
+    }
+
+    #[test]
+    fn a_diff_row_shows_how_the_volume_changed() {
+        let moved = json!({
+            "order": "10001003/DEMO-B", "sequence": 1, "reason": "site 50001028 is delayed 30 min",
+            "before": load(1, 9.0, "truck-06"), "after": load(1, 12.0, "truck-09")
+        });
+        let row = change_row(&moved);
+        assert_eq!(
+            columns(&row)[..5],
+            ["10001003/DEMO-B", "#1", "9", "→", "12"],
+            "{row}"
+        );
+    }
+
+    /// A removed load shows the volume it carried, so it doesn't read as lost concrete.
+    #[test]
+    fn a_removed_load_shows_its_volume() {
+        let removed = json!({
+            "order": "10001003/DEMO-B", "sequence": 4, "reason": "site 50001028 is delayed 30 min",
+            "before": load(4, 1.0, "truck-09"), "after": null
+        });
+        let row = change_row(&removed);
+        assert_eq!(
+            columns(&row)[..4],
+            ["10001003/DEMO-B", "#4", "1", "truck-09"],
+            "{row}"
+        );
+        assert!(row.contains("→ removed"), "{row}");
+    }
 }

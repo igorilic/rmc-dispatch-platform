@@ -299,16 +299,20 @@ the scenario stays readable. It then runs `crates/simulators/src/bin/demo.rs` in
    and dispatch re-dispatches.
 4. The second order's site is delayed 30 minutes through the API.
 
-Each diff is printed with a reason per load, for example:
+Each diff is printed with a reason per load, and with each load's volume, so a removed load
+doesn't read as lost concrete: when trucks change, an order may need fewer, fuller loads. For
+example:
 
 ```text
-3. truck-12, which carries load #2 of 10001001/DEMO-080657-A, breaks down.
-   v5 · truck-12 out of service
-   order                    load  truck                  plant                ETA             reason
-   10001001/DEMO-080657-A   #2    truck-12 → truck-16    weinheim             09:13           truck-12 is out of service
-   10001001/DEMO-080657-A   #3    truck-03               mannheim             09:31 → 09:29   follows #2, so the pour stays continuous
-   10001001/DEMO-080657-A   #4    truck-04               mannheim             09:45 → 09:43   follows #2, so the pour stays continuous
+3. truck-01, which carries load #2 of 10001001/DEMO-195622-A, breaks down.
+   v2 · truck-01 out of service
+   order                    load  m³        truck                  plant                ETA             reason
+   10001001/DEMO-195622-A   #2    8         truck-01 → truck-05    mannheim             05:46           truck-01 is out of service
+   10001001/DEMO-195622-A   #5    6         truck-05 → truck-09    mannheim             06:40           re-planned along with #2
 ```
+
+Run it between 05:00 and 18:00 Berlin time. The plants close at 18:00 or 20:00, and outside
+their hours the demo's orders wait for the next morning, so step 4 has nothing to move.
 
 It ends with a Jaeger link to the first order's trace and the Grafana dashboard's address (see
 [Observability](#observability)). When it's done, the simulators go back to the normal order

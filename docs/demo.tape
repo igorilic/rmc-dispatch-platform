@@ -5,6 +5,9 @@
 #   make up            # builds the images, if you haven't already
 #   vhs docs/demo.tape
 #
+# Record between 05:00 and 18:00 Berlin time. Outside the plants' opening hours, the demo's
+# orders wait for the next morning and the scenario has little to show.
+#
 # Off camera it restarts the stack with empty volumes and slow order generation, as `make demo`
 # does, so the scenario plays on a quiet world. It leaves the stack running at the normal order rate.
 
