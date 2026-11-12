@@ -72,4 +72,4 @@ Each one ends with a runnable repo, green CI and a commit.
 6. [x] **Observability**: traces end to end, metrics, Grafana dashboard.
 7. [x] **Edge**: `plant-agent` with SQLite outbox, two k3d clusters, `make chaos`.
 8. [x] **Operator**: `CustomerIntegration` CRD + controller, Helm charts, e2e test in CI.
-9. [ ] **Polish**: architecture doc with diagrams, 4–6 ADRs, demo GIF, README walkthrough.
+9. [x] **Polish**: architecture doc with diagrams, 4–6 ADRs, demo GIF, README walkthrough.
