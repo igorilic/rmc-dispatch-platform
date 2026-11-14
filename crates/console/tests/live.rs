@@ -70,6 +70,10 @@ struct Fake {
     agent_mqtt: bool,
     /// Whether `/status` also reports the links down while the uplink is cut.
     links_follow_cut: bool,
+    /// The webhooks answer 401, as with a token that doesn't match.
+    refuse_orders: bool,
+    /// Toxiproxy answers 500 to every change of a proxy.
+    fail_patches: bool,
     proxies: BTreeMap<String, bool>,
     resets: usize,
     patches: Vec<(String, bool)>,
@@ -218,6 +222,12 @@ async fn handle(
             { "id": "10001001/BW-1", "site": "50001012" },
             { "id": "10001001/BW-2", "site": "50001007" },
         ])),
+        ("POST", ["webhooks", _]) if f.refuse_orders => {
+            (StatusCode::UNAUTHORIZED, Json(Value::Null))
+        }
+        ("PATCH", ["proxies", _]) if f.fail_patches => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(Value::Null))
+        }
         ("POST", ["webhooks", integration]) => {
             let customer = match *integration {
                 "bauwerk-ag" => "10001001",
@@ -669,8 +679,10 @@ async fn actions_reach_dispatch_and_the_broker_in_their_traces_or_are_refused() 
     assert_eq!(log[0].action, "Re-plan");
     assert_eq!(log[0].outcome, "plan v1");
     assert!(
-        log.iter()
-            .any(|e| e.action == "Delay" && e.trace_id.as_deref() == Some(&trace))
+        log.iter().any(|e| e.action == "Delay"
+            && e.outcome == "nothing changed"
+            && e.trace_id.as_deref() == Some(&trace)),
+        "a delay that moves no load says so: {log:?}"
     );
     assert!(
         log.iter()
@@ -777,6 +789,35 @@ async fn make_chaos_orders_waits_for_the_plan_and_the_plant_then_cuts_and_report
             .all(|p| p.traceparent.as_ref().is_some_and(|tp| tp.contains(&trace))),
         "the run's calls are in the action's trace"
     );
+}
+
+/// The page tells how far a failed run got from what the run filled in, so it fills in a step's
+/// fields only once that step has worked.
+#[tokio::test]
+async fn a_failed_run_fills_in_only_the_steps_it_finished() {
+    let s = setup(Duration::from_secs(1)).await;
+    ready_for_chaos(&s).await;
+    let run = || s.console.snapshot().uplink.run.unwrap();
+
+    s.fake().refuse_orders = true;
+    s.console.make_chaos().unwrap();
+    until("the first run to end", || !run().active()).await;
+    let failed = run();
+    assert_eq!(failed.step, Step::Failed, "{:?}", failed.report);
+    assert!(failed.orders.is_empty(), "no order was placed");
+
+    {
+        let mut fake = s.fake();
+        fake.refuse_orders = false;
+        fake.fail_patches = true;
+    }
+    s.console.make_chaos().unwrap();
+    until("the second run to end", || !run().active()).await;
+    let failed = run();
+    assert_eq!(failed.step, Step::Failed, "{:?}", failed.report);
+    assert_eq!(failed.orders.len(), 3);
+    assert!(failed.cut_until.is_some(), "the cut was tried");
+    assert_eq!(failed.held, None, "no cut, so nothing was held back");
 }
 
 #[tokio::test]

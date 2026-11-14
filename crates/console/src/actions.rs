@@ -449,7 +449,8 @@ impl Console {
     }
 
     /// Logs the action with its trace, counts it, and gives the answer its trace id. A Make chaos
-    /// that starts is logged as started, and counted when its run ends.
+    /// that starts is logged as started, and counted when its run ends. A delay that makes no plan
+    /// version moved no load, so it is logged as nothing changed.
     fn finish(
         &self,
         name: &'static str,
@@ -462,6 +463,9 @@ impl Console {
         let started = name == "make_chaos" && outcome.is_ok();
         let (result, text) = match &outcome {
             Ok(_) if started => ("done", "started".to_owned()),
+            Ok(done) if name == "delay_site" && done.version.is_none() => {
+                ("done", "nothing changed".to_owned())
+            }
             Ok(done) => (
                 "done",
                 done.version
@@ -512,11 +516,17 @@ impl Console {
         let orders =
             rush_orders(&self.seed, plant, MIX, domain::clock::now()).map_err(|e| e.to_string())?;
         let ids: Vec<String> = orders.iter().map(|o| o.id.clone()).collect();
-        self.change("uplink", |s| s.run(|run| run.orders = ids.clone()));
         for order in &orders {
             self.place(order).await?;
         }
-        self.change("uplink", |s| s.run(|run| run.step = Step::Planning));
+        // A step's fields are filled in once it worked: the page tells from them how far a failed
+        // run got.
+        self.change("uplink", |s| {
+            s.run(|run| {
+                run.step = Step::Planning;
+                run.orders = ids.clone();
+            })
+        });
         let version = self.until_planned(&ids).await?;
         self.change("uplink", |s| {
             s.run(|run| {
@@ -548,14 +558,10 @@ impl Console {
         // Nothing leaves the outbox during the cut, so what waits at its end is what it held back.
         let held = self.outbox();
         // Out of the cut before the uplink comes back, so Reconnect refuses from now on.
-        self.change("uplink", |s| {
-            s.run(|run| {
-                run.step = Step::Draining;
-                run.held = held;
-            })
-        });
+        self.change("uplink", |s| s.run(|run| run.step = Step::Draining));
         self.restore().await?;
         cut?;
+        self.change("uplink", |s| s.run(|run| run.held = held));
         let drained = self.until_drained().await?;
         Ok(match held {
             Some(held) if held > 0 => format!(
