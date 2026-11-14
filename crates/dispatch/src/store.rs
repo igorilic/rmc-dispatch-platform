@@ -27,6 +27,37 @@ use crate::redispatch::{Diff, Trigger};
 /// Deliveries older than this are long discharged: they freeze nothing and delay nothing.
 pub const DELIVERY_WINDOW: TimeDelta = TimeDelta::hours(12);
 
+/// What a map starts from: each plant's status, each truck's latest reported status and position
+/// with their report times, and the latest plan version. Names, sites and capacities are master
+/// data, in the seed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct WorldState {
+    /// The world clock's time, which `CLOCK_OFFSET_HOURS` shifts like every report time here.
+    pub now: DateTime<Utc>,
+    /// The latest stored plan version; `None` before the first plan.
+    pub plan_version: Option<i64>,
+    pub plants: Vec<PlantState>,
+    pub trucks: Vec<TruckState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct PlantState {
+    pub id: PlantId,
+    pub status: PlantStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct TruckState {
+    pub id: TruckId,
+    /// The seed's status until the first report.
+    pub status: TruckStatus,
+    /// When the status was reported; `None` before the first report.
+    pub status_at: Option<DateTime<Utc>>,
+    /// The latest GPS fix; `None` before the first.
+    pub position: Option<Location>,
+    pub position_at: Option<DateTime<Utc>>,
+}
+
 /// A stored plan: its version, what it replaced, and why.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct VersionedPlan {
@@ -350,6 +381,46 @@ impl Store {
             trucks,
             sites,
             mixes,
+        })
+    }
+
+    /// The live state of plants and trucks and the latest plan version, as of `now`.
+    pub async fn world_state(&self, now: DateTime<Utc>) -> Result<WorldState, StoreError> {
+        let plants = sqlx::query!("SELECT id, status FROM plants ORDER BY id")
+            .fetch_all(&self.pool)
+            .await?
+            .into_iter()
+            .map(|r| {
+                Ok(PlantState {
+                    id: PlantId(r.id),
+                    status: parse(&r.status)?,
+                })
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        let trucks = sqlx::query!(
+            "SELECT id, status, status_at, lat, lon, position_at FROM trucks ORDER BY id"
+        )
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|r| {
+            Ok(TruckState {
+                id: TruckId(r.id),
+                status: parse(&r.status)?,
+                status_at: r.status_at,
+                position: r.lat.zip(r.lon).map(|(lat, lon)| Location { lat, lon }),
+                position_at: r.position_at,
+            })
+        })
+        .collect::<Result<Vec<_>, StoreError>>()?;
+        let plan_version = sqlx::query_scalar!("SELECT max(version) FROM plans")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(WorldState {
+            now,
+            plan_version,
+            plants,
+            trucks,
         })
     }
 

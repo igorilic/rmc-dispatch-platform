@@ -47,7 +47,7 @@ pub struct OrderId(pub String);
 pub struct MixCode(pub String);
 
 /// WGS84 coordinates in decimal degrees.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Location {
     pub lat: f64,
     pub lon: f64,
@@ -90,7 +90,7 @@ pub struct Plant {
     pub status: PlantStatus,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TruckStatus {
     Available,

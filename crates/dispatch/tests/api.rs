@@ -18,7 +18,8 @@ use dispatch::travel::HaversineTravelTime;
 use dispatch::verify::violations;
 use dispatch::worker;
 use domain::{
-    DeliveryStatus, Load, LoadRef, Order, OrderStatus, PlantId, PlantPlan, PlantStatus, Seed,
+    DeliveryStatus, Load, LoadRef, Location, Order, OrderStatus, PlantId, PlantPlan, PlantStatus,
+    Seed, TruckId, TruckStatus,
 };
 use serde_json::{Value, json};
 use telemetry::testing::{SpanData, capture};
@@ -241,6 +242,7 @@ async fn the_openapi_document_lists_every_route() {
             "/plants/{id}/plan",
             "/plants/{id}/status",
             "/sites/{id}/delays",
+            "/world",
         ]
     );
     for schema in [
@@ -550,4 +552,48 @@ async fn callers_through_the_ingress_and_untraced_ones_start_their_own_traces() 
         spans.iter().all(|s| s.name != "http request"),
         "no request span without a trusted traceparent"
     );
+}
+
+#[tokio::test]
+async fn the_world_has_each_trucks_latest_report_and_the_plan_version() {
+    let s = setup(&[order("BW-1", 18.0, at(9, 0))]).await;
+    let truck = TruckId("truck-07".into());
+    let (status_at, position_at) = (at(5, 10), at(5, 11));
+    s.store
+        .report_truck_status(&truck, TruckStatus::EnRoute, status_at)
+        .await
+        .unwrap();
+    let fix = Location {
+        lat: 49.42,
+        lon: 8.6,
+    };
+    s.store
+        .report_truck_position(&truck, fix, position_at)
+        .await
+        .unwrap();
+    assert_eq!(
+        call(&s.router, "POST", "/plans").await.status,
+        StatusCode::CREATED
+    );
+
+    let reply = call(&s.router, "GET", "/world").await;
+    assert_eq!(reply.status, StatusCode::OK);
+    let world: Value = reply.json();
+    let time = |v: &Value| v.as_str().unwrap().parse::<DateTime<Utc>>().unwrap();
+    assert_eq!(time(&world["now"]), clock(), "the world clock's time");
+    assert_eq!(world["plan_version"], json!(1));
+    let plants = world["plants"].as_array().unwrap();
+    assert_eq!(plants.len(), 3);
+    assert!(plants.iter().all(|p| p["status"] == "online"));
+
+    let trucks = world["trucks"].as_array().unwrap();
+    assert_eq!(trucks.len(), 25);
+    let reported = trucks.iter().find(|t| t["id"] == "truck-07").unwrap();
+    assert_eq!(reported["status"], "en_route");
+    assert_eq!(time(&reported["status_at"]), status_at);
+    assert_eq!(reported["position"], json!({ "lat": 49.42, "lon": 8.6 }));
+    assert_eq!(time(&reported["position_at"]), position_at);
+    let silent = trucks.iter().find(|t| t["id"] == "truck-08").unwrap();
+    assert_eq!(silent["status_at"], Value::Null, "no report yet");
+    assert_eq!(silent["position"], Value::Null);
 }

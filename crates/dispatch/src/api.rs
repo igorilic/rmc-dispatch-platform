@@ -20,7 +20,7 @@ use utoipa::{IntoParams, OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::redispatch::{Diff, Trigger};
-pub use crate::store::VersionedPlan;
+pub use crate::store::{PlantState, TruckState, VersionedPlan, WorldState};
 use crate::store::{Store, StoreError};
 use crate::worker::Jobs;
 
@@ -66,16 +66,18 @@ pub struct SiteDelay {
         get_diff,
         plant_plan,
         set_plant_status,
-        delay_site
+        delay_site,
+        world
     )
 )]
 struct ApiDoc;
 
 /// The API's routes. Planning goes through the re-dispatch worker behind `jobs`. `clock` says
-/// when "today" ends for site delays; the service passes `Utc::now`.
+/// when "today" ends for site delays, and is `/world`'s time; the service passes the world clock.
 pub fn router(store: Store, jobs: Jobs, clock: fn() -> DateTime<Utc>) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/world", get(world))
         .route("/orders", get(list_orders))
         .route("/orders/{customer}/{order_ref}", get(get_order))
         .route("/plans", post(create_plan))
@@ -117,6 +119,14 @@ async fn trace_context(request: Request, next: Next) -> Response {
 fn internal(e: StoreError) -> StatusCode {
     error!(error = %e, "store failed");
     StatusCode::INTERNAL_SERVER_ERROR
+}
+
+/// The live state of plants and trucks, and the latest plan version: where a map starts before
+/// any event arrives.
+#[utoipa::path(get, path = "/world", responses((status = 200, body = WorldState)))]
+async fn world(State(s): State<AppState>) -> Result<Json<WorldState>, StatusCode> {
+    let state = s.store.world_state((s.clock)()).await;
+    Ok(Json(state.map_err(internal)?))
 }
 
 #[utoipa::path(get, path = "/healthz", responses((status = 200, body = String)))]
