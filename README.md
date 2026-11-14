@@ -391,9 +391,9 @@ ports that stay inside the compose networks:
 | `pourline_edge_tickets_total{plant, outcome}` | Tickets `queued` into the outbox and `sent` from it |
 
 The plan gauges always describe the current version. Dispatch sets them again from the latest
-stored version when it starts. The “Dispatch overview” dashboard lives in
-`deploy/grafana/dashboards/`: edit the JSON, not the UI. A test fails if it queries a metric that
-no service defines.
+stored version when it starts. The “Dispatch overview” dashboard lives in the chart, in
+`deploy/helm/pourline/files/grafana/dashboards/`, and compose mounts it from there: edit the JSON,
+not the UI. A test fails if it queries a metric that no service defines.
 
 | Variable | Default |
 |---|---|

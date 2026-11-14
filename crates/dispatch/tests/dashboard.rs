@@ -30,7 +30,7 @@ fn plant_agent_names() -> Vec<String> {
 #[test]
 fn the_dashboard_only_queries_metrics_the_services_define() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../deploy/grafana/dashboards/dispatch-overview.json");
+        .join("../../deploy/helm/pourline/files/grafana/dashboards/dispatch-overview.json");
     let dashboard = std::fs::read_to_string(&path).unwrap();
     let agent = plant_agent_names();
     let defined: Vec<&str> = ingest::metrics::NAMES
