@@ -11,12 +11,16 @@
 //! 8. rest (`available`)
 //!
 //! GPS is sent every 10 s while moving and every 60 s while parked. Drum state is sent on change
-//! and every 30 s, and status on change. Travel time is haversine distance × [`ROAD_FACTOR`] ÷
-//! [`AVG_SPEED_KMH`], ±10 %. A share of trips crosses a dead zone. Every trip goes to a random
-//! site: the trucks don't follow dispatch's plan yet (M7).
+//! and every 30 s, and status on change. A truck drives out and back along the road from its plant
+//! to the site ([`crate::roads`]), or the straight line without one, at a constant speed. A drive
+//! takes the haversine distance between its ends × [`ROAD_FACTOR`] ÷ [`AVG_SPEED_KMH`], ±10 %,
+//! whatever the road's length, so the speed it reports is the road's km over that time. A share
+//! of trips crosses a dead zone. Every trip goes to a random site: the trucks don't follow
+//! dispatch's plan yet (M7).
 //!
 //! A truck breaks down on command ([`TruckSim::breakdown`]), wherever it is: it reports
-//! `out_of_service`, stays put for [`FleetConfig::repair`], then drives back to its home plant.
+//! `out_of_service`, stays put for [`FleetConfig::repair`], then drives back to its home plant
+//! along the road it was on.
 
 use std::future::Future;
 use std::ops::Range;
@@ -35,6 +39,7 @@ use tracing::{debug, info};
 use crate::Clock;
 use crate::link::{Chaos, Modem, Outgoing};
 use crate::plant::PlantSim;
+use crate::roads::{Road, Roads};
 use domain::Seed;
 
 pub const ROAD_FACTOR: f64 = 1.3;
@@ -59,44 +64,50 @@ fn rpm(rotation: DrumRotation) -> f64 {
     }
 }
 
+/// One drive along a road, from `from_km` to `to_km` at a constant speed.
+#[derive(Debug, Clone)]
+struct Drive {
+    road: Arc<Road>,
+    from_km: f64,
+    to_km: f64,
+    duration: Duration,
+    dead_zone: Option<Range<Duration>>,
+}
+
+impl Drive {
+    /// How far along the road the truck is after `elapsed`.
+    fn km(&self, elapsed: Duration) -> f64 {
+        let f = (elapsed.as_secs_f64() / self.duration.as_secs_f64()).min(1.0);
+        self.from_km + (self.to_km - self.from_km) * f
+    }
+}
+
 #[derive(Debug, Clone)]
 enum Motion {
     Parked(Location),
-    Driving {
-        from: Location,
-        to: Location,
-        duration: Duration,
-        dead_zone: Option<Range<Duration>>,
-    },
+    Driving(Drive),
 }
 
 impl Motion {
     fn position(&self, elapsed: Duration) -> Location {
         match self {
             Motion::Parked(at) => *at,
-            Motion::Driving {
-                from, to, duration, ..
-            } => {
-                let f = (elapsed.as_secs_f64() / duration.as_secs_f64()).min(1.0);
-                Location {
-                    lat: from.lat + (to.lat - from.lat) * f,
-                    lon: from.lon + (to.lon - from.lon) * f,
-                }
+            Motion::Driving(drive) => drive.road.at(drive.km(elapsed)),
+        }
+    }
+
+    /// The distance driven along the road over the drive's time.
+    fn speed_kmh(&self) -> f64 {
+        match self {
+            Motion::Parked(_) => 0.0,
+            Motion::Driving(drive) => {
+                (drive.to_km - drive.from_km).abs() / (drive.duration.as_secs_f64() / 3600.0)
             }
         }
     }
 
-    fn speed_kmh(&self) -> f64 {
-        match self {
-            Motion::Parked(_) => 0.0,
-            Motion::Driving {
-                from, to, duration, ..
-            } => from.distance_km(*to) * ROAD_FACTOR / (duration.as_secs_f64() / 3600.0),
-        }
-    }
-
     fn in_dead_zone(&self, elapsed: Duration) -> bool {
-        matches!(self, Motion::Driving { dead_zone: Some(zone), .. } if zone.contains(&elapsed))
+        matches!(self, Motion::Driving(Drive { dead_zone: Some(zone), .. }) if zone.contains(&elapsed))
     }
 }
 
@@ -140,10 +151,12 @@ pub struct TruckSim {
     seq: u64,
     status: Option<TruckStatus>,
     rotation: Option<DrumRotation>,
-    /// The last reported position.
-    at: Location,
+    /// The road of the latest drive, its plant at km 0, and how far along it the truck is.
+    road: Arc<Road>,
+    km: f64,
     breakdown: Arc<Notify>,
     repair: Duration,
+    roads: Arc<Roads>,
 }
 
 impl TruckSim {
@@ -167,11 +180,18 @@ impl TruckSim {
             seq: 0,
             status: None,
             rotation: None,
-            at: home.plant.location,
+            road: Arc::new(Road::straight(home.plant.location, home.plant.location)),
+            km: 0.0,
             breakdown: Arc::new(Notify::new()),
             repair: config.repair,
+            roads: Arc::default(),
             home,
         }
+    }
+
+    /// Drives along `roads`. A pair without a road, or a truck without roads, drives straight.
+    pub fn with_roads(self, roads: Arc<Roads>) -> Self {
+        TruckSim { roads, ..self }
     }
 
     /// Notify it to break this truck down.
@@ -200,19 +220,19 @@ impl TruckSim {
         }
     }
 
-    /// Out of service where it stands, for the repair, then back to the home plant.
+    /// Out of service where it stands, for the repair, then back to the home plant along its road.
     async fn break_down(&mut self) -> anyhow::Result<()> {
         info!(truck = %self.truck.id.0, "broke down");
-        let (here, repair) = (self.at, self.repair);
+        let (road, km, repair) = (Arc::clone(&self.road), self.km, self.repair);
         self.phase(
             TruckStatus::OutOfService,
             DrumRotation::Idle,
-            Motion::Parked(here),
+            Motion::Parked(road.at(km)),
             sleep(repair),
         )
         .await?;
         info!(truck = %self.truck.id.0, "repaired, driving home");
-        let back = self.drive(here, self.home.plant.location);
+        let back = self.drive(road, km, 0.0);
         self.phase(
             TruckStatus::Returning,
             DrumRotation::Idle,
@@ -234,6 +254,10 @@ impl TruckSim {
         let site_at = self.world.geocoder.locate(site).with_context(|| {
             format!("ship-to {site_id} has neither coordinates nor a known postal code")
         })?;
+        let road = self
+            .roads
+            .between(&plant.plant.id, &site.id, plant_at, site_at);
+        let length = road.length();
         let mix = self
             .world
             .mixes
@@ -272,7 +296,7 @@ impl TruckSim {
         )
         .await?;
 
-        let out = self.drive(plant_at, site_at);
+        let out = self.drive(Arc::clone(&road), 0.0, length);
         self.phase(
             TruckStatus::EnRoute,
             DrumRotation::Mixing,
@@ -300,7 +324,7 @@ impl TruckSim {
         )
         .await?;
 
-        let back = self.drive(site_at, plant_at);
+        let back = self.drive(road, length, 0.0);
         self.phase(
             TruckStatus::Returning,
             DrumRotation::Idle,
@@ -323,8 +347,10 @@ impl TruckSim {
         Duration::from_secs(60 * self.rng.random_range(range))
     }
 
-    /// The motion for one drive and how long it takes, with an occasional dead zone.
-    fn drive(&mut self, from: Location, to: Location) -> (Motion, Duration) {
+    /// The motion along `road` from `from_km` to `to_km` and how long it takes, with an occasional
+    /// dead zone. The time comes from the drive's two ends, whatever the road's length.
+    fn drive(&mut self, road: Arc<Road>, from_km: f64, to_km: f64) -> (Motion, Duration) {
+        let (from, to) = (road.at(from_km), road.at(to_km));
         let hours =
             from.distance_km(to) * ROAD_FACTOR / AVG_SPEED_KMH * self.rng.random_range(0.9..1.1);
         let duration = Duration::try_from_secs_f64(hours * 3600.0)
@@ -339,12 +365,13 @@ impl TruckSim {
             start..start + length
         });
         (
-            Motion::Driving {
-                from,
-                to,
+            Motion::Driving(Drive {
+                road,
+                from_km,
+                to_km,
                 duration,
                 dead_zone,
-            },
+            }),
             duration,
         )
     }
@@ -375,7 +402,10 @@ impl TruckSim {
             .await?;
         }
 
-        let moving = matches!(motion, Motion::Driving { .. });
+        let moving = matches!(motion, Motion::Driving(_));
+        if let Motion::Driving(drive) = &motion {
+            self.road = Arc::clone(&drive.road);
+        }
         let started = Instant::now();
         tokio::pin!(until);
         let mut tick: u64 = 0;
@@ -389,9 +419,11 @@ impl TruckSim {
             } else {
                 self.flush_dead_zone().await?;
             }
-            self.at = motion.position(elapsed);
+            if let Motion::Driving(drive) = &motion {
+                self.km = drive.km(elapsed);
+            }
             if moving || tick.is_multiple_of(6) {
-                let at = self.at;
+                let at = motion.position(elapsed);
                 let gps = Gps {
                     lat: round(at.lat, 6),
                     lon: round(at.lon, 6),
@@ -411,7 +443,14 @@ impl TruckSim {
             }
             tick += 1;
             tokio::select! {
-                out = &mut until => return Ok(out),
+                out = &mut until => {
+                    // A finished drive leaves the truck at its end, even between ticks. It stays
+                    // there, parked, until its next drive, and a breakdown meanwhile starts there.
+                    if let Motion::Driving(drive) = &motion {
+                        self.km = drive.to_km;
+                    }
+                    return Ok(out);
+                }
                 () = sleep(TICK) => {}
             }
         }
@@ -457,6 +496,7 @@ fn round(x: f64, decimals: i32) -> f64 {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
+    use domain::{PlantId, SiteId};
     use serde_json::Value;
 
     struct Seen {
@@ -466,8 +506,12 @@ mod tests {
         received_ms: i64,
     }
 
-    /// Runs one truck until it is available again after its first trip.
-    async fn one_trip(world: Seed, dead_zone_trip_share: f64) -> (Vec<Seen>, Arc<Seed>) {
+    /// Runs one truck along `roads` until it is available again after its first trip.
+    async fn one_trip(
+        world: Seed,
+        roads: Roads,
+        dead_zone_trip_share: f64,
+    ) -> (Vec<Seen>, Arc<Seed>) {
         let world = Arc::new(world);
         let (tx, mut rx) = mpsc::channel(100_000);
         let clock = Clock::start(Utc.with_ymd_and_hms(2026, 11, 9, 6, 0, 0).unwrap());
@@ -479,7 +523,8 @@ mod tests {
             dead_zone_trip_share,
             repair: Duration::from_secs(3600),
         };
-        let sim = TruckSim::new(truck, plant, Arc::clone(&world), tx, clock, config, 7);
+        let sim = TruckSim::new(truck, plant, Arc::clone(&world), tx, clock, config, 7)
+            .with_roads(Arc::new(roads));
         let task = tokio::spawn(sim.run());
 
         let mut seen = Vec::new();
@@ -530,7 +575,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_trip_follows_the_lifecycle_and_the_travel_model() {
-        let (seen, world) = one_trip(Seed::rhine_neckar().unwrap(), 0.0).await;
+        let (seen, world) = one_trip(Seed::rhine_neckar().unwrap(), Roads::default(), 0.0).await;
         assert_eq!(statuses(&seen), LIFECYCLE);
 
         let seqs: Vec<u64> = seen
@@ -587,7 +632,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_dead_zone_delays_messages_but_loses_none() {
-        let (seen, _) = one_trip(Seed::rhine_neckar().unwrap(), 1.0).await;
+        let (seen, _) = one_trip(Seed::rhine_neckar().unwrap(), Roads::default(), 1.0).await;
         assert_eq!(statuses(&seen), LIFECYCLE);
 
         let seqs: Vec<u64> = seen
@@ -617,7 +662,7 @@ mod tests {
             .collect();
         assert!(!centroids.is_empty());
 
-        let (seen, _) = one_trip(world, 0.0).await;
+        let (seen, _) = one_trip(world, Roads::default(), 0.0).await;
         let on_site = seen
             .iter()
             .position(|s| s.body["status"] == "on_site")
@@ -689,5 +734,252 @@ mod tests {
             repaired - broke >= 3_600_000,
             "stays out of service for the repair"
         );
+    }
+
+    const SITE: &str = "50001001";
+
+    /// The seed with one site, north-east of truck-01's home plant, and an L-shaped road to it:
+    /// east along the plant's latitude, then north. Also returns the road's three points.
+    fn dog_leg() -> (Seed, Roads, [Location; 3]) {
+        let mut world = Seed::rhine_neckar().unwrap();
+        world.sites.retain(|s| s.id.0 == SITE);
+        let plant = world.plant("plant-mannheim").unwrap().location;
+        let site = world.sites[0].location.unwrap();
+        assert!(
+            site.lat > plant.lat && site.lon > plant.lon,
+            "the site lies north-east"
+        );
+        let corner = Location {
+            lat: plant.lat,
+            lon: site.lon,
+        };
+        let road = Road::new(vec![plant, corner, site]).unwrap();
+        let roads =
+            Roads::from_iter([(PlantId("plant-mannheim".into()), SiteId(SITE.into()), road)]);
+        (world, roads, [plant, corner, site])
+    }
+
+    fn loc(body: &Value) -> Location {
+        Location {
+            lat: body["lat"].as_f64().unwrap(),
+            lon: body["lon"].as_f64().unwrap(),
+        }
+    }
+
+    fn close(a: Location, b: Location) -> bool {
+        (a.lat - b.lat).abs() < 1e-9 && (a.lon - b.lon).abs() < 1e-9
+    }
+
+    /// Metres from `p` to the nearest point of `line`, on a flat projection around `p`.
+    fn off_m(p: Location, line: &[Location]) -> f64 {
+        const M_PER_DEGREE: f64 = 111_195.0;
+        let k = p.lat.to_radians().cos();
+        let xy = |l: Location| {
+            (
+                (l.lon - p.lon) * k * M_PER_DEGREE,
+                (l.lat - p.lat) * M_PER_DEGREE,
+            )
+        };
+        line.windows(2)
+            .map(|w| {
+                let ((ax, ay), (bx, by)) = (xy(w[0]), xy(w[1]));
+                let (dx, dy) = (bx - ax, by - ay);
+                let len2 = dx * dx + dy * dy;
+                let t = if len2 > 0.0 {
+                    (-(ax * dx + ay * dy) / len2).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                (ax + t * dx).hypot(ay + t * dy)
+            })
+            .fold(f64::INFINITY, f64::min)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_truck_drives_along_its_road_and_keeps_its_drive_time() {
+        let (world, roads, road) = dog_leg();
+        let [plant, corner, site] = road;
+        let (seen, _) = one_trip(world, roads, 0.0).await;
+        assert_eq!(statuses(&seen), LIFECYCLE);
+
+        let en_route = seen
+            .iter()
+            .position(|s| s.body["status"] == "en_route")
+            .unwrap();
+        let on_site = seen
+            .iter()
+            .position(|s| s.body["status"] == "on_site")
+            .unwrap();
+        let fixes: Vec<&Seen> = seen[en_route..on_site]
+            .iter()
+            .filter(|s| s.topic.ends_with("/gps"))
+            .collect();
+        assert!(fixes.len() > 2);
+        for fix in &fixes {
+            let at = loc(&fix.body);
+            assert!(off_m(at, &road) < 1.0, "{at:?} is off the road");
+        }
+        assert!(
+            fixes
+                .iter()
+                .any(|f| off_m(loc(&f.body), &[plant, site]) > 100.0),
+            "the truck drove the straight line"
+        );
+
+        // The drive takes the straight model's time, ±10 %, and the speed is the road's km over it.
+        let driven_ms = (ts_of_status(&seen, "on_site") - ts_of_status(&seen, "en_route")) as f64;
+        let nominal_ms = plant.distance_km(site) * ROAD_FACTOR / AVG_SPEED_KMH * 3_600_000.0;
+        let ratio = driven_ms / nominal_ms;
+        assert!(
+            (0.89..=1.11).contains(&ratio),
+            "drove {driven_ms} ms, model says {nominal_ms} ms"
+        );
+        let speed =
+            (plant.distance_km(corner) + corner.distance_km(site)) / (driven_ms / 3_600_000.0);
+        for fix in &fixes {
+            let reported = fix.body["speed_kmh"].as_f64().unwrap();
+            assert!(
+                (reported - speed).abs() < 0.06,
+                "reported {reported} km/h, drove {speed} km/h"
+            );
+        }
+
+        let parked = seen[on_site..]
+            .iter()
+            .find(|s| s.topic.ends_with("/gps"))
+            .unwrap();
+        assert!(
+            close(loc(&parked.body), site),
+            "the first fix on site is the site"
+        );
+
+        // The way back is the same road, from the site.
+        let returning = seen
+            .iter()
+            .position(|s| s.body["status"] == "returning")
+            .unwrap();
+        let back: Vec<Location> = seen[returning..]
+            .iter()
+            .filter(|s| s.topic.ends_with("/gps"))
+            .map(|s| loc(&s.body))
+            .collect();
+        assert!(
+            back.len() > 2 && close(back[0], site),
+            "the way back starts on site"
+        );
+        for at in &back {
+            assert!(off_m(*at, &road) < 1.0, "{at:?} is off the road back");
+        }
+
+        // The same seed on the straight line takes exactly as long: the time comes from the ends.
+        let (straight, _) = one_trip(dog_leg().0, Roads::default(), 0.0).await;
+        let straight_ms = ts_of_status(&straight, "on_site") - ts_of_status(&straight, "en_route");
+        assert!(
+            (driven_ms - straight_ms as f64).abs() <= 1.0,
+            "drove {driven_ms} ms along the road and {straight_ms} ms straight"
+        );
+    }
+
+    /// Where a truck broke down and parked, its fixes on the way home, and its first fix there.
+    struct Breakdown {
+        at: Location,
+        parked: Location,
+        way_home: Vec<Location>,
+        home: Location,
+    }
+
+    /// Runs truck-01 on the dog-leg road, breaks it down on the first GPS fix for which
+    /// `now(status, fix)` holds, and follows it home.
+    async fn break_down_when(now: impl Fn(&str, Location) -> bool) -> Breakdown {
+        let (world, roads, _) = dog_leg();
+        let world = Arc::new(world);
+        let (tx, mut rx) = mpsc::channel(100_000);
+        let clock = Clock::start(Utc.with_ymd_and_hms(2026, 11, 9, 6, 0, 0).unwrap());
+        let truck = world.trucks[0].clone();
+        let plant = world.plant(&truck.home_plant.0).unwrap().clone();
+        let plant = Arc::new(PlantSim::new(plant, tx.clone(), clock, Chaos::NONE, 1));
+        let config = FleetConfig {
+            chaos: Chaos::NONE,
+            dead_zone_trip_share: 0.0,
+            repair: Duration::from_secs(3600),
+        };
+        let sim = TruckSim::new(truck, plant, Arc::clone(&world), tx, clock, config, 7)
+            .with_roads(Arc::new(roads));
+        let breakdown = sim.breakdown();
+        let task = tokio::spawn(sim.run());
+
+        let mut status = String::new();
+        let (mut at, mut parked, mut way_home) = (None, None, Vec::new());
+        let home = loop {
+            let msg = rx.recv().await.unwrap();
+            if !msg.topic.starts_with("trucks/") {
+                continue;
+            }
+            let body: Value = serde_json::from_slice(&msg.payload).unwrap();
+            if let Some(s) = body["status"].as_str() {
+                status = s.to_owned();
+                continue;
+            }
+            if !msg.topic.ends_with("/gps") {
+                continue;
+            }
+            let fix = loc(&body);
+            match status.as_str() {
+                _ if at.is_none() && now(&status, fix) => {
+                    breakdown.notify_one();
+                    at = Some(fix);
+                }
+                "out_of_service" if parked.is_none() => parked = Some(fix),
+                "returning" => way_home.push(fix),
+                "available" if at.is_some() => break fix,
+                _ => {}
+            }
+        };
+        task.abort();
+        Breakdown {
+            at: at.unwrap(),
+            parked: parked.unwrap(),
+            way_home,
+            home,
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_broken_down_truck_drives_home_along_its_road() {
+        let (_, _, [plant, corner, _]) = dog_leg();
+        // It breaks down on its first fix at least 100 m past the corner, where retracing the road
+        // and driving straight home part ways.
+        let run = break_down_when(|status, fix| {
+            status == "en_route" && fix.lat > corner.lat && corner.distance_km(fix) >= 0.1
+        })
+        .await;
+        assert!(close(run.parked, run.at), "it parks where it broke down");
+        assert!(run.way_home.len() > 2);
+        for fix in &run.way_home {
+            assert!(
+                off_m(*fix, &[run.at, corner, plant]) < 1.0,
+                "{fix:?} is off the road home"
+            );
+        }
+        assert!(close(run.home, plant), "the first fix at home is the plant");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_truck_that_breaks_down_on_site_drives_the_whole_road_home() {
+        let (_, _, road) = dog_leg();
+        let [plant, _, site] = road;
+        let run = break_down_when(|status, _| status == "on_site").await;
+        assert!(
+            close(run.parked, site),
+            "it parks on site, where its drive ended"
+        );
+        assert!(
+            run.way_home.len() > 2 && close(run.way_home[0], site),
+            "it sets off from the site"
+        );
+        for fix in &run.way_home {
+            assert!(off_m(*fix, &road) < 1.0, "{fix:?} is off the road home");
+        }
+        assert!(close(run.home, plant), "the first fix at home is the plant");
     }
 }

@@ -8,6 +8,7 @@ pub mod fleet;
 pub mod link;
 pub mod orders;
 pub mod plant;
+pub mod roads;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use tokio::time::Instant;
