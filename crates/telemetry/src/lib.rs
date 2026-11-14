@@ -1,6 +1,7 @@
-//! Telemetry shared by ingest and dispatch (SPEC §8): console logs, spans exported to Jaeger over
+//! Telemetry shared by the services (SPEC §8): console logs, spans exported to Jaeger over
 //! OTLP/HTTP, Prometheus metrics on their own port, and the W3C trace context carried in NATS
-//! message headers, so one trace follows an event from ingest into dispatch.
+//! message headers, so one trace follows an event from ingest into dispatch. Where there are no
+//! NATS headers (HTTP, an MQTT payload), the context travels as a `traceparent` string.
 //!
 //! - Only the service's own spans are exported, at `info` and above. Library internals (NATS,
 //!   sqlx, hyper, the exporter's own HTTP calls) stay out. `RUST_LOG` controls the console only.
@@ -10,6 +11,7 @@
 //! - If Jaeger is unreachable, spans are dropped and the exporter logs a warning. Nothing waits
 //!   for tracing.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use async_nats::HeaderMap;
@@ -134,6 +136,25 @@ pub fn continue_trace(span: &Span, headers: Option<&HeaderMap>) {
     }
 }
 
+/// `span`'s trace context as a W3C `traceparent` value, for carriers other than NATS headers (an
+/// HTTP header, an MQTT payload), or `None` when it isn't traced.
+pub fn traceparent(span: &Span) -> Option<String> {
+    let mut carrier = HashMap::new();
+    TraceContextPropagator::new().inject_context(&span.context(), &mut carrier);
+    carrier.remove("traceparent")
+}
+
+/// Makes `span` a child of the trace in a W3C `traceparent` value. Call it before the span is
+/// first entered. A value that isn't a valid `traceparent` is ignored, and `span` stays a root.
+pub fn continue_from(span: &Span, traceparent: &str) {
+    let carrier = HashMap::from([("traceparent".to_owned(), traceparent.to_owned())]);
+    let cx = TraceContextPropagator::new().extract(&carrier);
+    if cx.span().span_context().is_valid() {
+        // Fails only when tracing is off for this span, or it already started (a bug the tests catch).
+        let _ = span.set_parent(cx);
+    }
+}
+
 /// The id of the trace `span` belongs to, as Jaeger shows it, or `None` when it isn't traced.
 pub fn trace_id(span: &Span) -> Option<String> {
     let cx = span.context();
@@ -248,6 +269,45 @@ mod tests {
         assert_eq!(
             named(&spans, "apply event").parent_span_id,
             opentelemetry::trace::SpanId::INVALID
+        );
+    }
+
+    #[test]
+    fn a_trace_crosses_a_traceparent_string() {
+        let (_guard, exporter) = capture();
+        let click = info_span!("console action");
+        let traceparent = traceparent(&click).unwrap();
+        let fetch = info_span!("plan sync");
+        continue_from(&fetch, &traceparent);
+        drop(fetch);
+        drop(click);
+
+        let spans = exporter.get_finished_spans().unwrap();
+        let (click, fetch) = (named(&spans, "console action"), named(&spans, "plan sync"));
+        assert_eq!(fetch.span_context.trace_id(), click.span_context.trace_id());
+        assert_eq!(fetch.parent_span_id, click.span_context.span_id());
+    }
+
+    #[test]
+    fn an_invalid_traceparent_string_leaves_a_root() {
+        let (_guard, exporter) = capture();
+        for (i, junk) in [
+            "",
+            "garbage",
+            "00-00000000000000000000000000000000-0000000000000000-01",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let span = info_span!("plan sync", i);
+            continue_from(&span, junk);
+        }
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 3);
+        assert!(
+            spans
+                .iter()
+                .all(|s| s.parent_span_id == opentelemetry::trace::SpanId::INVALID)
         );
     }
 
