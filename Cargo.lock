@@ -779,6 +779,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "console"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "axum",
+ "chrono",
+ "chrono-tz",
+ "domain",
+ "futures",
+ "http-body-util",
+ "ingest",
+ "metrics",
+ "reqwest",
+ "rumqttc",
+ "serde",
+ "serde_json",
+ "simulators",
+ "telemetry",
+ "testcontainers",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
