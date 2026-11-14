@@ -74,17 +74,22 @@ pub fn router(console: Arc<Console>) -> Router {
 /// The `Host` values a change may come with: `PUBLIC_URL`'s, and for `localhost` also
 /// `127.0.0.1` with the same port, and the other way round.
 pub fn allowed_hosts(public_url: &str) -> Vec<String> {
-    let rest = public_url
-        .split_once("://")
-        .map_or(public_url, |(_, rest)| rest);
-    let host = rest.split('/').next().unwrap_or_default().to_owned();
-    let twin = if let Some(port) = host.strip_prefix("localhost") {
-        Some(format!("127.0.0.1{port}"))
-    } else {
-        host.strip_prefix("127.0.0.1")
-            .map(|port| format!("localhost{port}"))
+    let Ok(url) = reqwest::Url::parse(public_url) else {
+        return Vec::new();
     };
-    std::iter::once(host).chain(twin).collect()
+    let Some(host) = url.host_str().map(str::to_ascii_lowercase) else {
+        return Vec::new();
+    };
+    // Browsers leave the scheme's default port out of Host, and Url::port does the same.
+    let port = url.port().map(|p| format!(":{p}")).unwrap_or_default();
+    let twin = match host.as_str() {
+        "localhost" => Some("127.0.0.1"),
+        "127.0.0.1" => Some("localhost"),
+        _ => None,
+    };
+    std::iter::once(format!("{host}{port}"))
+        .chain(twin.map(|twin| format!("{twin}{port}")))
+        .collect()
 }
 
 async fn guard(State(hosts): State<Arc<Vec<String>>>, request: Request, next: Next) -> Response {
@@ -92,8 +97,12 @@ async fn guard(State(hosts): State<Arc<Vec<String>>>, request: Request, next: Ne
         return next.run(request).await;
     }
     let headers = request.headers();
-    let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
-    if !headers.contains_key(ACTION_HEADER) || !host.is_some_and(|h| hosts.iter().any(|a| a == h)) {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .map(str::to_ascii_lowercase);
+    let allowed = host.is_some_and(|h| hosts.contains(&h));
+    if !headers.contains_key(ACTION_HEADER) || !allowed {
         let error = json!({ "error": "changes need the console's own page" });
         return (StatusCode::FORBIDDEN, Json(error)).into_response();
     }
@@ -144,7 +153,20 @@ async fn events(
             Some((event, (updates, connected)))
         },
     );
-    Sse::new(stream::once(async { first }).chain(changes).map(Ok))
+    // A stream that never ended would keep the server's graceful shutdown from finishing.
+    let mut shutdown = console.shutting_down();
+    let shut_down = async move {
+        // Only a shutdown ends the stream, not the console being dropped (as in a test).
+        if shutdown.wait_for(|stop| *stop).await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    };
+    Sse::new(
+        stream::once(async { first })
+            .chain(changes)
+            .take_until(shut_down)
+            .map(Ok),
+    )
 }
 
 async fn snapshot(State(console): State<Arc<Console>>) -> Response {
@@ -191,8 +213,19 @@ async fn delay_site(
     Path(id): Path<String>,
     body: Bytes,
 ) -> Response {
-    // The page always says 30 minutes; a bare POST means the same.
-    let minutes = serde_json::from_slice::<Delay>(&body).map_or(30, |d| d.minutes);
+    // A bare POST means 30 minutes; anything else must say how long, properly.
+    let minutes = if body.is_empty() {
+        30
+    } else {
+        match serde_json::from_slice::<Delay>(&body) {
+            Ok(delay) => delay.minutes,
+            Err(error) => {
+                let error =
+                    json!({ "error": format!("a delay is {{\"minutes\": 1 to 1440}}: {error}") });
+                return (StatusCode::BAD_REQUEST, Json(error)).into_response();
+            }
+        }
+    };
     answer(StatusCode::OK, console.delay_site(&id, minutes).await)
 }
 
@@ -281,6 +314,45 @@ mod tests {
             allowed_hosts("https://console.example.org/"),
             ["console.example.org"]
         );
+        assert_eq!(
+            allowed_hosts("http://LocalHost:80"),
+            ["localhost", "127.0.0.1"]
+        );
+        assert_eq!(
+            allowed_hosts("http://localhost.example.org:8080"),
+            ["localhost.example.org:8080"],
+            "no twin for a name that only starts like localhost"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_delay_must_say_how_long_or_say_nothing() {
+        for body in [
+            r#"{"minutes": -5}"#,
+            r#"{"minutes": "45"}"#,
+            r#"{"mins": 45}"#,
+        ] {
+            let request = axum::http::Request::post("/console/api/sites/50001012/delay")
+                .header(header::HOST, "localhost:8080")
+                .header(ACTION_HEADER, "1")
+                .body(Body::from(body))
+                .unwrap();
+            assert_eq!(status(request).await, StatusCode::BAD_REQUEST, "{body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_stream_ends_at_shutdown() {
+        let console = console();
+        let request = axum::http::Request::get("/console/events")
+            .body(Body::empty())
+            .unwrap();
+        let response = router(Arc::clone(&console)).oneshot(request).await.unwrap();
+        let mut body = response.into_body();
+        assert!(body.frame().await.is_some(), "the snapshot");
+        console.shutdown().await;
+        let next = tokio::time::timeout(Duration::from_secs(5), body.frame()).await;
+        assert!(matches!(next, Ok(None)), "the stream ends");
     }
 
     #[tokio::test]

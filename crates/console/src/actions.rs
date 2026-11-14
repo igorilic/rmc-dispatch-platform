@@ -8,8 +8,9 @@
 //! Make chaos repeats `make chaos`'s steps inside the cluster: orders near the plant, a wait until
 //! the plant holds their plan, a cut of the plant's uplink (Toxiproxy closes both sides of every
 //! connection), and a report of the tickets that waited out the cut. Whatever happens during
-//! the cut, the uplink comes back.
+//! the cut, the uplink comes back: through Toxiproxy's reset, which re-enables every proxy.
 
+use std::collections::HashMap;
 use std::sync::{Arc, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -39,6 +40,9 @@ const PLANNING: Duration = Duration::from_secs(60);
 const DRAINING: Duration = Duration::from_secs(120);
 /// How often it tries to bring the uplink back before it gives up.
 const RESTORE_TRIES: u32 = 5;
+/// The longest id the log and the traces repeat. Seed ids are far shorter; anything longer came
+/// from a request that will be refused.
+const SHOWN: usize = 64;
 
 /// An action that went through: its trace, and the plan version it made, if it made one.
 #[derive(Debug, Clone, Serialize)]
@@ -72,16 +76,25 @@ fn refused(status: StatusCode, message: impl Into<String>) -> Refused {
     }
 }
 
+/// An id from a request, cut short for the log and the traces.
+fn shown(id: &str) -> String {
+    match id.char_indices().nth(SHOWN) {
+        Some((end, _)) => format!("{}…", &id[..end]),
+        None => id.to_owned(),
+    }
+}
+
 impl Console {
     /// Breaks a simulated truck down, unless it is out of service already or its breakdown is on
     /// its way: a second command would break it again right after its repair.
     pub async fn break_down(&self, truck: &str) -> Outcome {
-        let span = info_span!("console action", action = "break_down", target = truck);
+        let target = shown(truck);
+        let span = info_span!("console action", action = "break_down", target = %target);
         let outcome = async {
             if self.seed.truck(truck).is_none() {
                 return Err(refused(
                     StatusCode::BAD_REQUEST,
-                    format!("{truck} isn't a truck"),
+                    format!("{target} isn't a truck"),
                 ));
             }
             let out = self
@@ -95,43 +108,48 @@ impl Console {
                     format!("{truck} is already out of service"),
                 ));
             }
-            if self
-                .pending()
-                .get(truck)
-                .is_some_and(|at| at.elapsed() < PENDING)
-            {
-                return Err(refused(
-                    StatusCode::CONFLICT,
-                    format!("{truck}'s breakdown is on its way"),
-                ));
-            }
             if !self.mqtt_up() {
                 return Err(refused(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "the console's MQTT link is down",
                 ));
             }
+            // Checked and marked under one lock, so two clicks at once send one command.
+            {
+                let mut pending = self.pending();
+                if pending.get(truck).is_some_and(|at| at.elapsed() < PENDING) {
+                    return Err(refused(
+                        StatusCode::CONFLICT,
+                        format!("{truck}'s breakdown is on its way"),
+                    ));
+                }
+                pending.insert(truck.to_owned(), Instant::now());
+            }
             let topic = domain::breakdown_topic(&TruckId(truck.to_owned()));
-            self.mqtt
+            if let Err(e) = self
+                .mqtt
                 .publish(topic, QoS::AtLeastOnce, false, Vec::new())
                 .await
-                .map_err(|e| refused(StatusCode::SERVICE_UNAVAILABLE, e.to_string()))?;
-            self.pending().insert(truck.to_owned(), Instant::now());
+            {
+                self.pending().remove(truck);
+                return Err(refused(StatusCode::SERVICE_UNAVAILABLE, e.to_string()));
+            }
             Ok(Done::new())
         }
         .instrument(span.clone())
         .await;
-        self.finish("break_down", "Break down", truck, &span, outcome)
+        self.finish("break_down", "Break down", &target, &span, outcome)
     }
 
     /// Delays a site's pours today by `minutes`.
     pub async fn delay_site(&self, site: &str, minutes: u32) -> Outcome {
-        let span = info_span!("console action", action = "delay_site", target = site);
+        let shown_site = shown(site);
+        let span = info_span!("console action", action = "delay_site", target = %shown_site);
         let outcome = async {
             if self.seed.site(site).is_none() {
                 return Err(refused(
                     StatusCode::BAD_REQUEST,
-                    format!("{site} isn't a site"),
+                    format!("{shown_site} isn't a site"),
                 ));
             }
             if !(1..=1440).contains(&minutes) {
@@ -150,18 +168,19 @@ impl Console {
         }
         .instrument(span.clone())
         .await;
-        let target = format!("{site}, {minutes} min");
+        let target = format!("{shown_site}, {minutes} min");
         self.finish("delay_site", "Delay", &target, &span, outcome)
     }
 
     /// Takes a plant offline or brings it back.
     pub async fn set_plant_status(&self, plant: &str, status: PlantStatus) -> Outcome {
-        let span = info_span!("console action", action = "plant_status", target = plant);
+        let target = shown(plant);
+        let span = info_span!("console action", action = "plant_status", target = %target);
         let outcome = async {
             if self.seed.plant(plant).is_none() {
                 return Err(refused(
                     StatusCode::BAD_REQUEST,
-                    format!("{plant} isn't a plant"),
+                    format!("{target} isn't a plant"),
                 ));
             }
             let body = json!({ "status": status });
@@ -180,7 +199,7 @@ impl Console {
             PlantStatus::Online => "Bring online",
             PlantStatus::Offline => "Take offline",
         };
-        self.finish("plant_status", label, plant, &span, outcome)
+        self.finish("plant_status", label, &target, &span, outcome)
     }
 
     /// Plans everything that isn't frozen again.
@@ -202,12 +221,13 @@ impl Console {
     /// is down: the broker would drop the command, and the agent fetches within its poll interval
     /// of reconnecting anyway.
     pub async fn sync_plant(&self, plant: &str) -> Outcome {
-        let span = info_span!("console action", action = "sync", target = plant);
+        let target = shown(plant);
+        let span = info_span!("console action", action = "sync", target = %target);
         let outcome = async {
             if plant != self.settings.plant.0 || self.settings.plant_agent_url.is_none() {
                 return Err(refused(
                     StatusCode::BAD_REQUEST,
-                    format!("{plant} has no edge agent the console watches"),
+                    format!("{target} has no edge agent the console watches"),
                 ));
             }
             let (connected, name) = {
@@ -245,7 +265,7 @@ impl Console {
         }
         .instrument(span.clone())
         .await;
-        self.finish("sync", "Sync now", plant, &span, outcome)
+        self.finish("sync", "Sync now", &target, &span, outcome)
     }
 
     /// Starts Make chaos and returns at once; the run reports its steps on the uplink card.
@@ -253,6 +273,7 @@ impl Console {
         let plant = self.settings.plant.0.clone();
         let span = info_span!("console action", action = "make_chaos", target = %plant);
         let trace_id = telemetry::trace_id(&span);
+        let ready = self.uplink_ready();
         let mut refusal = None;
         self.change("uplink", |s| {
             let check = if !s.uplink.available {
@@ -264,6 +285,13 @@ impl Console {
                 Err(refused(
                     StatusCode::CONFLICT,
                     "Make chaos is already running",
+                ))
+            } else if !ready {
+                Err(refused(StatusCode::CONFLICT, "the uplink isn't ready yet"))
+            } else if s.uplink.cut {
+                Err(refused(
+                    StatusCode::CONFLICT,
+                    "the uplink is cut already: press Reconnect first",
                 ))
             } else if !s.edge.as_ref().is_some_and(|e| e.reachable) {
                 Err(refused(StatusCode::CONFLICT, "the plant doesn't answer"))
@@ -309,16 +337,16 @@ impl Console {
             };
             match step {
                 Some(Step::Cut) => {
-                    self.reconnect.notify_one();
+                    // Wakes the run's wait, and stores nothing if the wait is already over.
+                    self.reconnect.notify_waiters();
                     Ok(Done::new())
                 }
                 Some(_) => Err(refused(
                     StatusCode::CONFLICT,
-                    "Make chaos hasn't cut the uplink yet",
+                    "Make chaos isn't cutting the uplink now",
                 )),
                 None if cut => {
-                    let names = self.uplink_names().await?;
-                    self.restore(&names)
+                    self.restore()
                         .await
                         .map_err(|e| refused(StatusCode::BAD_GATEWAY, e))?;
                     Ok(Done::new())
@@ -334,10 +362,8 @@ impl Console {
     /// A plant's slice of the latest plan, for its popup.
     pub async fn plant_plan(&self, plant: &str) -> Result<Value, Refused> {
         if self.seed.plant(plant).is_none() {
-            return Err(refused(
-                StatusCode::BAD_REQUEST,
-                format!("{plant} isn't a plant"),
-            ));
+            let message = format!("{} isn't a plant", shown(plant));
+            return Err(refused(StatusCode::BAD_REQUEST, message));
         }
         self.read(&format!("/plants/{plant}/plan")).await
     }
@@ -345,10 +371,8 @@ impl Console {
     /// A site's orders that start today, Berlin time on the world clock, for its popup.
     pub async fn site_orders(&self, site: &str) -> Result<Value, Refused> {
         if self.seed.site(site).is_none() {
-            return Err(refused(
-                StatusCode::BAD_REQUEST,
-                format!("{site} isn't a site"),
-            ));
+            let message = format!("{} isn't a site", shown(site));
+            return Err(refused(StatusCode::BAD_REQUEST, message));
         }
         let today = domain::clock::now().with_timezone(&Berlin).date_naive();
         let midnight = |day: chrono::NaiveDate| {
@@ -377,8 +401,12 @@ impl Console {
         self.pending().remove(truck);
     }
 
-    fn pending(&self) -> MutexGuard<'_, std::collections::HashMap<String, Instant>> {
+    fn pending(&self) -> MutexGuard<'_, HashMap<String, Instant>> {
         self.pending.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn uplink_ready(&self) -> bool {
+        self.uplink_ready.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Calls dispatch for an action and returns its JSON, or why it didn't work.
@@ -420,7 +448,8 @@ impl Console {
         Ok(reply.body)
     }
 
-    /// Logs the action with its trace, counts it, and gives the answer its trace id.
+    /// Logs the action with its trace, counts it, and gives the answer its trace id. A Make chaos
+    /// that starts is logged as started, and counted when its run ends.
     fn finish(
         &self,
         name: &'static str,
@@ -430,7 +459,9 @@ impl Console {
         outcome: Outcome,
     ) -> Outcome {
         let trace_id = telemetry::trace_id(span);
+        let started = name == "make_chaos" && outcome.is_ok();
         let (result, text) = match &outcome {
+            Ok(_) if started => ("done", "started".to_owned()),
             Ok(done) => (
                 "done",
                 done.version
@@ -439,7 +470,9 @@ impl Console {
             Err(r) if r.status.is_server_error() => ("failed", r.message.clone()),
             Err(r) => ("refused", r.message.clone()),
         };
-        metrics::action(name, result);
+        if !started {
+            metrics::action(name, result);
+        }
         self.log(label, target, &text, trace_id.clone());
         outcome.map(|done| Done { trace_id, ..done })
     }
@@ -457,9 +490,9 @@ impl Console {
 
     async fn chaos(self: Arc<Self>, span: Span) {
         let result = self.chaos_steps().instrument(span.clone()).await;
-        let (step, report) = match result {
-            Ok(report) => (Step::Done, report),
-            Err(error) => (Step::Failed, error),
+        let (step, outcome, report) = match result {
+            Ok(report) => (Step::Done, "done", report),
+            Err(error) => (Step::Failed, "failed", error),
         };
         self.change("uplink", |s| {
             s.run(|run| {
@@ -467,11 +500,14 @@ impl Console {
                 run.report = Some(report.clone());
             })
         });
+        metrics::action("make_chaos", outcome);
         let plant = self.settings.plant.0.clone();
         self.log("Make chaos", &plant, &report, telemetry::trace_id(&span));
     }
 
     async fn chaos_steps(&self) -> Result<String, String> {
+        // The uplink must answer before any order is placed.
+        let names = self.uplink_names().await.map_err(|r| r.message)?;
         let plant = &self.settings.plant.0;
         let orders =
             rush_orders(&self.seed, plant, MIX, domain::clock::now()).map_err(|e| e.to_string())?;
@@ -490,7 +526,10 @@ impl Console {
         });
         self.until_held(version).await?;
 
-        let names = self.uplink_names().await.map_err(|r| r.message)?;
+        // Listening for Reconnect before the card says the uplink is cut, so no click is missed.
+        let wake = self.reconnect.notified();
+        tokio::pin!(wake);
+        wake.as_mut().enable();
         let until =
             domain::clock::now() + TimeDelta::from_std(self.settings.cut).unwrap_or_default();
         self.change("uplink", |s| {
@@ -503,19 +542,20 @@ impl Console {
         if cut.is_ok() {
             tokio::select! {
                 () = sleep(self.settings.cut) => {}
-                () = self.reconnect.notified() => {}
+                () = &mut wake => {}
             }
         }
         // Nothing leaves the outbox during the cut, so what waits at its end is what it held back.
         let held = self.outbox();
-        self.restore(&names).await?;
-        cut?;
+        // Out of the cut before the uplink comes back, so Reconnect refuses from now on.
         self.change("uplink", |s| {
             s.run(|run| {
                 run.step = Step::Draining;
                 run.held = held;
             })
         });
+        self.restore().await?;
+        cut?;
         let drained = self.until_drained().await?;
         Ok(match held {
             Some(held) if held > 0 => format!(
@@ -652,6 +692,9 @@ impl Console {
     pub(crate) async fn uplink_proxies(&self) -> Result<Vec<(String, bool)>, String> {
         let url = format!("{}/proxies", self.uplink_url()?);
         let response = self.http.get(url).send().await.map_err(|e| e.to_string())?;
+        if !response.status().is_success() {
+            return Err(format!("the uplink answered {}", response.status()));
+        }
         let body = response.bytes().await.map_err(|e| e.to_string())?;
         let proxies: serde_json::Map<String, Value> =
             serde_json::from_slice(&body).map_err(|e| e.to_string())?;
@@ -690,11 +733,11 @@ impl Console {
         Ok(())
     }
 
-    /// Re-enables the proxies, trying a few times: a plant must never stay cut by mistake.
-    async fn restore(&self, names: &[String]) -> Result<(), String> {
+    /// Brings the whole uplink back, trying a few times: a plant must never stay cut by mistake.
+    async fn restore(&self) -> Result<(), String> {
         let mut tries = 0;
         loop {
-            match self.set_proxies(names, true).await {
+            match self.uplink_reset().await {
                 Ok(()) => return Ok(()),
                 Err(error) if tries + 1 < RESTORE_TRIES => {
                     warn!(%error, "bringing the uplink back, trying again");
@@ -708,5 +751,17 @@ impl Console {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_ids_are_cut_short_for_the_log() {
+        assert_eq!(shown("truck-07"), "truck-07");
+        let long = "x".repeat(400_000);
+        assert_eq!(shown(&long).chars().count(), SHOWN + 1);
     }
 }

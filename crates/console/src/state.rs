@@ -369,9 +369,17 @@ impl State {
         self.plan.as_ref().map(|p| p.version)
     }
 
-    /// A plan version, if it is newer than the one held. Returns it when it was.
+    /// A plan version, if it is newer than the one held, or the held version again with the
+    /// trace it lacked (a version caught up from `/world` before its announcement came). Returns
+    /// it when it was taken.
     pub fn plan(&mut self, plan: PlanView) -> Option<PlanView> {
-        if self.plan_version().is_some_and(|held| held >= plan.version) {
+        let taken = self.plan.as_ref().is_none_or(|held| {
+            held.version < plan.version
+                || (held.version == plan.version
+                    && held.trace_id.is_none()
+                    && plan.trace_id.is_some())
+        });
+        if !taken {
             return None;
         }
         self.plan = Some(plan.clone());
@@ -517,6 +525,17 @@ mod tests {
         assert!(s.plan(plan(2)).is_none(), "announced twice, pushed once");
         assert!(s.plan(plan(1)).is_none());
         assert_eq!(s.plan_version(), Some(2));
+
+        let traced = PlanView {
+            trace_id: Some("t".into()),
+            ..plan(2)
+        };
+        assert!(
+            s.plan(traced.clone()).is_some(),
+            "the trace a caught-up version lacked"
+        );
+        assert!(s.plan(traced).is_none());
+        assert!(s.plan(plan(2)).is_none(), "never loses its trace");
     }
 
     #[test]

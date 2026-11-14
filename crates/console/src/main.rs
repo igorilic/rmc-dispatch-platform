@@ -121,8 +121,14 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(config.http_addr).await?;
     info!(addr = %config.http_addr, "console listening at /console/");
+    let stopping = Arc::clone(&console);
     axum::serve(listener, console::http::router(console))
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            // Ends the pages' streams, which would otherwise keep the shutdown waiting, and
+            // brings back an uplink that Make chaos has cut.
+            stopping.shutdown().await;
+        })
         .await?;
     info!("shutting down");
     Ok(())

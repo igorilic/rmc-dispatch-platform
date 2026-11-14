@@ -44,7 +44,13 @@ function connect() {
   });
   stream.addEventListener("log", (e) => {
     world.log.unshift(JSON.parse(e.data));
+    world.log.length = Math.min(world.log.length, 50);
     render();
+  });
+  // Dispatch's plans were reset: start over with a fresh snapshot.
+  stream.addEventListener("reset", () => {
+    stream.close();
+    connect();
   });
   stream.onerror = () => {
     document.getElementById("status").textContent = "Reconnecting…";

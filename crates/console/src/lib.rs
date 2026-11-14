@@ -29,7 +29,7 @@ use reqwest::{Method, StatusCode};
 use rumqttc::{AsyncClient, EventLoop};
 use serde::Serialize;
 use serde_json::Value;
-use tokio::sync::{Notify, broadcast};
+use tokio::sync::{Notify, broadcast, watch};
 use tracing::Span;
 
 use crate::state::{Features, Links, Snapshot, State};
@@ -40,6 +40,9 @@ const BACKLOG: usize = 1024;
 
 /// How long a call to dispatch, a webhook or the uplink may take.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long the shutdown waits for the uplink to come back.
+const SHUTDOWN_RESET: Duration = Duration::from_secs(5);
 
 /// How long a poll of the edge agent may take. Short, so a cut-off plant shows as unreachable
 /// within one poll instead of when a dead TCP connection finally times out.
@@ -115,10 +118,19 @@ pub struct Console {
     mqtt_up: AtomicBool,
     /// Breakdowns sent and not yet seen as `out_of_service`.
     pending: Mutex<HashMap<String, Instant>>,
-    /// Asks for `/world` again, after a NATS reconnect.
+    /// Asks for `/world` again: after a NATS reconnect, and after the EVENTS consumer had to
+    /// start over.
     resync: Notify,
-    /// Ends Make chaos's cut early.
+    /// Asks the EVENTS consumer to start over from each subject's last message: after a NATS
+    /// reconnect, when the stream may have been created anew and its sequence reset.
+    restart: Notify,
+    /// Ends Make chaos's cut early. Woken with `notify_waiters`, which stores nothing, so a click
+    /// outside a cut can't end the next run's cut.
     reconnect: Notify,
+    /// Whether the uplink's startup reset went through, so Make chaos may start.
+    uplink_ready: AtomicBool,
+    /// Ends every page's stream at shutdown, so a graceful shutdown can finish.
+    shutdown: watch::Sender<bool>,
     /// When the console started, on the world clock: the event lag leaves out the replay of
     /// each subject's last event at startup.
     started: DateTime<Utc>,
@@ -144,7 +156,10 @@ impl Console {
             mqtt_up: AtomicBool::new(false),
             pending: Mutex::new(HashMap::new()),
             resync: Notify::new(),
+            restart: Notify::new(),
             reconnect: Notify::new(),
+            uplink_ready: AtomicBool::new(false),
+            shutdown: watch::channel(false).0,
             started: domain::clock::now(),
         }))
     }
@@ -179,9 +194,32 @@ impl Console {
         self.snapshot_of(&self.state())
     }
 
-    /// Reads `/world` again, as after a NATS reconnect.
+    /// What a NATS reconnect calls for: the EVENTS consumer starts over from each subject's
+    /// last message, and `/world` is read again, for anything missed while the link was down.
     pub fn resync(&self) {
+        self.restart.notify_one();
         self.resync.notify_one();
+    }
+
+    /// Ends every page's stream, so the server's graceful shutdown can finish, and brings back
+    /// the uplink if Make chaos has it cut: a console that is going away mustn't leave the plant
+    /// cut off.
+    pub async fn shutdown(&self) {
+        self.shutdown.send_replace(true);
+        let cut = {
+            let state = self.state();
+            state.uplink.cut || state.uplink.run.as_ref().is_some_and(state::Run::active)
+        };
+        if cut && self.settings.uplink_url.is_some() {
+            let reset = tokio::time::timeout(SHUTDOWN_RESET, self.uplink_reset()).await;
+            if !matches!(reset, Ok(Ok(()))) {
+                tracing::warn!("couldn't bring the uplink back at shutdown");
+            }
+        }
+    }
+
+    fn shutting_down(&self) -> watch::Receiver<bool> {
+        self.shutdown.subscribe()
     }
 
     pub fn mqtt_up(&self) -> bool {

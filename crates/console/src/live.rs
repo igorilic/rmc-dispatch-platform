@@ -4,11 +4,13 @@
 //! - EVENTS: an ordered consumer on `events.trucks.>` and `events.plants.>` that starts at each
 //!   subject's last message, so every truck and plant has its latest event at once. Starting
 //!   there also sets the consumer's sequence right away, so a reconnect resumes from it instead
-//!   of replaying the whole stream.
-//! - `plans.updated`: each announced version's diff is fetched and pushed once, in the trace of the
-//!   re-dispatch that made it.
+//!   of replaying the whole stream. After a NATS reconnect it starts over, because the stream may
+//!   have been created anew with its sequence reset; `/world` fills in what it missed.
+//! - `plans.updated`: each announced version is pushed once, in the trace of the re-dispatch that
+//!   made it, and only once dispatch confirms it exists.
 //! - `/world`: read at startup, after every NATS reconnect and after each plan update. It brings
-//!   plant statuses, which no event announces, and any plan version core NATS dropped.
+//!   plant statuses, which no event announces, and any plan version core NATS dropped. A version
+//!   caught up this way has no trace to link; its own announcement, if it comes later, adds it.
 //! - The edge agent's `/status` and the uplink's proxies, polled.
 //! - A heartbeat with the world time, against which pages measure ages, and by which they notice
 //!   a dead stream.
@@ -22,7 +24,7 @@ use async_nats::jetstream::{self, consumer::DeliverPolicy, consumer::pull::Order
 use chrono::{DateTime, Utc};
 use domain::{Event, EventEnvelope, PLANS_UPDATED, PlanUpdated, TruckStatus};
 use futures::StreamExt;
-use reqwest::Method;
+use reqwest::{Method, StatusCode};
 use rumqttc::{EventLoop, Packet};
 use serde_json::{Value, json};
 use tokio::time::{MissedTickBehavior, interval, sleep};
@@ -39,10 +41,16 @@ const EVENTS: &str = "EVENTS";
 
 pub async fn follow_events(console: Arc<Console>, js: jetstream::Context) {
     loop {
-        if let Err(error) = events(&console, &js).await {
-            warn!(%error, "following EVENTS, trying again");
+        match events(&console, &js).await {
+            // A NATS reconnect: start over at once.
+            Ok(()) => {}
+            Err(error) => {
+                warn!(%error, "following EVENTS, trying again");
+                sleep(RETRY).await;
+            }
         }
-        sleep(RETRY).await;
+        // Whatever the old consumer would have brought, /world has.
+        console.resync.notify_one();
     }
 }
 
@@ -58,11 +66,18 @@ async fn events(console: &Console, js: &jetstream::Context) -> Result<(), String
         .map_err(|e| e.to_string())?;
     let mut messages = consumer.messages().await.map_err(|e| e.to_string())?;
     info!("following EVENTS");
-    while let Some(message) = messages.next().await {
-        let message = message.map_err(|e| e.to_string())?;
-        apply(console, &message.payload, message.headers.as_ref());
+    loop {
+        tokio::select! {
+            message = messages.next() => {
+                let Some(message) = message else {
+                    return Err("the EVENTS consumer ended".into());
+                };
+                let message = message.map_err(|e| e.to_string())?;
+                apply(console, &message.payload, message.headers.as_ref());
+            }
+            () = console.restart.notified() => return Ok(()),
+        }
     }
-    Err("the EVENTS consumer ended".into())
 }
 
 /// Applies one canonical event, in a span that continues its trace. Ingest marks GPS and drum
@@ -144,8 +159,9 @@ async fn announced(console: &Console, message: &async_nats::Message) {
     let span = info_span!("console push", event = "plan", version = announced.version);
     telemetry::continue_trace(&span, message.headers.as_ref());
     async {
+        let trace_id = telemetry::trace_id(&span);
         console
-            .load_plan(announced.version, announced.created_at, &span)
+            .load_plan(announced.version, announced.created_at, &span, trace_id)
             .await;
         // Plant statuses change along with plans, and nothing else announces them.
         if let Err(error) = console.load_world(Some(&span)).await {
@@ -156,7 +172,7 @@ async fn announced(console: &Console, message: &async_nats::Message) {
     .await;
 }
 
-/// Reads `/world` at startup, and again whenever [`Console::resync`] asks.
+/// Reads `/world` at startup, and again whenever it is asked to.
 pub async fn resync(console: Arc<Console>) {
     loop {
         while let Err(error) = console.load_world(None).await {
@@ -210,6 +226,7 @@ pub async fn watch_uplink(console: Arc<Console>, url: String) {
         warn!(%error, %url, "resetting the uplink, trying again");
         sleep(RETRY).await;
     }
+    console.uplink_ready.store(true, Ordering::Relaxed);
     info!(%url, "uplink reset");
     let mut tick = interval(console.settings.poll);
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -253,36 +270,58 @@ pub async fn drive_mqtt(console: Arc<Console>, mut eventloop: EventLoop) {
 }
 
 impl Console {
-    /// Fetches version `version`'s diff and pushes the plan, unless the console holds it already.
-    pub(crate) async fn load_plan(&self, version: i64, created_at: DateTime<Utc>, span: &Span) {
-        if self
-            .state()
-            .plan_version()
-            .is_some_and(|held| held >= version)
-        {
+    /// Pushes plan `version` once dispatch confirms it exists, with its diff, unless the console
+    /// holds it already. A version held without a trace takes `trace_id` when one comes.
+    /// Dispatch's trouble (a timeout, a 5xx) stores nothing: the next announcement or `/world`
+    /// read tries again.
+    pub(crate) async fn load_plan(
+        &self,
+        version: i64,
+        created_at: DateTime<Utc>,
+        span: &Span,
+        trace_id: Option<String>,
+    ) {
+        let wanted = |held: Option<&PlanView>| {
+            held.is_none_or(|held| {
+                held.version < version
+                    || (held.version == version && held.trace_id.is_none() && trace_id.is_some())
+            })
+        };
+        if !wanted(self.state().plan.as_ref()) {
             return;
         }
         let path = format!("/plans/{version}/diff");
         let diff = match self.dispatch(Method::GET, &path, None, Some(span)).await {
             Ok(reply) if reply.status.is_success() => reply.body,
-            // The first version has no diff.
-            Ok(_) => Value::Null,
+            // The first version has no diff, but it has to exist.
+            Ok(reply) if reply.status == StatusCode::NOT_FOUND => {
+                let path = format!("/plans/{version}");
+                match self.dispatch(Method::GET, &path, None, Some(span)).await {
+                    Ok(reply) if reply.status.is_success() => Value::Null,
+                    _ => return,
+                }
+            }
+            Ok(reply) => {
+                warn!(version, status = %reply.status, "fetching the plan's diff");
+                return;
+            }
             Err(error) => {
                 warn!(%error, version, "fetching the plan's diff");
-                Value::Null
+                return;
             }
         };
         let plan = PlanView {
             version,
             created_at,
             diff,
-            trace_id: telemetry::trace_id(span),
+            trace_id,
         };
         self.change("plan", |s| s.plan(plan));
     }
 
     /// Reads dispatch's `/world` and merges it, then catches up on a plan version the console
-    /// missed.
+    /// missed. When dispatch's latest version is older than the console's, its data was reset:
+    /// the console drops its plan and tells the pages to start over.
     pub(crate) async fn load_world(&self, span: Option<&Span>) -> Result<(), String> {
         let reply = self.dispatch(Method::GET, "/world", None, span).await?;
         if !reply.status.is_success() {
@@ -300,20 +339,39 @@ impl Console {
                 metrics::pushed(update.event);
                 let _ = self.updates.send(update);
             }
+            let held = state.plan_version();
+            if held.is_some_and(|held| world.plan_version.is_none_or(|latest| latest < held)) {
+                warn!(?held, latest = ?world.plan_version, "dispatch's plans went back: starting over");
+                state.plan = None;
+                let _ = self.updates.send(Update {
+                    event: "reset",
+                    data: "{}".into(),
+                });
+            }
         }
         let held = self.state().plan_version();
         if let Some(latest) = world.plan_version
             && held.is_none_or(|held| held < latest)
         {
+            // Its own trace is in an announcement the console never got.
+            let catch_up = info_span!("console catch-up", version = latest);
             let reply = self
-                .dispatch(Method::GET, &format!("/plans/{latest}"), None, span)
+                .dispatch(
+                    Method::GET,
+                    &format!("/plans/{latest}"),
+                    None,
+                    Some(&catch_up),
+                )
                 .await?;
+            if !reply.status.is_success() {
+                return Err(format!(
+                    "plan v{latest}: dispatch answered {}",
+                    reply.status
+                ));
+            }
             let created_at = serde_json::from_value(reply.body["created_at"].clone())
                 .map_err(|e| format!("plan v{latest}: {e}"))?;
-            let span = span
-                .cloned()
-                .unwrap_or_else(|| info_span!("console catch-up", version = latest));
-            self.load_plan(latest, created_at, &span).await;
+            self.load_plan(latest, created_at, &catch_up, None).await;
         }
         Ok(())
     }
