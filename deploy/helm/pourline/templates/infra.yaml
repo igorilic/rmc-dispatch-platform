@@ -125,8 +125,8 @@ spec:
   selector: { app: sftp }
   ports: [{ port: 2222 }]
 ---
-# Traces, so ingest and dispatch have somewhere to send their spans (SPEC §8). The UI is at
-# http://localhost:16686 after `kubectl --context k3d-cloud -n pourline port-forward svc/jaeger 16686`.
+# Traces, so the services have somewhere to send their spans (SPEC §8). The UI is at
+# http://localhost:8080/jaeger/ through the ingress.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -139,6 +139,9 @@ spec:
       containers:
         - name: jaeger
           image: jaegertracing/jaeger:2.23.0
+          # The UI under /jaeger, which the ingress forwards without stripping it. The flag merges
+          # onto Jaeger's built-in all-in-one config.
+          args: ["--set=extensions.jaeger_query.base_path=/jaeger"]
           ports: [{ containerPort: 16686 }, { containerPort: 4318 }]
           readinessProbe:
             httpGet: { path: /status, port: 13133 }

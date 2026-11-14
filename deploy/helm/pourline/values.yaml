@@ -35,3 +35,13 @@ mosquitto:
 # Everything but /webhooks/<name>, which each webhook integration adds, goes to dispatch.
 ingress:
   enabled: true
+
+# The address the browser uses for the cluster's ingress: Grafana's root URL, and the links from
+# the dashboard and the console.
+publicUrl: http://localhost:8080
+
+# The plant whose edge agent the cloud watches over its monitoring path (SPEC §9). make k8s sets
+# plantAddress to the plant node's IP; empty, as on kind, there is no plant to watch.
+edge:
+  plant: plant-walldorf
+  plantAddress: ""

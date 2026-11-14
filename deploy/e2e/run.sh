@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # make e2e (SPEC §12): the cloud chart and the three example customers on a fresh kind cluster,
-# then the demo scenario, then checks that a plan exists, that rheinbau's CronJob ingests, and
-# that the DLQ is empty. CI runs it on every push; locally it needs kind (brew install kind).
+# then the demo scenario, then checks that a plan exists, that rheinbau's CronJob ingests, that
+# the DLQ is empty and that Prometheus scrapes every service. CI runs it on every push; locally it needs kind (brew install kind).
 # It writes its kubeconfig under target/, so ~/.kube/config is never touched.
 #   E2E_KEEP=1    keeps the cluster afterwards (delete it with: kind delete cluster --name pourline-e2e)
 #   SKIP_BUILD=1  reuses the pourline/<service>:e2e images built last time
@@ -128,3 +128,17 @@ reported=$(kubectl -n "$NS" get customerintegrations \
   -o jsonpath='{range .items[*]}{.metadata.name}={.status.deadLetterCount} {end}')
 grep -qv '=[1-9]' <<<"$reported" || { echo "dead letters reported: $reported"; exit 1; }
 echo "✓ the DLQ is empty, and every integration reports 0 dead letters"
+
+# Prometheus finds the services in the namespace, the operator's webhook integration included.
+scraped() {
+  proxy prometheus:9090 'api/v1/targets?state=active' |
+    jq -r '[.data.activeTargets[] | select(.health == "up") | .labels.job] | unique | .[]'
+}
+deadline=$((SECONDS + 120))
+for job in ingest dispatch ingest-bauwerk-ag; do
+  until scraped | grep -qx "$job"; do
+    [ $SECONDS -lt $deadline ] || { echo "Prometheus doesn't scrape $job"; scraped; exit 1; }
+    sleep 5
+  done
+done
+echo "✓ Prometheus scrapes ingest, dispatch and ingest-bauwerk-ag"

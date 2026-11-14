@@ -95,8 +95,9 @@ spec:
             {{- end }}
 {{- if .Values.ingress.enabled }}
 ---
-# The cluster's ingress: http://localhost:8080 from the host with k3d, and http://cloud from the
-# plant cluster. Each webhook integration adds an Ingress of its own for /webhooks/<name>.
+# The cluster's ingress: http://localhost:8080 from the host with k3d. Dispatch takes everything
+# but /grafana, /jaeger and each webhook integration's /webhooks/<name>, which the operator adds
+# as an Ingress of its own.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -108,4 +109,11 @@ spec:
           - path: /
             pathType: Prefix
             backend: { service: { name: dispatch, port: { number: 8081 } } }
+          # Longer paths win in Traefik, and each of these serves under its own prefix.
+          - path: /grafana
+            pathType: Prefix
+            backend: { service: { name: grafana, port: { number: 3000 } } }
+          - path: /jaeger
+            pathType: Prefix
+            backend: { service: { name: jaeger, port: { number: 16686 } } }
 {{- end }}

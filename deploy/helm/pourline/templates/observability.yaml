@@ -1,0 +1,172 @@
+# Prometheus and Grafana in the cloud cluster (SPEC §8), with the same dashboard as compose.
+# Grafana is http://localhost:8080/grafana/ through the ingress; Prometheus stays inside the
+# cluster (kubectl port-forward svc/prometheus 9090 to look at it).
+#
+# Prometheus finds Pourline's pods in this namespace by their container port named `metrics`
+# (ingest, dispatch, the console), and the operator's ingest-<name> pods, which declare no ports,
+# by their app label. The plant's agent is a static target on its monitoring path when
+# edge.plantAddress is set. Nothing bumps these images: keep them equal to compose's pins.
+{{- define "pourline.prometheusConfig" }}
+global:
+  scrape_interval: 5s
+scrape_configs:
+  - job_name: pods
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces: { own_namespace: true }
+    relabel_configs:
+      - { source_labels: [__meta_kubernetes_pod_container_port_name], regex: metrics, action: keep }
+      - { source_labels: [__meta_kubernetes_pod_phase], regex: Running, action: keep }
+      - { source_labels: [__meta_kubernetes_pod_label_app], target_label: job }
+  - job_name: integrations
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces: { own_namespace: true }
+    relabel_configs:
+      - { source_labels: [__meta_kubernetes_pod_label_app], regex: "ingest-.+", action: keep }
+      - { source_labels: [__meta_kubernetes_pod_phase], regex: Running, action: keep }
+      - { source_labels: [__meta_kubernetes_pod_ip], target_label: __address__, replacement: "$1:9464" }
+      - { source_labels: [__meta_kubernetes_pod_label_app], target_label: job }
+{{- with .Values.edge.plantAddress }}
+  - job_name: plant-agent
+    static_configs:
+      - { targets: ["{{ . }}:9466"], labels: { plant: {{ $.Values.edge.plant | quote }} } }
+{{- end }}
+{{- end }}
+{{- $dashboard := .Files.Get "files/grafana/dashboards/dispatch-overview.json"
+  | replace "http://localhost:16686" (printf "%s/jaeger" .Values.publicUrl)
+  | replace "http://localhost:8081/swagger-ui/" (printf "%s/swagger-ui/" .Values.publicUrl) }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prometheus
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: prometheus
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: prometheus }
+subjects: [{ kind: ServiceAccount, name: prometheus }]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+data:
+  prometheus.yml: |
+{{- include "pourline.prometheusConfig" . | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+spec:
+  selector: { matchLabels: { app: prometheus } }
+  template:
+    metadata:
+      labels: { app: prometheus }
+      # Prometheus reads its config at startup, so a new one rolls the pod.
+      annotations: { checksum/config: {{ include "pourline.prometheusConfig" . | sha256sum }} }
+    spec:
+      serviceAccountName: prometheus
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.16.0
+          ports: [{ containerPort: 9090 }]
+          readinessProbe:
+            httpGet: { path: /-/ready, port: 9090 }
+            periodSeconds: 2
+          volumeMounts:
+            - { name: config, mountPath: /etc/prometheus, readOnly: true }
+            - { name: data, mountPath: /prometheus }
+      volumes:
+        - { name: config, configMap: { name: prometheus-config } }
+        - { name: data, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+spec:
+  selector: { app: prometheus }
+  ports: [{ port: 9090 }]
+---
+# Directories, not subPath files: CI's runner once failed to open a subPath-mounted config.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+data:
+  prometheus.yaml: |
+{{ .Files.Get "files/grafana/provisioning/datasources/prometheus.yaml" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+data:
+  pourline.yaml: |
+{{ .Files.Get "files/grafana/provisioning/dashboards/pourline.yaml" | indent 4 }}
+---
+# The dashboard's links point at compose's ports; here they point through the ingress.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+data:
+  dispatch-overview.json: |
+{{ $dashboard | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+spec:
+  selector: { matchLabels: { app: grafana } }
+  template:
+    metadata:
+      labels: { app: grafana }
+      # Grafana reads its provisioning at startup.
+      annotations:
+        checksum/config: {{ print (.Files.Get "files/grafana/provisioning/datasources/prometheus.yaml") (.Files.Get "files/grafana/provisioning/dashboards/pourline.yaml") $dashboard | sha256sum }}
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:13.3.1
+          env:
+            # Read-only without a login, as in compose; admin/admin edits.
+            - { name: GF_AUTH_ANONYMOUS_ENABLED, value: "true" }
+            - { name: GF_AUTH_ANONYMOUS_ORG_ROLE, value: Viewer }
+            - { name: GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH, value: /var/lib/grafana/dashboards/dispatch-overview.json }
+            # Behind the ingress at /grafana, which Traefik forwards without stripping it.
+            - { name: GF_SERVER_ROOT_URL, value: {{ printf "%s/grafana/" .Values.publicUrl | quote }} }
+            - { name: GF_SERVER_SERVE_FROM_SUB_PATH, value: "true" }
+          ports: [{ containerPort: 3000 }]
+          readinessProbe:
+            httpGet: { path: /api/health, port: 3000 }
+            periodSeconds: 2
+          volumeMounts:
+            - { name: datasources, mountPath: /etc/grafana/provisioning/datasources, readOnly: true }
+            - { name: dashboard-provider, mountPath: /etc/grafana/provisioning/dashboards, readOnly: true }
+            - { name: dashboards, mountPath: /var/lib/grafana/dashboards, readOnly: true }
+      volumes:
+        - { name: datasources, configMap: { name: grafana-datasources } }
+        - { name: dashboard-provider, configMap: { name: grafana-dashboard-provider } }
+        - { name: dashboards, configMap: { name: grafana-dashboards } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+spec:
+  selector: { app: grafana }
+  ports: [{ port: 3000 }]

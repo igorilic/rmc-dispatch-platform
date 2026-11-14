@@ -1,8 +1,9 @@
 apiVersion: v2
 name: pourline
 description: >-
-  Pourline's cloud (SPEC §9): Postgres, NATS, Mosquitto, SFTP and Jaeger, ingest for telematics
-  and batch tickets, dispatch, the simulators, and the operator that runs each CustomerIntegration.
+  Pourline's cloud (SPEC §9): Postgres, NATS, Mosquitto, SFTP, Jaeger, Prometheus and Grafana,
+  ingest for telematics and batch tickets, dispatch, the simulators, and the operator that runs
+  each CustomerIntegration.
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
