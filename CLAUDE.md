@@ -74,3 +74,4 @@ Each one ends with a runnable repo, green CI and a commit.
 8. [x] **Operator**: `CustomerIntegration` CRD + controller, Helm charts, e2e test in CI.
 9. [x] **Polish**: architecture doc with diagrams, 4–6 ADRs, demo GIF, README walkthrough.
 10. [x] **Map console**: a live map of the fleet in the k8s stack, with a status legend and actions (break down, delay, plant offline, re-plan, sync, make chaos); `plans.updated` and HTTP trace context in dispatch; the plant's uplink through Toxiproxy; Prometheus and Grafana in k8s.
+11. [ ] **Truck lines**: simulated trucks drive OpenStreetMap roads from a committed ODbL file that `make routes` builds with OSRM; each drive's road over `trucks/{id}/route` and `events.trucks.{id}.route`; the map console draws each driving truck's road, thick ahead and thin behind.

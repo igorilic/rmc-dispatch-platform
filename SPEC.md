@@ -27,7 +27,7 @@ Orders come from contractors with very different IT setups. Trucks report GPS an
 | `plant-agent` | Edge service at the batching plant: batch tickets, "loaded" events, store-and-forward |
 | `operator` | Kubernetes operator (kube-rs) for a `CustomerIntegration` CRD |
 | `console` | Map console in the k8s stack: plants, sites and trucks live on a map with a status legend, and actions on them (§9) |
-| `simulators` | Fake truck fleet, fake contractor systems, fake plant, so the whole system runs locally with no real data |
+| `simulators` | Fake truck fleet on OpenStreetMap roads, fake contractor systems, fake plant, so the whole system runs locally with no real customer or fleet data |
 | `domain` | Shared types and canonical event schema |
 
 ## 3. Domain model
@@ -40,7 +40,7 @@ Orders come from contractors with very different IT setups. Trucks report GPS an
 - **Load**: order id, sequence no., volume, planned plant, planned truck, planned batch time, ETA on site, discharge window, actual timestamps.
 - **DispatchPlan**: versioned set of loads; every re-dispatch produces a new version plus a **diff** (which loads moved, which truck changed, and why).
 
-Travel time: haversine distance × configurable road factor ÷ average speed by time of day. Keep it behind a `TravelTimeProvider` trait so a real routing engine (OSRM) could be plugged in later. Default geography: Rhine-Neckar area (3 plants, ~25 trucks, ~40 sites).
+Travel time: haversine distance × configurable road factor ÷ average speed by time of day. Keep it behind a `TravelTimeProvider` trait so a real routing engine (OSRM) could be plugged in later. The simulated trucks already drive real roads: OSRM computes each plant-to-site road once, ahead of time, from OpenStreetMap (`make routes`, run by hand), while the plan's travel time stays on this model and the simulated drive times stay haversine × 1.3 ÷ 40 km/h, ±10 %. Default geography: Rhine-Neckar area (3 plants, ~25 trucks, ~40 sites).
 
 ## 4. Dispatch engine
 
@@ -75,7 +75,7 @@ Three fake customers, each integrating differently:
 | `rheinbau-gmbh` | SFTP drop every N minutes | Semicolon-separated CSV, German decimal commas, local times |
 | `neckar-infra` | REST webhook | XML, versioned schema (v1 and v2 live at the same time) |
 
-Plus **truck telematics** over MQTT (`trucks/{id}/gps`, `trucks/{id}/drum`, `trucks/{id}/status`), with out-of-order and duplicate messages.
+Plus **truck telematics** over MQTT (`trucks/{id}/gps`, `trucks/{id}/drum`, `trucks/{id}/status`, and `trucks/{id}/route`, the road a truck is about to drive, once per drive), with out-of-order and duplicate messages.
 
 **Requirements**
 - Per-customer **mapping config** in YAML (`customers/<name>/mapping.yaml`): field mapping, unit/locale conversion, timezone, and how to derive the idempotency key. No customer-specific Rust code.
@@ -156,7 +156,8 @@ Grafana, Jaeger and the dispatch API's OpenAPI/Swagger UI are linked from the RE
 - Runs in the cloud cluster at `http://localhost:8080/console`, in the look of the Spotlight design system, with CSS of its own.
 - Shows plants, sites and trucks on a map with a legend, and a panel with the plan version, the latest diff with its reasons, the Walldorf edge (links, outbox, sync lag, plan age) and a log of actions linking to their traces.
 - Trucks are small mixer-truck icons coloured by their seven statuses; out of service adds an ×, so colour is never the only signal. Below zoom 13, trucks whose icons would overlap are grouped into one badge with their count, ringed by their statuses and keeping the ×; a click or Enter zooms in on them.
-- Live updates take the real path: a snapshot, then server-sent events fed by NATS (`events.trucks.>`, `events.plants.>`, and `plans.updated`, which dispatch publishes after storing a version). Dispatch's `GET /world` gives the starting truck and plant state.
+- Each truck that is en route or returning shows the road of the drive it is on, as the truck reported it when the drive began: from its plant, the site or where it broke down, to the site or its home plant. The road ahead of the icon is drawn thick and the road driven thin, in the truck's status colour at full opacity, dashed on the way home, and a legend row explains them. The popup says where the truck is heading and how far it has to go, and the marker's accessible name says where it is heading. The line is the truck's own drive as its telematics report it, not dispatch's plan. A drive whose report is lost has no line, never a wrong one.
+- Live updates take the real path: a snapshot, then server-sent events fed by NATS (`events.trucks.>`, including each truck's route on `events.trucks.{id}.route`; `events.plants.>`; and `plans.updated`, which dispatch publishes after storing a version). Dispatch's `GET /world` gives the starting truck and plant state.
 - Actions: break a truck down (the simulators' MQTT command), delay a site, take a plant offline or online, re-plan (all through dispatch's API), sync the plant now (an MQTT command the plant-agent subscribes to), and make chaos.
 - Make chaos runs `make chaos`'s steps inside the cluster: orders near Walldorf, a wait until the plant holds their plan, a 2-minute cut of the plant's uplink, and a report of the tickets that waited out the cut. `make chaos` stays the hard cut, and first ends a cut the console made.
 - Each action starts a trace of its own. Dispatch continues a W3C `traceparent` from callers that did not come through the ingress (no `X-Forwarded-For`), and only from them, so a site delay, a plant toggle or a re-plan is one trace from the click to the console's push, and a sync is one trace across both clusters. A breakdown is two: the simulators' MQTT 3.1.1 command carries no trace context, so ingest starts a new trace when the truck reports it.
@@ -180,7 +181,8 @@ pourline/
 ├── deploy/
 │   ├── compose/
 │   ├── helm/             # pourline/files/grafana holds the Grafana provisioning and dashboards
-│   └── k3d/
+│   ├── k3d/
+│   └── seed/             # the seed (MIT), and the trucks' roads (ODbL), built by make routes
 ├── docs/
 │   ├── architecture.md   # diagrams (Mermaid)
 │   └── adr/
@@ -191,7 +193,7 @@ pourline/
 
 ## 11. Tech choices
 
-Rust stable, `tokio`, `axum`, `sqlx` (Postgres, compile-time checked queries, migrations), `async-nats` (JetStream), `rumqttc`, `serde` / `serde_yaml` / `quick-xml` / `csv`, `utoipa` (OpenAPI), `clap`, `thiserror` / `anyhow`, `tracing` + `opentelemetry-otlp`, `prometheus` or `metrics`, `kube` + `k8s-openapi`, `rusqlite` (edge outbox), `proptest`, `criterion`, `testcontainers`. The map console's page uses Leaflet with no build step; Toxiproxy is the plant's uplink in k8s.
+Rust stable, `tokio`, `axum`, `sqlx` (Postgres, compile-time checked queries, migrations), `async-nats` (JetStream), `rumqttc`, `serde` / `serde_yaml` / `quick-xml` / `csv`, `utoipa` (OpenAPI), `clap`, `thiserror` / `anyhow`, `tracing` + `opentelemetry-otlp`, `prometheus` or `metrics`, `kube` + `k8s-openapi`, `rusqlite` (edge outbox), `proptest`, `criterion`, `testcontainers`. The map console's page uses Leaflet with no build step; Toxiproxy is the plant's uplink in k8s. The simulated trucks' roads come from OpenStreetMap through OSRM and osmium-tool, which only `make routes` runs, by hand and never in CI or at runtime; the file it writes is ODbL, kept apart from the code and seed, which stay MIT.
 
 ## 12. CI (GitHub Actions)
 
@@ -215,6 +217,7 @@ Each milestone ends with a runnable repo, green CI and a commit.
 8. **Operator**: `CustomerIntegration` CRD + controller, Helm charts, e2e test in CI.
 9. **Polish**: architecture doc with diagrams, 4–6 ADRs, demo GIF, README walkthrough.
 10. **Map console**: a live map of the fleet in the k8s stack, with a status legend and actions (break down, delay, plant offline, re-plan, sync, make chaos); `plans.updated` and HTTP trace context in dispatch; the plant's uplink through Toxiproxy; Prometheus and Grafana in k8s.
+11. **Truck lines**: simulated trucks drive OpenStreetMap roads from a committed ODbL file that `make routes` builds with OSRM; each drive's road over `trucks/{id}/route` and `events.trucks.{id}.route`; the map console draws each driving truck's road, thick ahead and thin behind.
 
 ## 14. ADRs to write
 
