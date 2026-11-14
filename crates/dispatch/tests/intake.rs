@@ -16,8 +16,9 @@ use dispatch::store::{Store, VersionedPlan};
 use dispatch::worker::{self, Jobs};
 use domain::{
     Channel, DeliveryStatus, Event, EventEnvelope, EventSource, LoadRef, MixCode, Order,
-    OrderStatus, Seed, SiteId, TruckId, TruckStatus,
+    OrderStatus, PLANS_UPDATED, PlanUpdated, Seed, SiteId, TruckId, TruckStatus,
 };
+use futures::StreamExt;
 use ingest::nats::Bus;
 use telemetry::testing::{SpanData, capture};
 use tracing::{Instrument, info_span};
@@ -104,9 +105,13 @@ impl Setup {
                 self.store.clone(),
                 self.jobs.clone(),
             )),
-            tokio::spawn(worker::run(self.store.clone(), queue, settings, || {
-                at(6, 0)
-            })),
+            tokio::spawn(worker::run(
+                self.store.clone(),
+                queue,
+                settings,
+                || at(6, 0),
+                Some(self.js.client()),
+            )),
         ]
     }
 
@@ -442,5 +447,34 @@ async fn triggers_merged_into_one_run_link_to_it() {
         .map(|l| l.span_context.span_id())
         .collect();
     assert_eq!(linked, [named(&spans, "second").span_context.span_id()]);
+    tasks.iter().for_each(tokio::task::JoinHandle::abort);
+}
+
+#[tokio::test]
+async fn a_stored_version_is_announced_on_nats_within_its_trace() {
+    let (_guard, exporter) = capture();
+    let mut s = setup().await;
+    let mut updates = s.js.client().subscribe(PLANS_UPDATED).await.unwrap();
+    s.jobs
+        .send(Trigger::FullReplan)
+        .instrument(info_span!("caller"))
+        .await;
+    let tasks = s.dispatch();
+
+    let message = tokio::time::timeout(Duration::from_secs(10), updates.next())
+        .await
+        .unwrap()
+        .unwrap();
+    let update: PlanUpdated = serde_json::from_slice(&message.payload).unwrap();
+    assert_eq!(update.version, 1);
+    assert_eq!(update.created_at, at(6, 0));
+    let headers = message.headers.unwrap();
+    let traceparent = headers.get("traceparent").unwrap().as_str();
+    let spans = finished(&exporter, "redispatch").await;
+    let redispatch = named(&spans, "redispatch");
+    assert!(
+        traceparent.contains(&redispatch.span_context.trace_id().to_string()),
+        "the announcement continues the re-dispatch's trace: {traceparent}"
+    );
     tasks.iter().for_each(tokio::task::JoinHandle::abort);
 }

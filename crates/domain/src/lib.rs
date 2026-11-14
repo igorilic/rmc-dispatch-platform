@@ -291,6 +291,20 @@ pub struct DispatchPlan {
     pub loads: Vec<Load>,
 }
 
+/// The core NATS subject on which dispatch announces each plan version it stores, for the map
+/// console. It is outside `events.>`, so the EVENTS stream doesn't keep it and nothing replays it:
+/// a listener that was away reads the latest version from dispatch instead.
+pub const PLANS_UPDATED: &str = "plans.updated";
+
+/// What dispatch announces on [`PLANS_UPDATED`]. The message headers carry the re-dispatch's
+/// `traceparent`, and the diff is at `GET /plans/{version}/diff`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlanUpdated {
+    pub version: i64,
+    /// When the plan was made, on the world clock.
+    pub created_at: DateTime<Utc>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

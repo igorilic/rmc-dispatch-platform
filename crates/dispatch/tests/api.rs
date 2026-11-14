@@ -52,7 +52,7 @@ async fn setup(orders: &[Order]) -> Setup {
         budget: Budget::moves(50),
         ..Settings::default()
     };
-    tokio::spawn(worker::run(store.clone(), queue, settings, clock));
+    tokio::spawn(worker::run(store.clone(), queue, settings, clock, None));
     let router = api::router(store.clone(), jobs, clock);
     Setup {
         _pg: pg,

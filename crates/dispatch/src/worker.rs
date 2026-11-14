@@ -11,15 +11,16 @@
 //!
 //! Tracing (SPEC §8): each job carries the span it was sent from. The `redispatch` span is a child
 //! of the first job's span, so it joins that trace; the other jobs of the batch become links.
-//! Each run is timed, and each new version sets the plan gauges ([`crate::metrics`]).
+//! Each run is timed, and each new version sets the plan gauges ([`crate::metrics`]) and is
+//! announced on core NATS ([`PLANS_UPDATED`]) in the re-dispatch's trace, for the map console.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, SubsecRound, TimeDelta, Utc};
-use domain::Load;
+use domain::{Load, PLANS_UPDATED, PlanUpdated};
 use tokio::sync::{mpsc, oneshot};
 use tracing::field::Empty;
-use tracing::{Instrument, Span, error, info, info_span};
+use tracing::{Instrument, Span, error, info, info_span, warn};
 
 use crate::metrics;
 use crate::planner::delivered_load;
@@ -93,12 +94,14 @@ enum WorkerError {
 }
 
 /// Re-dispatches until every [`Jobs`] handle is dropped. `clock` gives the planning time; the
-/// service passes `Utc::now`.
+/// service passes the world clock. With `nats`, each stored version is announced on
+/// [`PLANS_UPDATED`] for the map console.
 pub async fn run(
     store: Store,
     mut jobs: mpsc::Receiver<Job>,
     settings: Settings,
     clock: fn() -> DateTime<Utc>,
+    nats: Option<async_nats::Client>,
 ) {
     while let Some(first) = jobs.recv().await {
         let mut batch = vec![first];
@@ -126,7 +129,8 @@ pub async fn run(
             span.follows_from(&job.span);
         }
         let started = Instant::now();
-        let reply = once(&store, &triggers, &settings, clock().trunc_subsecs(0))
+        let now = clock().trunc_subsecs(0);
+        let reply = once(&store, &triggers, &settings, now, nats.as_ref())
             .instrument(span.clone())
             .await;
         let outcome = match reply {
@@ -154,6 +158,7 @@ async fn once(
     triggers: &[Trigger],
     settings: &Settings,
     now: DateTime<Utc>,
+    nats: Option<&async_nats::Client>,
 ) -> Result<Option<i64>, WorkerError> {
     let travel = HaversineTravelTime::default();
     let (world, previous, orders, frozen) = async {
@@ -236,5 +241,36 @@ async fn once(
         triggers = %outcome.diff.triggers.join("; "),
         "re-dispatched"
     );
+    if let Some(nats) = nats {
+        announce(nats, version, outcome.plan.created_at).await;
+    }
     Ok(Some(version))
+}
+
+/// How long an announcement may wait for the NATS client, so a broker outage never holds up
+/// the worker.
+const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Announces a stored version on core NATS, in the current (re-dispatch) span's trace. Best
+/// effort: the version is stored either way, and a console that missed it reads the latest
+/// version from `/world`, so a failure is only logged.
+async fn announce(nats: &async_nats::Client, version: i64, created_at: DateTime<Utc>) {
+    let payload = match serde_json::to_vec(&PlanUpdated {
+        version,
+        created_at,
+    }) {
+        Ok(payload) => payload,
+        Err(error) => {
+            warn!(%error, version, "couldn't encode the plan announcement");
+            return;
+        }
+    };
+    let mut headers = async_nats::HeaderMap::new();
+    telemetry::inject(&mut headers);
+    let publish = nats.publish_with_headers(PLANS_UPDATED, headers, payload.into());
+    match tokio::time::timeout(ANNOUNCE_TIMEOUT, publish).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => warn!(%error, version, "announcing the plan failed"),
+        Err(_) => warn!(version, "announcing the plan timed out"),
+    }
 }

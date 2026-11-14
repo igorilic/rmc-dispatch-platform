@@ -82,6 +82,7 @@ async fn main() -> anyhow::Result<()> {
         queue,
         settings,
         domain::clock::now,
+        Some(nats.clone()),
     ));
     let js = async_nats::jetstream::new(nats);
     tokio::spawn(intake::run(js.clone(), store.clone(), jobs.clone()));
