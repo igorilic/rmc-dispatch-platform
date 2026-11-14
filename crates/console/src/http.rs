@@ -41,6 +41,15 @@ const INDEX: &str = include_str!("../web/index.html");
 const CSS: &str = include_str!("../web/app.css");
 const JS: &str = include_str!("../web/app.js");
 
+/// What the page may load: its own files, Leaflet from unpkg and Stadia's tiles. With no inline
+/// script or style allowed, an order reference that reached the markup still couldn't run.
+const POLICY: &str = "default-src 'self'; \
+    script-src 'self' https://unpkg.com/leaflet@1.9.4/; \
+    style-src 'self' https://unpkg.com/leaflet@1.9.4/; \
+    img-src 'self' data: https://tiles.stadiamaps.com; \
+    connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; \
+    frame-ancestors 'none'";
+
 pub fn router(console: Arc<Console>) -> Router {
     let hosts = Arc::new(allowed_hosts(&console.settings.public_url));
     let console_routes = Router::new()
@@ -48,10 +57,7 @@ pub fn router(console: Arc<Console>) -> Router {
             "/console",
             get(|| async { Redirect::permanent("/console/") }),
         )
-        .route(
-            "/console/",
-            get(|| asset("text/html; charset=utf-8", INDEX)),
-        )
+        .route("/console/", get(page))
         .route("/console/app.css", get(|| asset("text/css", CSS)))
         .route("/console/app.js", get(|| asset("text/javascript", JS)))
         .route("/console/events", get(events))
@@ -118,6 +124,11 @@ async fn asset(content_type: &'static str, body: &'static str) -> Response {
         body,
     )
         .into_response()
+}
+
+async fn page() -> Response {
+    let page = asset("text/html; charset=utf-8", INDEX).await;
+    ([(header::CONTENT_SECURITY_POLICY, POLICY)], page).into_response()
 }
 
 /// Counts a connected page while its stream lives.
@@ -389,6 +400,38 @@ mod tests {
                 .unwrap();
             assert_eq!(status(request).await, StatusCode::OK, "{uri}");
         }
+    }
+
+    #[tokio::test]
+    async fn the_page_says_what_it_may_load() {
+        let request = axum::http::Request::get("/console/")
+            .body(Body::empty())
+            .unwrap();
+        let response = router(console()).oneshot(request).await.unwrap();
+        let policy = response
+            .headers()
+            .get(header::CONTENT_SECURITY_POLICY)
+            .expect("a Content-Security-Policy")
+            .to_str()
+            .unwrap();
+        let directives: Vec<&str> = policy.split(';').map(str::trim).collect();
+        for expected in [
+            "default-src 'self'",
+            "script-src 'self' https://unpkg.com/leaflet@1.9.4/",
+            "style-src 'self' https://unpkg.com/leaflet@1.9.4/",
+            "img-src 'self' data: https://tiles.stadiamaps.com",
+            "connect-src 'self'",
+            "object-src 'none'",
+            "base-uri 'none'",
+            "form-action 'none'",
+            "frame-ancestors 'none'",
+        ] {
+            assert!(directives.contains(&expected), "{expected} in {policy}");
+        }
+        assert!(
+            !policy.contains("unsafe"),
+            "no inline script or style: {policy}"
+        );
     }
 
     #[tokio::test]

@@ -4,18 +4,92 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pourline console</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 <link rel="stylesheet" href="app.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="" defer></script>
+<!-- Not deferred: it sets the theme before the first paint, then starts the page once it's parsed. -->
+<script src="app.js"></script>
 </head>
 <body>
-<main>
-  <h1>Pourline console</h1>
-  <p id="status">Connecting…</p>
-  <p id="plan"></p>
-  <h2>Trucks</h2>
-  <ul id="trucks"></ul>
-  <h2>Log</h2>
-  <ul id="log"></ul>
+<header class="top">
+  <a class="disc" href="./" aria-label="Pourline console">P</a>
+  <div class="nav-wrap">
+    <nav class="nav pill" aria-label="Console">
+      <span class="brand">Pourline</span>
+      <span class="clock"><span id="world-time">--:--</span> <span id="world-shift" class="muted">world time</span></span>
+      <span id="live" class="live" role="status"><span class="dot" aria-hidden="true"></span><span id="live-text">Connecting…</span></span>
+      <a id="grafana" class="nav-link" target="_blank" rel="noopener" hidden>Grafana <span aria-hidden="true">↗</span></a>
+      <a id="jaeger" class="nav-link" target="_blank" rel="noopener" hidden>Jaeger <span aria-hidden="true">↗</span></a>
+      <a id="api" class="nav-link" target="_blank" rel="noopener" hidden>API <span aria-hidden="true">↗</span></a>
+    </nav>
+  </div>
+  <div class="pill">
+    <button id="theme" class="toggle" type="button" aria-label="Switch to the dark theme">
+      <svg class="sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4"/><path d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2M6 6l1.4 1.4M16.6 16.6 18 18M6 18l1.4-1.4M16.6 7.4 18 6"/></svg>
+      <svg class="moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10.1 4.23A8 8 0 1 0 19.77 13.9 7 7 0 0 1 10.1 4.23Z"/></svg>
+    </button>
+  </div>
+</header>
+
+<main class="layout">
+  <a class="skip pill" href="#plan-version">Skip the map</a>
+  <div class="map-wrap">
+    <div id="map" role="region" aria-label="Map of the Rhine-Neckar area"></div>
+    <div id="map-notices" class="map-notices" role="status"></div>
+    <div id="legend" class="legend pill">
+      <p class="legend-title">Trucks</p>
+      <ul id="legend-trucks" class="legend-list"></ul>
+      <p class="legend-title">Plants and sites</p>
+      <ul class="legend-list">
+        <li><span class="plant-mark" aria-hidden="true"></span>Plant</li>
+        <li><span class="plant-mark offline" aria-hidden="true"></span>Plant offline</li>
+        <li><span class="site-mark" aria-hidden="true"></span>Site</li>
+      </ul>
+    </div>
+  </div>
+
+  <aside class="side" aria-label="Plan and edge">
+    <section class="card plan" aria-labelledby="plan-version">
+      <div class="plan-head">
+        <div class="plan-id">
+          <p id="plan-time" class="eyebrow">Waiting for the first plan</p>
+          <h2 class="plan-title"><span id="plan-version">No plan yet</span> <a id="plan-trace" class="trace" target="_blank" rel="noopener" hidden>Trace <span aria-hidden="true">↗</span></a></h2>
+        </div>
+        <button id="replan" class="btn secondary" type="button">Re-plan</button>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Panel">
+        <button id="tab-changes" class="tab" type="button" role="tab" aria-selected="true" aria-controls="changes">Changes</button>
+        <button id="tab-log" class="tab" type="button" role="tab" aria-selected="false" aria-controls="log" tabindex="-1">Log</button>
+      </div>
+      <div id="changes" class="tabpanel" role="tabpanel" aria-labelledby="tab-changes" tabindex="0"></div>
+      <div id="log" class="tabpanel" role="tabpanel" aria-labelledby="tab-log" tabindex="0" hidden>
+        <ol id="log-list" class="rows log"></ol>
+      </div>
+    </section>
+
+    <section id="edge" class="card" aria-labelledby="edge-title" hidden>
+      <div class="edge-head">
+        <h2 id="edge-title" class="card-title">Edge</h2>
+        <span id="edge-chip" class="chip"><span class="dot" aria-hidden="true"></span><span id="edge-chip-text">Waiting</span></span>
+      </div>
+      <p id="edge-message" hidden></p>
+      <div id="edge-run" class="run" hidden>
+        <ol id="edge-steps" class="steps" aria-label="Make chaos"></ol>
+        <div id="edge-bar" class="bar" aria-hidden="true" hidden><div id="edge-bar-fill"></div></div>
+        <p id="edge-report" class="report" hidden></p>
+        <a id="edge-trace" class="trace-solo" target="_blank" rel="noopener" hidden>Trace <span aria-hidden="true">↗</span></a>
+      </div>
+      <dl id="edge-stats" class="stats"></dl>
+      <div class="actions">
+        <button id="sync" class="btn secondary" type="button">Sync now</button>
+        <button id="chaos" class="btn primary" type="button" hidden>Make chaos</button>
+        <button id="reconnect" class="btn primary" type="button" hidden>Reconnect</button>
+      </div>
+    </section>
+  </aside>
 </main>
-<script src="app.js"></script>
+
+<div id="notices" class="notices" role="status"></div>
 </body>
 </html>
