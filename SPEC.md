@@ -121,7 +121,7 @@ The operator reconciles the matching Deployment/CronJob, ConfigMap and Secret re
 
 ## 8. Observability
 
-- `tracing` + OpenTelemetry: a single trace from an incoming order through ingestion → NATS → dispatch → plan diff. An action in the map console is one trace too, from the click through dispatch to the plan update the console pushes.
+- `tracing` + OpenTelemetry: a single trace from an incoming order through ingestion → NATS → dispatch → plan diff. An action in the map console is one trace too, from the click through dispatch to the plan update the console pushes; a breakdown, which travels as an MQTT 3.1.1 command, is two (§9).
 - Prometheus metrics: ingest throughput per customer, DLQ size, re-dispatch latency, pour-gap distribution, edge sync lag, and the console's clients, pushes and actions.
 - A provisioned Grafana dashboard ("Dispatch overview") and Jaeger for traces, in compose and in the k8s cloud cluster.
 
@@ -154,12 +154,14 @@ Grafana, Jaeger and the dispatch API's OpenAPI/Swagger UI are linked from the RE
 **Map console (`make k8s` only)**
 
 - Runs in the cloud cluster at `http://localhost:8080/console`, in the look of the Spotlight design system, with CSS of its own.
-- Shows plants, sites and trucks on a map, trucks coloured by their seven statuses with a legend, and a panel with the plan version, the latest diff with its reasons, the Walldorf edge (links, outbox, sync lag, plan age) and a log of actions linking to their traces.
+- Shows plants, sites and trucks on a map with a legend, and a panel with the plan version, the latest diff with its reasons, the Walldorf edge (links, outbox, sync lag, plan age) and a log of actions linking to their traces.
+- Trucks are small mixer-truck icons coloured by their seven statuses; out of service adds an ×, so colour is never the only signal. Below zoom 13, trucks whose icons would overlap are grouped into one badge with their count, ringed by their statuses and keeping the ×; a click or Enter zooms in on them.
 - Live updates take the real path: a snapshot, then server-sent events fed by NATS (`events.trucks.>`, `events.plants.>`, and `plans.updated`, which dispatch publishes after storing a version). Dispatch's `GET /world` gives the starting truck and plant state.
 - Actions: break a truck down (the simulators' MQTT command), delay a site, take a plant offline or online, re-plan (all through dispatch's API), sync the plant now (an MQTT command the plant-agent subscribes to), and make chaos.
-- Make chaos runs `make chaos`'s steps inside the cluster: orders near Walldorf, a wait until the plant holds their plan, a 2-minute cut of the plant's uplink, and a report of the tickets that waited out the cut. `make chaos` stays the hard cut.
-- Each action is one trace. Dispatch continues a W3C `traceparent` from callers that did not come through the ingress (no `X-Forwarded-For`), and only from them.
-- The console only uses dispatch's API and the simulators' commands, so the hard constraints of §4 stay with dispatch.
+- Make chaos runs `make chaos`'s steps inside the cluster: orders near Walldorf, a wait until the plant holds their plan, a 2-minute cut of the plant's uplink, and a report of the tickets that waited out the cut. `make chaos` stays the hard cut, and first ends a cut the console made.
+- Each action starts a trace of its own. Dispatch continues a W3C `traceparent` from callers that did not come through the ingress (no `X-Forwarded-For`), and only from them, so a site delay, a plant toggle or a re-plan is one trace from the click to the console's push, and a sync is one trace across both clusters. A breakdown is two: the simulators' MQTT 3.1.1 command carries no trace context, so ingest starts a new trace when the truck reports it.
+- Changes need an `X-Pourline-Console` header and a `Host` from the console's public URL. The page sends a Content-Security-Policy that allows only its own files, Leaflet 1.9.4 from unpkg (pinned with SRI) and the basemap's tiles, and no inline script or style.
+- The console acts only through dispatch's API, MQTT commands, the customers' webhooks and the plant's uplink, so the hard constraints of §4 stay with dispatch.
 
 ## 10. Repository layout
 

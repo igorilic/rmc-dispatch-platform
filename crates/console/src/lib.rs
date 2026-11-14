@@ -6,7 +6,7 @@
 //! `plans.updated`, the edge agent's `/status` over the plant's monitoring path, and the uplink's
 //! state from Toxiproxy. A page gets a snapshot, then every change, as server-sent events
 //! ([`http`]). Actions go through dispatch's API, the simulators' MQTT commands, the plant's sync
-//! command and the plant's uplink ([`actions`]).
+//! command, ingest's webhooks and the plant's uplink ([`actions`]).
 //!
 //! Tracing: each action is a trace of its own, and each push continues the trace of the event
 //! behind it. Dispatch continues the console's traces because the console calls it from inside

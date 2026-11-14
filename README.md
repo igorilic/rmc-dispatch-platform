@@ -18,7 +18,8 @@ before it is stored. One trace in Jaeger follows an order from the webhook to th
 planned it, and Grafana shows the plan, ingest and the edge at a glance. At the plant, a
 plant-agent batches from its slice of the plan and keeps its tickets in a SQLite outbox, so a cut
 link loses nothing. On Kubernetes, an operator runs each customer integration from a
-`CustomerIntegration` resource.
+`CustomerIntegration` resource, and a map console shows the fleet live, with actions that break a
+truck down, delay a site or cut the plant off.
 
 - [Architecture](docs/architecture.md): how it fits together, with diagrams
 - [Decisions](docs/adr/): six ADRs, from NATS over Kafka to haversine travel times
@@ -39,7 +40,7 @@ link loses nothing. On Kubernetes, an operator runs each customer integration fr
 
 ## Walkthrough
 
-Steps 1 to 5 need only Docker and Rust; steps 6 to 8 also need the Kubernetes tools above. Each
+Steps 1 to 5 need only Docker and Rust; steps 6 to 9 also need the Kubernetes tools above. Each
 step links to the section that explains what you see.
 
 1. **Start the world.** `make up` builds the images and starts everything; the first build takes
@@ -66,11 +67,16 @@ step links to the section that explains what you see.
    kubectl --context k3d-cloud -n pourline patch customerintegration bauwerk-ag --type merge -p '{"spec":{"paused":false}}'
    ```
    ([Kubernetes](#kubernetes), [The operator](#the-operator))
-7. **Cut the plant off.** `make chaos` disconnects the Walldorf plant for two minutes. The
-   plant-agent keeps batching, its outbox fills, and it drains in order once the link is back. On
-   a fresh cluster the first cut can end before any ticket falls due; the script then says so, and
-   the next `make chaos` catches some. ([`make chaos`](#make-chaos))
-8. **Run what CI runs.** `make e2e` installs the cloud chart on a fresh kind cluster, plays the
+7. **Watch the map.** Open the map console at http://localhost:8080/console. Click a truck and
+   press *Break down*: it turns red with an ×, and if it had planned loads, the panel shows the new
+   plan's changes with a reason for each. The *Log* tab links every action to its trace in Jaeger.
+   ([Map console](#map-console))
+8. **Cut the plant off.** Press *Make chaos* on the console's Walldorf card, or run `make chaos`.
+   Both cut the Walldorf plant off for two minutes. The plant-agent keeps batching, its outbox
+   fills, and it drains in order once the link is back. On a fresh cluster the first cut can end
+   before any ticket falls due; the report then says so, and the next run catches some.
+   ([Map console](#map-console), [`make chaos`](#make-chaos))
+9. **Run what CI runs.** `make e2e` installs the cloud chart on a fresh kind cluster, plays the
    demo there and checks for a plan and an empty dead-letter queue. ([`make e2e`](#make-e2e))
 
 `make down` removes everything again.
@@ -86,7 +92,7 @@ step links to the section that explains what you see.
 | `make bench` | Runs the planner benchmarks at 50, 200 and 1,000 loads (a few minutes) |
 | `make audit` | Checks the dependencies against the RustSec advisory database |
 | `make sqlx-prepare` | Refreshes `.sqlx/` after a query or migration changes (needs `make up` and `cargo install sqlx-cli --locked`) |
-| `make k8s` | Runs Pourline in two k3d clusters, `cloud` and `plant-walldorf`: see [Kubernetes](#kubernetes) |
+| `make k8s` | Runs Pourline in two k3d clusters, `cloud` and `plant-walldorf`, with the [map console](#map-console): see [Kubernetes](#kubernetes) |
 | `make chaos` | Cuts `plant-walldorf` off the cloud for 2 minutes, then reconnects it, and shows its outbox draining (after `make k8s`): see [`make chaos`](#make-chaos) |
 | `make e2e` | Installs the cloud chart and the three customers on a fresh kind cluster, plays the demo, and checks for a plan and an empty DLQ, as CI does: see [`make e2e`](#make-e2e) |
 | `make down` | Stops everything and deletes the volumes, and deletes the k3d and kind clusters, the registry and the network |
@@ -346,7 +352,9 @@ is the first thing to index if plans grow.
 
 ## Observability
 
-Open Grafana at http://localhost:3000 for metrics and Jaeger at http://localhost:16686 for traces.
+In compose, open Grafana at http://localhost:3000 for metrics and Jaeger at http://localhost:16686
+for traces. After `make k8s` they are at http://localhost:8080/grafana and
+http://localhost:8080/jaeger.
 
 ### Traces
 
@@ -362,21 +370,62 @@ dispatch         load world · plan · save plan
 ```
 
 A truck breakdown looks the same, starting from its `mqtt message`. The three API endpoints that
-trigger a re-dispatch start their own traces, unless the caller is inside the cluster and sends a
-W3C `traceparent`: then the request, and the re-dispatch it causes, continue the caller's trace.
-Requests through the ingress carry `X-Forwarded-For` and always start their own. When the worker
-merges several triggers into one run, the run joins the first trigger's trace and links to the
-others. A webhook's `202` response carries the delivery's `trace_id`, so
-http://localhost:16686/trace/{trace_id} finds it. Dead letters show as red spans.
+trigger a re-dispatch start their own traces. When a caller that doesn't come through the ingress
+sends a W3C `traceparent`, as the map console and the plant-agent do, the request and any
+re-dispatch it causes continue the caller's trace. Requests through the ingress carry
+`X-Forwarded-For` and always start their own. When the worker merges several triggers into one
+run, the run joins the first trigger's trace and links to the others. A webhook's `202` response
+carries the delivery's `trace_id`, so http://localhost:16686/trace/{trace_id} finds it. Dead
+letters show as red spans.
 
 GPS and drum readings aren't traced. At about two a second they would bury every other trace, and
 they never trigger a re-dispatch. Status reports, batch tickets and every dead letter are traced.
 Spans carry ids and counts, never payloads. Jaeger keeps them in memory, so `make down` clears them.
 
+The [map console](#map-console) adds its own spans. Each action starts a trace with a
+`console action` span that carries its action and target, and the console's log links that trace.
+Each truck report, batch ticket and plan version the console pushes to its pages is a
+`console push` span in the trace of the event behind it, so GPS and drum pushes stay untraced
+too. A re-plan from the console is one trace, from the click through dispatch and back to the
+console's push:
+
+```text
+console    console action  replan
+dispatch     http request  POST /plans
+dispatch       POST /plans
+dispatch         redispatch  version 78, 3 changes
+dispatch           load world · plan · save plan
+console            console push  plan v78
+dispatch             http request  GET /plans/78/diff
+dispatch             http request  GET /world
+```
+
+*Delay 30 min* and *Take offline* look the same. *Sync now* crosses both clusters: the sync
+command's payload carries the trace to Walldorf's agent, and the agent's fetch carries it on to
+dispatch through the uplink:
+
+```text
+console        console action  sync plant-walldorf
+plant_agent      plan sync     plant-walldorf
+dispatch           http request  GET /plants/plant-walldorf/plan
+```
+
+The agent's spans reach Jaeger through the uplink too, so a cut drops them; its fetches every 15 s
+aren't traced.
+
+*Break down* is two traces. The simulators' command travels over MQTT 3.1.1, which has no headers,
+so the click's trace ends at the publish. When the truck reports `out_of_service`, ingest starts a
+new trace, as it would for a real truck, and the trace link of the plan it causes opens that one.
+
 ### Metrics
 
-Prometheus (http://localhost:9090) scrapes ingest, dispatch and the plant-agent every 5 s, on
-ports that stay inside the compose networks:
+Prometheus scrapes the services every 5 s. In compose it is at http://localhost:9090, and it
+scrapes ingest, dispatch and the plant-agent on ports that stay inside the compose networks. In
+Kubernetes it runs in the cloud cluster and finds its targets in its own namespace: every pod with
+a container port named `metrics` (ingest, dispatch, the operator and the console), and the
+operator's `ingest-<name>` pods on port 9464. Walldorf's plant-agent is a fixed target on the
+plant node's own address, port 9466, with the `plant` label the Edge row needs. Prometheus stays
+inside the cluster: `kubectl --context k3d-cloud -n pourline port-forward svc/prometheus 9090`.
 
 | Metric | What it measures |
 |---|---|
@@ -391,11 +440,18 @@ ports that stay inside the compose networks:
 | `pourline_edge_sync_lag_seconds{plant}` | Edge sync lag: how long the oldest waiting ticket has waited |
 | `pourline_edge_plan_age_seconds{plant}`, `pourline_edge_plan_version{plant}` | The plan the agent works from, and the time since dispatch last confirmed it |
 | `pourline_edge_tickets_total{plant, outcome}` | Tickets `queued` into the outbox and `sent` from it |
+| `pourline_console_clients` | Pages connected to the map console's live stream |
+| `pourline_console_pushed_total{kind}` | Changes the console pushed to its pages: `truck`, `plant`, `plan`, `edge`, `uplink`, `log` |
+| `pourline_console_actions_total{action, outcome}` | Actions from the map, such as `replan` or `make_chaos`: `done`, `refused`, `failed` |
+| `pourline_console_event_lag_seconds{kind}` | From ingest receiving a truck report (`truck`) or a batch ticket (`ticket`) to the console pushing it |
 
 The plan gauges always describe the current version. Dispatch sets them again from the latest
 stored version when it starts. The “Dispatch overview” dashboard lives in the chart, in
 `deploy/helm/pourline/files/grafana/dashboards/`, and compose mounts it from there: edit the JSON,
-not the UI. A test fails if it queries a metric that no service defines.
+not the UI. In Kubernetes, Grafana loads the same dashboard, with its links pointing through the
+ingress. Its collapsed “Console (k8s)” row shows the console's pages, pushes, actions and event
+lag, and stays empty in compose. A test fails if the dashboard queries a metric that no service
+defines.
 
 | Variable | Default |
 |---|---|
@@ -410,7 +466,8 @@ compose, Walldorf's agent runs next to the cloud services; [`make k8s`](#kuberne
 cluster of its own.
 
 - Every 15 s it fetches its plant's slice of the latest plan, `GET /plants/plant-walldorf/plan`,
-  and keeps it in a SQLite file.
+  and keeps it in a SQLite file. A sync command on `plants/plant-walldorf/commands/sync`, which
+  the map console's *Sync now* sends, makes it fetch at once.
 - When a load's batch time comes, it waits for one of the plant's loading bays, then issues
   `batching`, `loading` and `loaded` tickets that name the order and load number. Dispatch freezes
   the load at the first one.
@@ -432,6 +489,7 @@ with Walldorf, the simulated Walldorf plant sends no tickets of its own (`AGENT_
 
 ```sh
 curl -s localhost:8082/status | jq        # links, outbox, sync lag, plan version and age, tickets
+docker exec pourline-mosquitto-1 mosquitto_pub -t plants/plant-walldorf/commands/sync -m ''   # fetch the plan now
 docker network disconnect pourline_default pourline-plant-agent-1   # cut Walldorf off the cloud
 docker network connect pourline_default pourline-plant-agent-1      # and reconnect it
 ```
@@ -475,8 +533,8 @@ are alternatives.
 
 The plant-agent reaches the cloud only through its uplink, a Toxiproxy on the cloud node: the plan
 from `http://cloud:8088`, the tickets to `mqtt://cloud:1884` and its spans to `http://cloud:4318`.
-The console cuts and restores that link. It and Prometheus read the agent on the plant node's own
-address, which a cut leaves alone.
+The [map console](#map-console) cuts and restores that link. It and Prometheus read the agent on
+the plant node's own address, which that cut leaves alone.
 
 ```sh
 kubectl --context k3d-cloud -n pourline get customerintegrations
@@ -579,7 +637,9 @@ next reboot.
 
 ### `make chaos`
 
-`make chaos` runs `deploy/k3d/chaos.sh`:
+`make chaos` runs `deploy/k3d/chaos.sh`. If the map console's *Make chaos* is on its way to a cut
+or in one, the script first waits for the cut and ends it: that cut would keep the agent from the
+plan the script waits for. Then:
 
 1. It places three orders at the ship-tos nearest Walldorf, starting as soon as possible, through
    the demo image's `edge` mode. Simulated orders start 2 to 26 hours ahead, so without these the
@@ -615,6 +675,134 @@ During a cut, dispatch doesn't know the plant is cut off. If something else trig
 re-dispatch meanwhile, such as a new order, the re-dispatch may move a Walldorf load whose batch
 time passed without a ticket, although Walldorf batched it from its last plan. Once the tickets
 arrive, the next re-dispatch freezes the load where Walldorf actually batched it.
+
+## Map console
+
+`make k8s` serves a live map of the fleet at http://localhost:8080/console. It shows the world as
+the stack sees it, and acts on it only through dispatch's API, MQTT commands, the customers'
+webhooks and the plant's uplink, so the hard constraints stay with dispatch. It runs in the cloud
+cluster only; `make up` has no console.
+
+![The map console in the dark theme: the Mannheim, Weinheim and Walldorf plants with their sites, trucks as small mixer-truck icons, grouped trucks as badges with a count, the latest plan's changes in the panel, and the Walldorf edge card](docs/console.jpg)
+
+The map shows the three plants as squares, hollow while offline, and the 40 sites as rings.
+Trucks are small mixer-truck icons in their status colour, facing the way they last moved. Out of
+service adds an ×, so colour is never the only signal. The legend lists the seven statuses. The
+colours are Tailwind hues, darker on the light theme and lighter on the dark one. On the light
+theme, loading keeps amber #d97706, although its contrast against the map is just under 3:1. A
+truck fades after 2 minutes without a report, on the world clock; a parked truck reports every
+60 s. Trucks that share a point, such as those parked at a plant, line up in a small grid beside
+it. Below zoom 13, trucks whose icons would overlap become one badge with their count, ringed by
+the share of each status, and with the × if one of them is out of service. Click the badge, or
+press Enter on it, to zoom in until they come apart.
+
+A plant, a site or a truck opens a popup:
+
+- a truck: its capacity, home plant and last report, and *Break down*;
+- a plant: its bays, batching rate and last ticket, its next loads in the latest plan, and *Take
+  offline* or *Bring online*, plus *Sync now* for Walldorf;
+- a site: its customer, ship-to number and today's orders, and *Delay 30 min*.
+
+The panel shows the plan version, when it was made, a link to its trace, and *Re-plan*. Its
+*Changes* tab is the latest diff: the triggers, each moved load with its reason, and the orders
+that became unplanned. Its *Log* tab lists your actions, with their outcome and a link to each
+one's trace. The Walldorf edge card below it shows the agent's links, outbox, sync lag, plan
+version and age, and last ticket, with *Sync now* and *Make chaos*. The header shows the world
+time and its shift, whether the page is live, and links to Grafana, Jaeger and the API. The page
+follows your system's light or dark theme until you flip the toggle. The map works from the
+keyboard too: markers take the focus, Enter opens a popup and Escape closes it.
+
+The map shows the trucks' real telematics, and the panel shows the plan. The simulated trucks
+drive random trips rather than the plan (see [Re-dispatch](#re-dispatch)), so the two don't match.
+In the same way, a simulated plant goes on loading trucks after *Take offline*; only the plan
+moves away from it.
+
+### Actions
+
+| Action | What it does |
+|---|---|
+| *Break down* | Sends the simulators' command `sim/trucks/{id}/breakdown` over MQTT. The truck reports `out_of_service`, and if it had planned loads, a new plan moves them. Refused while the truck is out of service or its breakdown is on its way. The truck is repaired after `TRUCK_REPAIR_MINUTES` |
+| *Delay 30 min* | `POST /sites/{id}/delays`. If the site pours today, its loads move later; if not, the log says nothing changed |
+| *Take offline*, *Bring online* | `PUT /plants/{id}/status`, and dispatch plans around the plant |
+| *Re-plan* | `POST /plans`: everything that isn't frozen is planned again |
+| *Sync now* | Sends `plants/plant-walldorf/commands/sync` over MQTT, and the agent fetches its plan at once: its plan age drops to 0 s. Refused while the agent's MQTT link is down or the uplink is cut, because the broker would drop the command; the agent fetches within 15 s of reconnecting anyway |
+| *Make chaos* | Runs `make chaos`'s steps inside the cluster, below |
+| *Reconnect* | Takes the place of *Make chaos* during its cut, and ends the cut early. It also brings back an uplink that is cut without a run |
+
+Every action ends in the log and in a notice on the page, and a refused one says why.
+
+*Make chaos* cuts the plant's uplink, the Toxiproxy through which the plant-agent reaches the
+cloud (see [Kubernetes](#kubernetes)):
+
+1. It places three orders at the ship-tos nearest Walldorf, through the bauwerk-ag and
+   neckar-infra webhooks. They are the orders `make chaos` places.
+2. It waits up to a minute for a plan version that plans them, then up to a minute for Walldorf's
+   agent to hold that version.
+3. It disables the uplink's three proxies for `CHAOS_SECONDS` (120). Toxiproxy closes both sides of
+   every connection and refuses new ones, so the agent loses Mosquitto, dispatch and Jaeger at
+   once. The card shows the time the cut has left, and the outbox climbs there and in Grafana.
+4. It brings the uplink back, waits up to 2 minutes for the outbox to drain and both links to come
+   back, and reports “3 tickets waited out the cut and were sent in order within 9 s of
+   reconnecting”, or “No ticket fell due during the cut; run it again”.
+
+One run happens at a time, and it lives in the console's pod. When the console starts, it resets
+the uplink, retrying until Toxiproxy answers, and when it stops, it brings a cut uplink back. A
+console that goes away mid-cut doesn't leave the plant cut off.
+
+`make chaos` stays the hard cut: it takes the whole plant node off `pourline-net`, so even the
+console and Prometheus lose the agent. *Make chaos* cuts only the uplink, so the map and Grafana
+keep showing the plant.
+
+### How it works
+
+The console keeps one copy of the world for every page, and nothing polls dispatch for it:
+
+- Truck telematics and batch tickets: MQTT → ingest → NATS (`events.trucks.>`, `events.plants.>`)
+  → console → server-sent events → page.
+- Plans: dispatch stores a version and announces it on `plans.updated`, a core NATS subject, with
+  the re-dispatch's `traceparent`. The console fetches its diff and pushes it to the pages.
+- The edge card: the console reads the agent's `/status` over the plant's monitoring path, and the
+  uplink's proxies from Toxiproxy, every 2 s.
+
+The console starts from the seed's master data, follows NATS, and reads dispatch's `GET /world`:
+each truck's status and position with their report times, each plant's status and the latest plan
+version. It reads `/world` again after each plan update and after a NATS reconnect, which catches a
+version that core NATS dropped. Each truck field keeps its newest value by report time, whichever
+way it came. A page gets a snapshot, then every change, and a heartbeat with the world time every
+15 s; ages and fading go by that clock. A page that falls behind, or hears nothing for 45 s,
+reconnects for a new snapshot, and a hidden tab lets go of its stream.
+
+There is no login: from outside the cluster, the console is reachable only on `127.0.0.1:8080`.
+Every `POST`, `PUT` and `DELETE` needs the `X-Pourline-Console` header and a `Host` from
+`PUBLIC_URL` (by default `localhost:8080` or `127.0.0.1:8080`), or it gets `403`. Another site
+can't send that header without a CORS preflight, which the console never answers, and the Host
+check stops DNS rebinding. Reads are open, because they serve simulated data. Truck, site and plant
+ids must exist in the seed before they reach an MQTT topic or a dispatch URL. The page sends a
+Content-Security-Policy that lets it load only its own files, Leaflet 1.9.4 from unpkg.com (pinned
+with SRI) and Stadia's tiles, with no inline script or style and no framing.
+
+The basemap is Stadia Maps' Alidade Smooth, and Alidade Smooth Dark in the dark theme (© Stadia
+Maps, © OpenMapTiles, © OpenStreetMap contributors). Stadia serves these tiles without a key only to
+`localhost` and `127.0.0.1`, rate-limited, and free only for non-commercial use: check its terms
+before you serve the console anywhere else. The browser needs internet access for the tiles and for
+Leaflet. If the tiles fail, the map says so and the trucks still update; without Leaflet, the panel
+and its actions still work.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `CONSOLE_ADDR` | `0.0.0.0:8083` | The page, its stream and its API under `/console/`, and `/healthz` |
+| `CONSOLE_METRICS_ADDR` | `0.0.0.0:9468` | Metrics listener |
+| `PUBLIC_URL` | `http://localhost:8080` | The address the browser uses: for the header's links, and for the hosts allowed to change anything. The chart sets it from `publicUrl` |
+| `PLANT_ID` | `plant-walldorf` | The plant whose agent and uplink the console watches |
+| `PLANT_AGENT_URL` | unset: no edge card | The agent over its monitoring path. The chart sets `http://<edge.plantAddress>:8082` |
+| `UPLINK_URL` | unset: no *Make chaos* | Toxiproxy's API. The chart sets `http://uplink:8474` when there is a plant |
+| `CHAOS_SECONDS` | `120` | How long *Make chaos* cuts the uplink. The chart sets it from `console.chaosSeconds` |
+| `BAUWERK_WEBHOOK_URL`, `NECKAR_WEBHOOK_URL` | `http://localhost:8080/webhooks/<integration>` | Where *Make chaos* places its orders |
+| `WEBHOOK_TOKEN_BAUWERK_AG`, `WEBHOOK_TOKEN_NECKAR_INFRA` | `dev-token-<integration>` | Bearer tokens, shared with ingest |
+| `DISPATCH_URL`, `NATS_URL`, `MQTT_URL`, `CLOCK_OFFSET_HOURS`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `RUST_LOG` | as for the other services | As elsewhere; the chart points the URLs at the cluster's Services |
+
+Without a plant, as in `make e2e`, the chart sets neither `PLANT_AGENT_URL` nor `UPLINK_URL`, so the
+console shows no edge card and offers no *Make chaos*.
 
 ## Images
 
