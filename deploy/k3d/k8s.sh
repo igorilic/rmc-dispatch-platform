@@ -3,7 +3,7 @@
 # and `plant-walldorf`, Pourline's images, the Helm charts in deploy/helm, and the example
 # CustomerIntegrations in deploy/integrations. It creates only what is missing, so it is safe to
 # run again: it then rebuilds the images, and the services whose image changed roll out.
-# SKIP_BUILD=1 reuses the images pushed last, for a change to the charts only.
+# SKIP_BUILD=1 reuses the images built last, for a change to the charts only.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -33,12 +33,11 @@ k3d cluster get plant-walldorf >/dev/null 2>&1 ||
 # The plant node's own address: the console and Prometheus read the agent there, past the uplink.
 plant_ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$NETWORK\").IPAddress}}" k3d-plant-walldorf-server-0)
 
-if [ "${SKIP_BUILD:-}" != 1 ]; then
-  for service in "${SERVICES[@]}"; do
-    docker build --build-arg BIN="$service" -t "localhost:5050/$service:dev" .
-    docker push "localhost:5050/$service:dev"
-  done
-fi
+# Pushed even with SKIP_BUILD=1: make down deletes the registry, and a fresh one is empty.
+for service in "${SERVICES[@]}"; do
+  [ "${SKIP_BUILD:-}" = 1 ] || docker build --build-arg BIN="$service" -t "localhost:5050/$service:dev" .
+  docker push "localhost:5050/$service:dev"
+done
 
 # Each image is deployed by the digest just pushed. A pod then runs exactly that build, a new build
 # rolls out by itself, and a plant pod that restarts while its cluster is cut off starts from the

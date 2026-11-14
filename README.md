@@ -490,9 +490,9 @@ Like `make demo`, `make k8s` shifts the world's clock when it's outside the plan
 
 `make k8s` is safe to run again. It creates what is missing, rebuilds and pushes the images, and
 upgrades both releases, so every service whose image changed rolls out. The infrastructure keeps
-its data. `SKIP_BUILD=1 make k8s` skips the images, for a change to the charts only. Clusters
-created before milestone 8 hold plain manifests that Helm won't take over: `make k8s` says so,
-and one `make down` fixes it.
+its data. `SKIP_BUILD=1 make k8s` reuses the images built last, for a change to the charts only.
+Clusters created before milestone 8 hold plain manifests that Helm won't take over: `make k8s`
+says so, and one `make down` fixes it.
 
 ### The operator
 
