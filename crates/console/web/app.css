@@ -28,6 +28,7 @@
   --surface-float: light-dark(rgb(255 255 255 / 0.9), rgb(39 39 42 / 0.9));
   --ring-float: light-dark(rgb(24 24 27 / 0.05), rgb(255 255 255 / 0.1));
   --surface-hover: light-dark(var(--zinc-50), rgb(39 39 42 / 0.5));
+  --surface-disc: light-dark(#fff, var(--zinc-800));
   --text-heading: light-dark(var(--zinc-800), var(--zinc-100));
   --text-strong: light-dark(var(--zinc-900), var(--zinc-100));
   --text-body: light-dark(var(--zinc-600), var(--zinc-400));
@@ -121,7 +122,7 @@ a:hover { color: var(--accent-hover); }
   display: grid;
   place-items: center;
   border-radius: 9999px;
-  background: light-dark(#fff, var(--zinc-800));
+  background: var(--surface-disc);
   box-shadow: var(--shadow-md), 0 0 0 1px var(--ring-float);
   color: var(--text-strong);
   font-size: 16px;
@@ -285,8 +286,11 @@ a:hover { color: var(--accent-hover); }
 .stats.stale dd { font-weight: 500; color: var(--text-muted); }
 
 /* Map markers. The focusable element is Leaflet's icon; its ring goes on the drawing inside,
-   which may be shifted off the point. */
+   which may be shifted off the point. So does the pointer: the icon's own box stays on the point
+   and would cover a plant's square. */
 .pl-marker { outline: none; }
+.leaflet-marker-icon.pl-marker { pointer-events: none; }
+.pl-marker > * { pointer-events: auto; }
 .pl-marker:focus-visible > * { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
 
 .plant { display: flex; align-items: center; gap: 8px; }
@@ -351,6 +355,47 @@ a:hover { color: var(--accent-hover); }
 }
 .labelled .truck-id, .pl-marker:hover .truck-id, .pl-marker:focus-visible .truck-id { display: block; }
 
+/* Groups: a disc like the header's with a truck glyph and the count, ringed by the members'
+   statuses, with the × badge when one is out of service. The tip says the same in words. */
+.group { position: relative; width: 36px; height: 36px; border-radius: 9999px; box-shadow: var(--shadow-md), 0 0 0 1px var(--ring-float); }
+.pl-marker:focus-visible > .group { border-radius: 9999px; }
+.group-icon { display: block; overflow: visible; }
+.g-halo { fill: var(--map-land); }
+.g-ring circle { fill: none; stroke: var(--status); stroke-width: 3; }
+.g-face { fill: var(--surface-disc); }
+.g-glyph { --map-land: var(--surface-disc); color: var(--text-muted); }
+.g-count { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; fill: var(--text-strong); }
+/* ponytail: the tip flips below only at the map's top edge; centre it by measuring if a side edge bites. */
+.group-tip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  display: none;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--surface-column);
+  box-shadow: var(--shadow-lg), 0 0 0 1px var(--ring-float);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-body);
+  width: max-content;
+  max-width: 240px;
+  pointer-events: none;
+}
+.pl-marker:hover .group-tip, .pl-marker:focus-visible .group-tip { display: block; }
+.group-tip-title { display: block; margin-bottom: 2px; font-weight: 600; color: var(--text-strong); }
+.group-tip li { display: flex; align-items: center; gap: 6px; }
+.group-tip .dot { background: var(--status); }
+.tip-below .group-tip { bottom: auto; top: calc(100% + 8px); }
+/* WCAG 1.4.13: the pointer can cross the gap onto the tip, and Escape hides it (app.js). */
+.pl-marker:hover .group-tip { pointer-events: auto; }
+.group-tip::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 8px; }
+.tip-below .group-tip::after { top: auto; bottom: 100%; }
+.pl-marker.tip-off .group-tip { display: none; }
+/* No member has reported lately: the ring and glyph fade like a stale truck; the count keeps 4.5:1. */
+.stale .g-ring, .stale .g-glyph { opacity: 0.4; }
+
 /* Legend */
 .legend {
   position: absolute;
@@ -371,6 +416,8 @@ a:hover { color: var(--accent-hover); }
 .legend-list { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; row-gap: 2px; }
 .legend-list li { display: flex; align-items: center; gap: 8px; color: var(--text-body); white-space: nowrap; }
 .legend .truck-icon { width: 22px; height: 15px; }
+.legend .group-icon { width: 22px; height: 22px; }
+.legend-list .legend-wide { grid-column: 1 / -1; }
 .legend .plant-mark { width: 12px; height: 12px; border-radius: 3px; box-shadow: none; margin: 0 5px; }
 .legend .plant-mark.offline { box-shadow: inset 0 0 0 2px var(--text-strong); }
 .legend .site-mark { margin: 0 6px; }

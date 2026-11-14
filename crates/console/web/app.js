@@ -38,6 +38,15 @@ const STATUSES = {
 const QUIET = 2 * 60 * 1000;
 /** How long a truck takes to glide to its next fix. */
 const GLIDE = 1500;
+/**
+ * Below this zoom, trucks whose icons would overlap show as one badge. The first fit lands on zoom
+ * 10 or 11 (9 on a phone), where each plant's nearest site sits 17–29 px from it. A plant's parked
+ * trucks fill park()'s grid up to 140 px left and 32 px up, which clears those sites only from zoom
+ * 13, where they sit 68–116 px away.
+ */
+const GROUP_BELOW = 13;
+/** A group gathers the trucks headed this close, on screen, to its busiest point: their icons would overlap. */
+const GROUP_PX = 40;
 /** A stream without any event for this long is dead: the heartbeat comes every 15 s. */
 const SILENCE = 45 * 1000;
 const NOTICE = 8000;
@@ -61,7 +70,7 @@ let edge = null;
 let uplink = { available: false, cut: false, run: null };
 let log = [];
 let named = new Set(); // trucks the latest diff names: they keep their label
-let markedSpots = new Set(); // where plants and sites sit
+let markedSpots = new Map(); // where plants and sites sit, with their names
 let cutTotal = 0; // ms
 let pop = null; // the open popup: { item, refresh }
 let everLive = false;
@@ -69,6 +78,7 @@ let fitted = false;
 const plants = new Map();
 const sites = new Map();
 const trucks = new Map();
+const groups = new Map(); // by the marked spot it sits at, or else its first truck's id
 const customers = new Map();
 const busy = new Set();
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
@@ -98,6 +108,7 @@ const enc = encodeURIComponent;
 const orderRef = (id) => String(id).slice(String(id).indexOf("/") + 1);
 const plantName = (id) => plants.get(id)?.view.name ?? id;
 const spot = (p) => `${p.lat.toFixed(5)},${p.lon.toFixed(5)}`;
+const byId = (a, b) => (a.view.id < b.view.id ? -1 : 1);
 
 function orderLabel(id, sequence) {
   const customer = customers.get(String(id).split("/")[0]);
@@ -171,14 +182,15 @@ const BODY =
   "M3 11.6H26.5V13.6H3Z" + // chassis
   "M19.5 13V6.2Q19.5 5 20.7 5H23.6L26.6 9V13Z"; // cab
 
+const truckShape = (cls) =>
+  svg("g", { class: cls }, svg("path", { d: BODY }), ...[7, 11.6, 22.8].map((cx) => svg("circle", { cx, cy: 15.3, r: 2.3 })));
+
 function truckIcon() {
-  const shape = (cls) =>
-    svg("g", { class: cls }, svg("path", { d: BODY }), ...[7, 11.6, 22.8].map((cx) => svg("circle", { cx, cy: 15.3, r: 2.3 })));
   return svg(
     "svg",
     { class: "truck-icon", viewBox: "0 0 29 20", width: 29, height: 20, "aria-hidden": "true", focusable: "false" },
-    shape("t-halo"),
-    shape("t-body"),
+    truckShape("t-halo"),
+    truckShape("t-body"),
     svg("path", { class: "t-window", d: "M21 6.5H23.2L25.3 9.2H21Z" }),
     svg("path", { class: "t-fins", d: "M7.4 3.1Q9.3 7.4 7.9 11.5M12.7 3.8Q14.6 8 13.2 12.2" }),
     svg("g", { class: "t-badge" }, svg("circle", { cx: 24.2, cy: 3.4, r: 4.8 }), svg("path", { d: "M22.3 1.5L26.1 5.3M26.1 1.5L22.3 5.3" })),
@@ -186,6 +198,30 @@ function truckIcon() {
 }
 
 const truckClass = (status) => `truck s-${status}${status === "out_of_service" ? " oos" : ""}`;
+
+// A group's badge: a disc with a truck glyph and the count, ringed by its statuses' shares in the
+// legend's order. `rows` is [status, count] pairs; the × badge shows under an `oos` class.
+function groupIcon(rows, total) {
+  let start = 0;
+  const gap = rows.length > 1 ? 2 : 0; // of 100, around the ring
+  const arcs = rows.map(([status, count]) => {
+    const share = (100 * count) / total;
+    const dash = Math.max(share - gap, 0.5);
+    const arc = svg("circle", { class: `s-${status}`, cx: 18, cy: 18, r: 15.5, pathLength: 100, "stroke-dasharray": `${dash} ${100 - dash}`, "stroke-dashoffset": -start });
+    start += share;
+    return arc;
+  });
+  return svg(
+    "svg",
+    { class: "group-icon", viewBox: "0 0 36 36", width: 36, height: 36, "aria-hidden": "true", focusable: "false" },
+    svg("circle", { class: "g-halo", cx: 18, cy: 18, r: 18 }),
+    svg("g", { class: "g-ring", transform: "rotate(-90 18 18)" }, ...arcs),
+    svg("circle", { class: "g-face", cx: 18, cy: 18, r: 14 }),
+    svg("svg", { class: "g-glyph", x: 11, y: 7.5, width: 14, height: 9.7, viewBox: "0 0 29 20" }, truckShape("t-body")),
+    svg("text", { class: "g-count", x: 18, y: 27.5, "text-anchor": "middle" }, String(total)),
+    svg("g", { class: "t-badge" }, svg("circle", { cx: 30.5, cy: 5.5, r: 5.5 }), svg("path", { d: "M28.3 3.3L32.7 7.7M32.7 3.3L28.3 7.7" })),
+  );
+}
 
 // Start
 
@@ -211,6 +247,8 @@ function start() {
   setUpTabs();
   $("legend-trucks").replaceChildren(
     ...Object.entries(STATUSES).map(([status, word]) => h("li", {}, h("span", { class: truckClass(status) }, truckIcon()), word)),
+    // A row of its own: in the second column it would widen the legend and cost the first fit a zoom.
+    h("li", { class: "legend-wide" }, groupIcon([["available", 2], ["loading", 1]], 3), "Group of trucks"),
   );
   // Without Leaflet the panel and its actions still work.
   if (window.L) startMap();
@@ -259,6 +297,7 @@ function setUpTabs() {
 function tick() {
   renderClock();
   trucks.forEach(paintTruck);
+  groups.forEach(paintGroup);
   renderEdge(); // ages and the cut's countdown; it refreshes an open popup as well
 }
 
@@ -296,7 +335,18 @@ function startMap() {
   map.on("popupclose", (e) => {
     e.popup.options.autoPan = true;
     pop = null;
+    queueMicrotask(regroup); // its truck may join a group, once Escape has given it the focus back
   });
+  map.on("zoomend", regroup);
+  // Escape hides the badge tips showing as it's pressed, until the pointer or the focus leaves the
+  // badge. Captured, so a popup's Escape doesn't hide the tip of the badge it hands the focus to.
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key === "Escape") for (const el of document.querySelectorAll(".pl-marker:has(> .group):is(:hover, :focus)")) el.classList.add("tip-off");
+    },
+    true,
+  );
 }
 
 /** How far the legend's top sits above the map's bottom edge. Leaflet doesn't know it's there. */
@@ -331,17 +381,19 @@ function basemapNotice(show) {
   box.replaceChildren(...(show ? [notice("Basemap unavailable: Stadia Maps sends no tiles. Trucks still update.")] : []));
 }
 
-/** A marker whose icon is `html`, with a popup built by `content` each time it opens. */
+/** A marker whose icon is `html`, with a popup built by `content` each time it opens, if any. */
 function marker(latlng, html, anchor, zIndexOffset, content) {
   const m = L.marker(latlng, {
     icon: L.divIcon({ html, className: "pl-marker", iconSize: null, iconAnchor: anchor, popupAnchor: [0, -anchor[1]] }),
     zIndexOffset,
     riseOnHover: true,
   });
-  m.bindPopup(content, POPUP).addTo(map);
-  // Leaflet makes the icon a focusable role=button that opens on Enter; a button opens on Space too.
+  if (content) m.bindPopup(content, POPUP);
+  m.addTo(map);
+  // Leaflet makes the icon a focusable role=button and opens its popup on Enter. A button answers
+  // Space too, and one without a popup answers Enter here.
   m.getElement().addEventListener("keydown", (e) => {
-    if (e.key !== " ") return;
+    if (e.key !== " " && (content || e.key !== "Enter")) return;
     e.preventDefault();
     m.fire("click", { originalEvent: e, latlng: m.getLatLng() });
   });
@@ -522,6 +574,7 @@ function sitePopup(s) {
 
 /** Where a truck is drawn: its last fix, or its home plant before it has one. */
 const placeOf = (v) => v.position ?? plants.get(v.home)?.view.location ?? { lat: 49.4, lon: 8.65 };
+const spotOf = (t) => spot(placeOf(t.view));
 
 function addTruck(view) {
   const el = h("div", { class: truckClass(view.status) }, truckIcon(), h("span", { class: "truck-id", text: view.id }));
@@ -553,17 +606,21 @@ function paintTruck(t) {
 function setTruck(t, view) {
   const from = placeOf(t.view);
   const to = placeOf(view);
+  const was = t.view.status;
   t.view = view;
-  if (from.lat !== to.lat || from.lon !== to.lon) {
+  const moved = from.lat !== to.lat || from.lon !== to.lon;
+  if (moved) {
     if (from.lon !== to.lon) t.west = to.lon < from.lon;
     glide(t, to);
     park();
   }
   paintTruck(t);
+  if (moved || view.status !== was) regroup();
   if (pop?.item === t) pop.refresh();
 }
 
 // Glides with requestAnimationFrame: a CSS transition on the marker would fight Leaflet's zoom.
+// A grouped truck glides too, hidden, so it shows up in the right place when its group comes apart.
 const glides = new Map();
 let gliding = false;
 
@@ -594,17 +651,18 @@ function frame(now) {
 
 // Trucks that share a point (parked at a plant, pouring at a site, not reported yet) park in a grid
 // left of it, clear of a plant's label, instead of hiding each other and the marker underneath.
+// The grid shows from GROUP_BELOW on; below it, regroup() puts their badge in the grid's place.
 function park() {
-  const groups = new Map();
+  const shared = new Map();
   for (const t of trucks.values()) {
     const key = spot(placeOf(t.view));
-    groups.set(key, [...(groups.get(key) ?? []), t]);
+    shared.set(key, [...(shared.get(key) ?? []), t]);
   }
-  for (const [key, group] of groups) {
+  for (const [key, group] of shared) {
     const alone = group.length === 1 && !markedSpots.has(key);
     const cols = Math.ceil(Math.sqrt(group.length));
     const rows = Math.ceil(group.length / cols);
-    group.sort((a, b) => (a.view.id < b.view.id ? -1 : 1));
+    group.sort(byId);
     group.forEach((t, i) => {
       t.crowded = group.length > 1;
       const dx = alone ? 0 : -(30 + 31 * (i % cols));
@@ -612,6 +670,147 @@ function park() {
       t.el.style.transform = dx || dy ? `translate(${dx}px, ${dy}px)` : "";
       t.marker.getPopup().options.offset = [dx, 7 + dy];
     });
+  }
+}
+
+// Groups. Below GROUP_BELOW, trucks whose icons would overlap show as one badge with their count,
+// judged by where they're headed rather than where they glide now. The busiest points go first and
+// each gathers the trucks within GROUP_PX of it or of its badge, so a plant keeps its own count
+// instead of chaining into its neighbours through the trucks on the road between them. A badge sits
+// at the plant or site most of its trucks are parked at, in park()'s first column, or else at their
+// centroid. Grouped trucks stay on the map, hidden, so they aren't tab stops and keep gliding. A
+// truck with its popup open stays out until it closes. This runs on zoomend, on a snapshot, when a
+// popup closes and when a truck moves or changes status, never per frame.
+function regroup() {
+  if (!map) return;
+  const zoom = map.getZoom();
+  const focused = document.activeElement;
+  const owner = focusOwner(focused);
+  const crowd = new Map(); // spot → how many trucks are headed there
+  for (const t of trucks.values()) crowd.set(spotOf(t), (crowd.get(spotOf(t)) ?? 0) + 1);
+  const all = [...trucks.values()].sort((a, b) => crowd.get(spotOf(b)) - crowd.get(spotOf(a)) || byId(a, b));
+  const points = all.map((t) => map.project(latLng(placeOf(t.view)), zoom));
+  const taken = new Set([all.indexOf(pop?.item)]);
+  const kept = new Map();
+  for (const t of all) t.group = null;
+  // ponytail: O(n²) over the fleet, fine for dozens of trucks; a grid hash for hundreds.
+  for (let i = 0; i < all.length && zoom < GROUP_BELOW; i++) {
+    if (taken.has(i)) continue;
+    // A seed at a plant or site is its group's home, so the badge is drawn 30 px west of it.
+    const badge = markedSpots.has(spotOf(all[i])) ? points[i].subtract([30, 0]) : points[i];
+    const near = all.flatMap((_, k) =>
+      taken.has(k) || Math.min(points[i].distanceTo(points[k]), badge.distanceTo(points[k])) >= GROUP_PX ? [] : [k],
+    );
+    for (const k of near) taken.add(k);
+    if (near.length < 2) continue;
+    const g = placeGroup(near.map((k) => all[k]).sort(byId));
+    kept.set(g.key, g);
+  }
+  for (const [key, g] of groups) if (!kept.has(key)) g.marker.remove();
+  groups.clear();
+  for (const [key, g] of kept) groups.set(key, g);
+  for (const t of all) {
+    const el = t.marker.getElement();
+    if (el.hidden !== !!t.group) el.hidden = !!t.group;
+  }
+  // The focus follows a truck into its badge, and out of a badge to its first truck.
+  if (owner && (!focused.isConnected || focused.hidden)) (owner.group ?? owner).marker.getElement()?.focus({ preventScroll: true });
+}
+
+const latLng = (p) => L.latLng(p.lat, p.lon);
+
+/** The truck the focus belongs to: on its marker or in its popup, or its badge's first truck. */
+function focusOwner(el) {
+  for (const g of groups.values()) if (g.marker.getElement() === el) return g.members[0];
+  for (const t of trucks.values()) {
+    if (t.marker.getElement() === el || (pop?.item === t && t.marker.getPopup().getElement()?.contains(el))) return t;
+  }
+  return null;
+}
+
+function placeGroup(members) {
+  const parked = new Map(); // marked spot → how many members are there
+  for (const t of members) if (markedSpots.has(spotOf(t))) parked.set(spotOf(t), (parked.get(spotOf(t)) ?? 0) + 1);
+  const home = [...parked].sort((a, b) => b[1] - a[1])[0]?.[0];
+  const key = home ?? members[0].view.id;
+  const g = groups.get(key) ?? addGroup(key, members[0]);
+  g.members = members;
+  for (const t of members) t.group = g;
+  const places = members.map((t) => placeOf(t.view));
+  const mean = (f) => places.reduce((sum, p) => sum + f(p), 0) / places.length;
+  const at = home ? places.find((p) => spot(p) === home) : { lat: mean((p) => p.lat), lon: mean((p) => p.lon) };
+  g.marker.setLatLng(latLng(at));
+  g.el.style.transform = home ? "translateX(-30px)" : "";
+  g.home = home;
+  paintGroup(g);
+  return g;
+}
+
+function addGroup(key, first) {
+  const g = { key, el: h("div", { class: "group" }), members: [], said: "" };
+  g.marker = marker(latLng(placeOf(first.view)), g.el, [18, 18], 2000, null);
+  g.marker.on("click", () => zoomInto(g));
+  const el = g.marker.getElement();
+  // The tip opens upwards, or below the badge where the map's top edge would cut it off.
+  const flip = () => {
+    const tip = g.el.querySelector(".group-tip");
+    g.el.classList.remove("tip-below");
+    tip.style.display = "block";
+    const cut = tip.getBoundingClientRect().top < $("map").getBoundingClientRect().top;
+    tip.style.display = "";
+    g.el.classList.toggle("tip-below", cut);
+  };
+  el.addEventListener("mouseenter", flip);
+  el.addEventListener("focus", flip);
+  for (const type of ["mouseleave", "blur"]) el.addEventListener(type, () => el.classList.remove("tip-off"));
+  // In the tab order where its first truck is, before the sites.
+  first.marker.getElement().before(el);
+  return g;
+}
+
+function paintGroup(g) {
+  const home = g.home;
+  const rows = Object.keys(STATUSES)
+    .map((status) => [status, g.members.filter((t) => t.view.status === status).length])
+    .filter(([, count]) => count);
+  const silent = g.members.filter((t) => quiet(t.view)).length;
+  const hush = silent ? `${silent} with no recent report` : "";
+  const all = home && g.members.every((t) => spotOf(t) === home);
+  const title = plural(g.members.length, "truck") + (home ? ` ${all ? "at" : "near"} ${markedSpots.get(home)}` : "");
+  const breakdown = rows.map(([status, count]) => `${count} ${words(status)}`).join(", ");
+  const said = `${title}: ${breakdown}${hush && `, ${hush}`}. Zoom in to see them.`;
+  if (g.said === said) return;
+  g.said = said;
+  label(g.marker, said);
+  g.el.classList.toggle("oos", rows.some(([status]) => status === "out_of_service"));
+  g.el.classList.toggle("stale", silent === g.members.length);
+  g.el.replaceChildren(
+    groupIcon(rows, g.members.length),
+    h(
+      "span",
+      { class: "group-tip", "aria-hidden": "true" },
+      h("span", { class: "group-tip-title", text: title }),
+      h(
+        "ul",
+        {},
+        rows.map(([status, count]) => h("li", { class: `s-${status}` }, h("span", { class: "dot" }), `${count} ${words(status)}`)),
+        silent ? h("li", { class: "muted", text: hush }) : null,
+      ),
+    ),
+  );
+}
+
+/** Zooms in to a group's trucks as drawn, or one level while they don't fit: it splits on the way. */
+function zoomInto(g) {
+  const bounds = L.latLngBounds(g.members.map((t) => latLng(placeOf(t.view))));
+  const topLeft = [48 + 140, 48]; // park()'s grid reaches 140 px left of a shared point
+  const below = [48, legendClear() + 16];
+  const fits = map.getBoundsZoom(bounds, false, L.point(topLeft).add(below));
+  if (fits <= map.getZoom()) map.setView(bounds.getCenter(), map.getZoom() + 1);
+  // One point opens at GROUP_BELOW; trucks only metres apart at street level at most.
+  else {
+    const maxZoom = bounds.getSouthWest().equals(bounds.getNorthEast()) ? GROUP_BELOW : 16;
+    map.fitBounds(bounds, { paddingTopLeft: topLeft, paddingBottomRight: below, maxZoom });
   }
 }
 
@@ -923,7 +1122,11 @@ function applySnapshot(s) {
   log = s.log;
   setUplink(s.uplink);
   named = namedIn(plan?.diff);
-  markedSpots = new Set([...s.plants, ...s.sites].map((m) => spot(m.location)));
+  // Sites go by their customer too: two customers can each have a "Mannheim Kita".
+  markedSpots = new Map([
+    ...s.plants.map((m) => [spot(m.location), m.name]),
+    ...s.sites.map((m) => [spot(m.location), `${m.name}, ${m.customer_name}`]),
+  ]);
   // Plants first, for the trucks that start at home; trucks before sites, for the tab order.
   if (map) {
     replace(plants, s.plants, addPlant, (p, view) => {
@@ -935,6 +1138,7 @@ function applySnapshot(s) {
     });
   }
   park();
+  regroup();
   plants.forEach(paintPlant);
   sites.forEach(paintSite);
   trucks.forEach(paintTruck);
