@@ -423,6 +423,32 @@ function popupRoot(m, ...children) {
   return h("div", { class: "pop", onkeydown }, ...children);
 }
 
+/** Pans once more after fetched content has grown an open popup, which the opening pan missed. */
+function repan(m) {
+  const popup = m.getPopup();
+  if (!popup?.isOpen()) return;
+  popup.options.autoPan = true;
+  popup.update();
+  popup.options.autoPan = false;
+}
+
+/** Fetches a popup's content again on each call; only the latest answer is shown. */
+function refetch(m, path, show) {
+  let asked = 0;
+  return () => {
+    const n = ++asked;
+    const done = (fill) => {
+      if (n !== asked) return;
+      fill();
+      repan(m);
+    };
+    read(path).then(
+      (body) => done(() => show(body)),
+      (error) => done(() => show(null, error)),
+    );
+  };
+}
+
 async function read(path) {
   const response = await fetch(path);
   const body = await response.json().catch(() => null);
@@ -483,22 +509,21 @@ function plantPopup(p) {
     disable(toggle, busy.has(`status:${id}`));
     if (sync) disable(sync, busy.has("sync") || !canSync());
   };
-  pop = { item: p, refresh };
+  const reload = refetch(p.marker, `api/plants/${enc(id)}/plan`, (slice, error) => {
+    if (error) return loads.replaceChildren(h("p", { class: "pop-sub", text: error.message }));
+    // Frozen loads are batching already; the rest wait for the plant.
+    const next = slice.loads.filter((load) => !load.frozen).slice(0, 5);
+    loads.replaceChildren(
+      slice.version == null
+        ? h("p", { class: "pop-sub", text: "No plan yet." })
+        : next.length
+          ? loadTable(next, slice.version)
+          : h("p", { class: "pop-sub", text: `Nothing left to batch here in plan v${slice.version}.` }),
+    );
+  });
+  pop = { item: p, refresh, reload };
   refresh();
-  read(`api/plants/${enc(id)}/plan`).then(
-    (slice) => {
-      // Frozen loads are batching already; the rest wait for the plant.
-      const next = slice.loads.filter((load) => !load.frozen).slice(0, 5);
-      loads.replaceChildren(
-        slice.version == null
-          ? h("p", { class: "pop-sub", text: "No plan yet." })
-          : next.length
-            ? loadTable(next, slice.version)
-            : h("p", { class: "pop-sub", text: `Nothing left to batch here in plan v${slice.version}.` }),
-      );
-    },
-    (error) => loads.replaceChildren(h("p", { class: "pop-sub", text: error.message })),
-  );
+  reload();
   return el;
 }
 
@@ -549,24 +574,24 @@ function sitePopup(s) {
     orders,
     h("div", {}, delay),
   );
-  pop = { item: s, refresh: () => disable(delay, busy.has(key)) };
+  const reload = refetch(s.marker, `api/sites/${enc(v.id)}/orders`, (list, error) => {
+    if (error) return orders.replaceChildren(h("li", { class: "muted", text: error.message }));
+    orders.replaceChildren(
+      ...(list.length
+        ? list.map((o) =>
+            h(
+              "li",
+              {},
+              h("span", { class: "ref", text: orderRef(o.id) }),
+              h("span", { class: "detail", text: `${num(o.total_volume_m3)} m³ · from ${hhmm(o.requested_start)} · ${words(o.status)}` }),
+            ),
+          )
+        : [h("li", { class: "muted", text: "No orders today." })]),
+    );
+  });
+  pop = { item: s, refresh: () => disable(delay, busy.has(key)), reload };
   pop.refresh();
-  read(`api/sites/${enc(v.id)}/orders`).then(
-    (list) =>
-      orders.replaceChildren(
-        ...(list.length
-          ? list.map((o) =>
-              h(
-                "li",
-                {},
-                h("span", { class: "ref", text: orderRef(o.id) }),
-                h("span", { class: "detail", text: `${num(o.total_volume_m3)} m³ · from ${hhmm(o.requested_start)} · ${words(o.status)}` }),
-              ),
-            )
-          : [h("li", { class: "muted", text: "No orders today." })]),
-      ),
-    (error) => orders.replaceChildren(h("li", { class: "muted", text: error.message })),
-  );
+  reload();
   return el;
 }
 
@@ -1205,10 +1230,12 @@ function plantEvent(view) {
 
 /** A plan version, unless it isn't newer than the page's; or the same version with its trace. */
 function planEvent(next) {
-  const taken = !plan || next.version > plan.version || (next.version === plan.version && !plan.trace_id && next.trace_id);
+  const newer = !plan || next.version > plan.version;
+  const taken = newer || (next.version === plan.version && !plan.trace_id && next.trace_id);
   if (!taken) return;
   plan = next;
   renderPlan();
+  if (newer) pop?.reload?.(); // an open plant or site popup shows the new plan's loads or orders
 }
 
 function logEvent(entry) {
