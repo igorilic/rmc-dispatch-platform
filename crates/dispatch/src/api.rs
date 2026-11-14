@@ -93,7 +93,7 @@ pub fn router(store: Store, jobs: Jobs, clock: fn() -> DateTime<Utc>) -> Router 
 }
 
 /// Puts the request in a span that continues the caller's trace, when the request carries a
-/// `traceparent` and no `X-Forwarded-For`. Traefik adds that header to everything it proxies, so
+/// valid `traceparent` and no `X-Forwarded-For`. Traefik adds that header to everything it proxies, so
 /// its absence means a caller inside the cluster, or the plant through its uplink. Every other
 /// request passes untouched: probes and polls add no traces, and outside callers keep their own.
 async fn trace_context(request: Request, next: Next) -> Response {
@@ -102,6 +102,7 @@ async fn trace_context(request: Request, next: Next) -> Response {
         .get("traceparent")
         .and_then(|v| v.to_str().ok())
         .filter(|_| !headers.contains_key("x-forwarded-for"))
+        .filter(|value| telemetry::is_traceparent(value))
         .map(str::to_owned);
     let Some(traceparent) = traceparent else {
         return next.run(request).await;

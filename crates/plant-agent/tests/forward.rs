@@ -83,12 +83,14 @@ fn settings(url: &str) -> Settings {
     }
 }
 
-/// Publishes `payload` on `topic` at QoS 1, as the console does, and waits for the broker's PUBACK.
-async fn publish(url: &str, topic: &str, payload: &str) {
-    let options = MqttOptions::parse_url(format!("{url}?client_id=test-console")).unwrap();
+/// Publishes `payload` on `topic` at QoS 1, as the console does (`retain` false), and waits for
+/// the broker's PUBACK.
+async fn publish(url: &str, topic: &str, payload: &str, retain: bool) {
+    let mut options = MqttOptions::parse_url(format!("{url}?client_id=test-console")).unwrap();
+    options.set_max_packet_size(64 * 1024, 64 * 1024);
     let (client, mut eventloop) = AsyncClient::new(options, 10);
     client
-        .publish(topic, QoS::AtLeastOnce, false, payload.as_bytes().to_vec())
+        .publish(topic, QoS::AtLeastOnce, retain, payload.as_bytes().to_vec())
         .await
         .unwrap();
     timeout(Duration::from_secs(10), async {
@@ -262,7 +264,7 @@ async fn a_sync_command_reaches_the_agent_even_while_tickets_are_in_flight() {
     }
     wake.notify_one();
     let traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
-    publish(&url, &sync_topic(), traceparent).await;
+    publish(&url, &sync_topic(), traceparent, false).await;
 
     let requested = timeout(Duration::from_secs(10), link.sync_requested())
         .await
@@ -270,5 +272,28 @@ async fn a_sync_command_reaches_the_agent_even_while_tickets_are_in_flight() {
     assert_eq!(requested.as_deref(), Some(traceparent));
     let all = receive_all(&mut received, &burst).await;
     assert_eq!(first_arrivals(&all), burst, "the outbox drains as before");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn a_retained_command_too_big_for_the_client_doesnt_stop_the_outbox() {
+    let (_broker, url) = mosquitto().await;
+    let mut received = subscribe(&url).await;
+    // Junk an anonymous client left behind: retained, and over rumqttc's 10 KiB packet limit.
+    publish(&url, &sync_topic(), &"x".repeat(11 * 1024), true).await;
+    let path = temp_db("retained");
+    let store = Arc::new(Store::open(&path).unwrap());
+    let (wake, link) = (Arc::new(Notify::new()), Arc::new(Link::default()));
+    tokio::spawn(forward::run(
+        Arc::clone(&store),
+        settings(&url),
+        Arc::clone(&wake),
+        Arc::clone(&link),
+    ));
+
+    store.enqueue(TOPIC, &ticket(1), Utc::now()).unwrap();
+    wake.notify_one();
+    assert_eq!(receive_all(&mut received, &[ticket(1)]).await, [ticket(1)]);
+    until("the outbox to drain", || store.oldest().unwrap().is_none()).await;
     let _ = std::fs::remove_file(&path);
 }

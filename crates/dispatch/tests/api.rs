@@ -539,6 +539,8 @@ async fn callers_through_the_ingress_and_untraced_ones_start_their_own_traces() 
         call(&s.router, "GET", "/healthz").await.status,
         StatusCode::OK
     );
+    let junk = call_with(&s.router, "GET", "/world", &[("traceparent", "garbage")]).await;
+    assert_eq!(junk.status, StatusCode::OK);
     drop(outside);
 
     let spans = finished(&exporter, "redispatch").await;

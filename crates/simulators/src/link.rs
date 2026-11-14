@@ -150,6 +150,9 @@ mod tests {
             commanded_truck("sim/trucks/truck-07/breakdown"),
             Some("truck-07")
         );
+        // The topic the demo and the console publish on.
+        let topic = domain::breakdown_topic(&domain::TruckId("truck-07".into()));
+        assert_eq!(commanded_truck(&topic), Some("truck-07"));
         assert_eq!(commanded_truck("sim/trucks//breakdown"), None);
         assert_eq!(commanded_truck("sim/trucks/a/b/breakdown"), None);
         assert_eq!(commanded_truck("trucks/truck-07/status"), None);

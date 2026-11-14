@@ -147,12 +147,21 @@ pub fn traceparent(span: &Span) -> Option<String> {
 /// Makes `span` a child of the trace in a W3C `traceparent` value. Call it before the span is
 /// first entered. A value that isn't a valid `traceparent` is ignored, and `span` stays a root.
 pub fn continue_from(span: &Span, traceparent: &str) {
-    let carrier = HashMap::from([("traceparent".to_owned(), traceparent.to_owned())]);
-    let cx = TraceContextPropagator::new().extract(&carrier);
+    let cx = context_of(traceparent);
     if cx.span().span_context().is_valid() {
         // Fails only when tracing is off for this span, or it already started (a bug the tests catch).
         let _ = span.set_parent(cx);
     }
+}
+
+/// Whether `value` is a valid W3C `traceparent`, one that [`continue_from`] would continue.
+pub fn is_traceparent(value: &str) -> bool {
+    context_of(value).span().span_context().is_valid()
+}
+
+fn context_of(traceparent: &str) -> Context {
+    let carrier = HashMap::from([("traceparent".to_owned(), traceparent.to_owned())]);
+    TraceContextPropagator::new().extract(&carrier)
 }
 
 /// The id of the trace `span` belongs to, as Jaeger shows it, or `None` when it isn't traced.

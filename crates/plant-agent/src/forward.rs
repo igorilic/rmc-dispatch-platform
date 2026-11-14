@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rumqttc::{AsyncClient, ConnectionError, Event, MqttOptions, Packet, QoS};
+use rumqttc::{AsyncClient, ConnectionError, Event, MqttOptions, Packet, QoS, SubscribeReasonCode};
 use tokio::sync::{Notify, mpsc};
 use tokio::time::{Instant, sleep, timeout_at};
 use tracing::{info, warn};
@@ -197,13 +197,30 @@ async fn connection(
     if let Err(end) = expect(&mut events, deadline, connack, late).await {
         return end;
     }
+    // A retained command would come back after every SUBACK, and one too big for the client would
+    // then drop every connection, so the outbox would never drain. The console never retains a
+    // command, so any retained one is junk: clear it first. QoS 0, so no PUBACK can be taken for
+    // a ticket's.
+    if let Err(e) = client
+        .publish(&settings.sync_topic, QoS::AtMostOnce, true, Vec::new())
+        .await
+    {
+        return End::Link(e.to_string());
+    }
     if let Err(e) = client
         .subscribe(&settings.sync_topic, QoS::AtLeastOnce)
         .await
     {
         return End::Link(e.to_string());
     }
-    let suback = |p: &Packet| matches!(p, Packet::SubAck(_));
+    let suback = |p: &Packet| {
+        let Packet::SubAck(ack) = p else { return false };
+        if ack.return_codes.contains(&SubscribeReasonCode::Failure) {
+            // Tickets still go out; only sync commands won't arrive.
+            warn!("the broker refused the sync subscription");
+        }
+        true
+    };
     let late = "the broker didn't confirm the sync subscription in time";
     if let Err(end) = expect(&mut events, deadline, suback, late).await {
         return end;

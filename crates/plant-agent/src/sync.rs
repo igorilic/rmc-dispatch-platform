@@ -285,11 +285,15 @@ mod tests {
             sent.contains(&syncs[0].span_context.span_id().to_string()),
             "the fetch carries the sync span's own context: {sent}"
         );
-        assert_ne!(
-            syncs[1].span_context.trace_id(),
-            click.span_context.trace_id(),
+        assert_eq!(
+            syncs[1].parent_span_id.to_string(),
+            "0000000000000000",
             "an invalid traceparent starts a trace of its own"
         );
-        assert!(seen.lock().unwrap()[2].is_some());
+        let sent = seen.lock().unwrap()[2].clone().unwrap();
+        assert!(
+            sent.contains(&syncs[1].span_context.span_id().to_string()),
+            "the fetch carries the new trace, never the junk: {sent}"
+        );
     }
 }
