@@ -29,7 +29,7 @@ link loses nothing. On Kubernetes, an operator runs each customer integration fr
 
 - **Docker** with Compose v2. This is all `make up` needs. `make test` needs it too: the
   integration tests start NATS and Postgres containers with testcontainers.
-- **Rust** via [rustup](https://rustup.rs). `rust-toolchain.toml` pins 1.99.1, and rustup installs it on first use.
+- **Rust** via [rustup](https://rustup.rs). `rust-toolchain.toml` pins 1.100.0, and rustup installs it on first use.
 - Optional: `cargo install cargo-audit --locked` for `make audit`.
 - For `make k8s` and `make chaos`: **k3d**, **kubectl** and **Helm**, and Docker with at least 4
   CPUs and 8 GB of memory. On macOS: `brew install k3d kubectl helm`; on Linux, Docker Engine,

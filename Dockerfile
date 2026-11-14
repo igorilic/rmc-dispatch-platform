@@ -1,5 +1,5 @@
 # One image per binary: docker build --build-arg BIN=simulators .
-FROM rust:1.99.1-slim-trixie AS build
+FROM rust:1.100.0-slim-trixie AS build
 ARG BIN
 WORKDIR /src
 COPY . .
