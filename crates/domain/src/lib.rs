@@ -291,6 +291,12 @@ pub struct DispatchPlan {
     pub loads: Vec<Load>,
 }
 
+/// The MQTT topic on which the simulated fleet takes a breakdown command for `truck`. Real trucks
+/// have no such command; it exists for the demo and the map console.
+pub fn breakdown_topic(truck: &TruckId) -> String {
+    format!("sim/trucks/{}/breakdown", truck.0)
+}
+
 /// The core NATS subject on which dispatch announces each plan version it stores, for the map
 /// console. It is outside `events.>`, so the EVENTS stream doesn't keep it and nothing replays it:
 /// a listener that was away reads the latest version from dispatch instead.

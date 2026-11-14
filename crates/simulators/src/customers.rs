@@ -14,8 +14,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use anyhow::Context;
+use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use chrono_tz::Europe::Berlin;
+use domain::{Seed, Site};
 use quick_xml::se::Serializer;
 use rand::{RngExt, rngs::StdRng};
 use serde::Serialize;
@@ -190,6 +192,87 @@ pub fn rheinbau_csv(orders: &[GeneratedOrder]) -> anyhow::Result<String> {
         ])?;
     }
     Ok(String::from_utf8(csv.into_inner()?)?)
+}
+
+/// A customer's order, ready to post to its webhook.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WebhookOrder {
+    /// The order's id in dispatch: our customer number and the customer's order number.
+    pub id: String,
+    /// The integration whose webhook takes it: `bauwerk-ag` or `neckar-infra`.
+    pub integration: &'static str,
+    pub content_type: &'static str,
+    pub body: String,
+    /// The ship-to's name, and how far it is from the plant.
+    pub site: String,
+    pub km: f64,
+}
+
+/// The orders of `make chaos` and of the map console's Make chaos: 27 m³ of `mix` at each of the
+/// three webhook customers' ship-tos nearest `plant`, starting five minutes from `now`. That is
+/// already too late to arrive on time, so dispatch batches their first loads at once, and the
+/// plant's bays are busy for the next minutes. Simulated orders start hours ahead instead.
+pub fn rush_orders(
+    seed: &Seed,
+    plant: &str,
+    mix: &str,
+    now: DateTime<Utc>,
+) -> anyhow::Result<Vec<WebhookOrder>> {
+    const BAUWERK: &str = "10001001";
+    const NECKAR: &str = "10001003";
+    let at = seed
+        .plant(plant)
+        .with_context(|| format!("no {plant} in the seed"))?
+        .location;
+    let neckar_sites: Vec<String> = seed
+        .sites_of(NECKAR)
+        .iter()
+        .map(|s| s.id.0.clone())
+        .collect();
+    let mut nearest: Vec<(f64, &Site)> = seed
+        .sites
+        .iter()
+        .filter(|s| [BAUWERK, NECKAR].contains(&s.customer.0.as_str()))
+        .filter_map(|s| Some((seed.geocoder.locate(s)?.distance_km(at), s)))
+        .collect();
+    nearest.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let stamp = now.with_timezone(&Berlin).format("%H%M%S");
+    (1..)
+        .zip(nearest.into_iter().take(3))
+        .map(|(n, (km, site))| {
+            let order = GeneratedOrder {
+                order_ref: format!("EDGE-{stamp}-{n}"),
+                customer: site.customer.0.clone(),
+                ship_to: site.id.0.clone(),
+                mix: mix.to_owned(),
+                volume_m3: 27.0,
+                start: now + TimeDelta::minutes(5),
+                pour_rate_m3_per_h: 60,
+                max_gap_minutes: 20,
+                revision: 1,
+                updated_at: now,
+                cancelled: false,
+            };
+            let (integration, content_type, body) = if order.customer == BAUWERK {
+                ("bauwerk-ag", "application/json", bauwerk_json(&order)?)
+            } else {
+                let version = neckar_version(&order.ship_to, &neckar_sites);
+                (
+                    "neckar-infra",
+                    "application/xml",
+                    neckar_xml(&order, version)?,
+                )
+            };
+            Ok(WebhookOrder {
+                id: format!("{}/{}", order.customer, order.order_ref),
+                integration,
+                content_type,
+                body,
+                site: site.name.clone(),
+                km,
+            })
+        })
+        .collect()
 }
 
 /// Every other neckar-infra ship-to is still on v1.
@@ -430,8 +513,42 @@ async fn upload(drop: &SftpDrop, name: &str, data: &[u8]) -> anyhow::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use domain::Seed;
     use serde_json::Value;
+
+    #[test]
+    fn rush_orders_go_to_the_webhook_ship_tos_nearest_the_plant() {
+        let seed = Seed::rhine_neckar().unwrap();
+        let now = "2026-11-10T09:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let orders = rush_orders(&seed, "plant-walldorf", "C30/37-XC4", now).unwrap();
+        assert_eq!(orders.len(), 3);
+        let km: Vec<f64> = orders.iter().map(|o| o.km).collect();
+        assert!(km.windows(2).all(|w| w[0] <= w[1]), "nearest first: {km:?}");
+        let walldorf = seed.plant("plant-walldorf").unwrap().location;
+        let nearer = seed
+            .sites
+            .iter()
+            .filter(|s| ["10001001", "10001003"].contains(&s.customer.0.as_str()))
+            .filter_map(|s| seed.geocoder.locate(s))
+            .filter(|at| at.distance_km(walldorf) < km[2])
+            .count();
+        assert!(
+            nearer <= 2,
+            "no other webhook ship-to is nearer than the third"
+        );
+        for o in &orders {
+            let customer = match o.integration {
+                "bauwerk-ag" => "10001001",
+                "neckar-infra" => "10001003",
+                other => panic!("{other} has no webhook"),
+            };
+            assert!(
+                o.id.starts_with(&format!("{customer}/EDGE-100000-")),
+                "{}",
+                o.id
+            );
+        }
+        assert!(rush_orders(&seed, "plant-nowhere", "C30/37-XC4", now).is_err());
+    }
 
     #[allow(clippy::too_many_arguments)]
     fn order(

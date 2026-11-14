@@ -20,11 +20,11 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use chrono::{DateTime, TimeDelta, Timelike, Utc};
 use chrono_tz::Europe::Berlin;
-use domain::{DeliveryStatus, MixCode, OrderId, PlantId, PlantTicket, Seed, Site, TruckId};
+use domain::{DeliveryStatus, MixCode, OrderId, PlantId, PlantTicket, Seed, TruckId};
 use reqwest::header::CONTENT_TYPE;
 use rumqttc::{AsyncClient, MqttOptions, QoS};
 use serde_json::{Value, json};
-use simulators::customers::{bauwerk_json, neckar_version, neckar_xml};
+use simulators::customers::{bauwerk_json, neckar_version, neckar_xml, rush_orders};
 use simulators::orders::GeneratedOrder;
 use tokio::time::{Instant, sleep};
 
@@ -222,7 +222,7 @@ impl Demo {
         );
         self.mqtt
             .publish(
-                format!("sim/trucks/{broken}/breakdown"),
+                domain::breakdown_topic(&TruckId(broken.clone())),
                 QoS::AtLeastOnce,
                 false,
                 Vec::new(),
@@ -294,63 +294,20 @@ impl Demo {
         const PLANT: &str = "plant-walldorf";
         self.wait_until_up().await?;
         let seed = Seed::rhine_neckar()?;
-        let walldorf = seed.plant(PLANT).context("no plant-walldorf")?.location;
-        // The webhook customers: bauwerk-ag (JSON) and neckar-infra (XML).
-        let neckar_sites: Vec<String> = seed
-            .sites_of("10001003")
-            .iter()
-            .map(|s| s.id.0.clone())
-            .collect();
-        let mut nearest: Vec<(f64, &Site)> = seed
-            .sites
-            .iter()
-            .filter(|s| ["10001001", "10001003"].contains(&s.customer.0.as_str()))
-            .filter_map(|s| Some((seed.geocoder.locate(s)?.distance_km(walldorf), s)))
-            .collect();
-        nearest.sort_by(|a, b| a.0.total_cmp(&b.0));
-
-        let now = domain::clock::now();
-        // Already too late to arrive on time, so dispatch batches the first loads right away.
-        let start = now + TimeDelta::minutes(5);
-        let stamp = now.with_timezone(&Berlin).format("%H%M%S");
         let before = self
             .get("/plans/latest")
             .await?
             .and_then(|p| p["version"].as_i64())
             .unwrap_or(0);
         let mut ids = Vec::new();
-        for (i, (km, site)) in nearest.iter().take(3).enumerate() {
-            let order = GeneratedOrder {
-                order_ref: format!("EDGE-{stamp}-{}", i + 1),
-                customer: site.customer.0.clone(),
-                ship_to: site.id.0.clone(),
-                mix: MIX.into(),
-                volume_m3: 27.0,
-                start,
-                pour_rate_m3_per_h: 60,
-                max_gap_minutes: 20,
-                revision: 1,
-                updated_at: now,
-                cancelled: false,
-            };
-            if order.customer == "10001001" {
-                self.post_order("bauwerk-ag", "application/json", bauwerk_json(&order)?)
-                    .await?;
-            } else {
-                let version = neckar_version(&order.ship_to, &neckar_sites);
-                self.post_order(
-                    "neckar-infra",
-                    "application/xml",
-                    neckar_xml(&order, version)?,
-                )
+        for order in rush_orders(&seed, PLANT, MIX, domain::clock::now())? {
+            self.post_order(order.integration, order.content_type, order.body)
                 .await?;
-            }
-            let id = format!("{}/{}", order.customer, order.order_ref);
             println!(
-                "  {id}: 27 m³ for {} ({km:.1} km from Walldorf), as soon as possible",
-                site.name
+                "  {}: 27 m³ for {} ({:.1} km from Walldorf), as soon as possible",
+                order.id, order.site, order.km
             );
-            ids.push(id);
+            ids.push(order.id);
         }
         let planned = self
             .next_version(before, |p| {
