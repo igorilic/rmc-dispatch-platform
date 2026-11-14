@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Truck lines plan</title>
+<link rel="stylesheet" href="../../.design/styles.css">
+</head>
+<body>
+<div class="sp-layout__bg"><div><div></div></div></div>
+<div class="sp-layout__fg">
+<main class="sp-layout__main">
+<div class="sp-container-outer sp-article"><div class="sp-container-outer__in">
+<div class="sp-container-inner"><div class="sp-container-inner__in">
+<div class="sp-article__col">
+<article>
+<header class="sp-article__header">
+<h1 class="sp-h1">Plan: milestone 11, truck lines on the road</h1>
+<time class="sp-article__date" datetime="2026-11-14"><span class="sp-bar"></span><span style="margin-left:.75rem">November 14, 2026</span></time>
+</header>
+<div class="sp-prose" style="margin-top:2rem">
+<p>Today the console shows each truck as an icon at its last GPS fix, gliding to the next one. Nothing shows the road it takes, and there is no road to show. A simulated truck drives a straight lat/lon line from its home plant to a random site and back, so even a line through its own fixes would cut across fields and the Rhine. M10 left route lines for later.</p>
+<p>Milestone 11 puts the simulated trucks on real roads. For each truck that is en route or returning, the map then draws the road of the drive it is on, split at the truck: the road ahead is the main line, and the road already driven is a thinner one. The roads are one committed file of 120 plant-to-site roads, made once from OpenStreetMap with a local OSRM by a new <code>make routes</code>. As each drive begins, the truck reports its road once on a new telematics topic, <code>trucks/{id}/route</code>. The report travels the way every report does, MQTT → ingest → NATS → console → page, on a NATS subject of its own, so a restarted console gets it back. The console decides in Rust which roads show, and the page only draws them.</p>
+<p>You chose this line over the road ahead alone and over a trail of GPS fixes (decision 1): it shows where the truck is going and where it has been, it follows the streets, and it comes back after a restart. The other decisions below carry my defaults; tell me where you want something else.</p>
+
+<p><strong>Done when:</strong></p>
+<ul>
+<li>Simulated trucks drive along OpenStreetMap roads: out to the site and back on the same road, and home along it after a breakdown. Drive times keep today’s model (haversine × 1.3 ÷ 40 km/h, ±10 %), so the existing simulator tests keep their assertions.</li>
+<li><code>make routes</code> rebuilds <code>deploy/seed/rhine-neckar.routes.json</code>, with its ODbL notice, from Geofabrik’s extracts and a local OSRM. CI and <code>make test</code> never run it. <code>make test</code> fails when a seed plant or site has no road, or when a road doesn’t fit one route message of 8 KiB.</li>
+<li>Each truck reports its drive’s road once, as the drive begins, on <code>trucks/{id}/route</code>. Ingest maps it to <code>TruckRouteReported</code> on <code>events.trucks.{id}.route</code> or dead-letters it, dispatch ignores it, and the console keeps it.</li>
+<li>In the console, every truck that is en route or returning shows its drive’s road, split at its icon, as below. The line goes when the truck arrives or breaks down. A reload, a hidden tab coming back and a restarted console all bring the lines back.</li>
+<li>No route reaches <code>TravelTimeProvider</code>, the planner or <code>domain::Truck</code>, so the hard constraints (SPEC §4) are untouched. There is no new service, port, variable, metric, stream or consumer.</li>
+<li>The milestone wraps up:
+  <ul>
+  <li><code>make test</code> is green, <code>make audit</code> is clean, <code>make up</code> is healthy, and <code>make demo</code> works as before (CI’s e2e plays the same scenario).</li>
+  <li>CI’s e2e is green with its checks unchanged (decision 8). CI changes by one line, the simulators image’s licence label (decision 4).</li>
+  <li>The README is updated, with the ODbL line and a new screenshot. ADRs 0001 and 0006 are amended, and milestone 11 is ticked in CLAUDE.md. <code>.env.example</code> needs no line.</li>
+  </ul></li>
+</ul>
+
+<h2 id="looks">What it looks like</h2>
+<pre><code> ┌────────────────────────────────────────────────────────────┐
+ │       ■ Weinheim                                           │
+ │       ┇                                                    │
+ │       ▲ truck-12, on its way home                          │
+ │       ┆                                                    │
+ │       ┆┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄○ the site it left             │
+ │                                                            │
+ │  ■ Mannheim ──────┐                                        │
+ │                   └───────▶━━━━━━━━━━━━━┓                  │
+ │                       truck-03          ┗━━━━━━━━○ its site│
+ │                                                            │
+ │ ╭ Trucks ──────────────────────────────╮                   │
+ │ │ ● Available         ● Loading        │                   │
+ │ │ ● En route          ● On site        │                   │
+ │ │ ● Discharging       ● Returning      │                   │
+ │ │ ✕ Out of service                     │                   │
+ │ │ ──━━ Driven, ahead    ┄┄┅┅ Way home  │                   │
+ │ │ ◎ Group of trucks                    │                   │
+ │ │ Plants and sites, as today           │                   │
+ │ ╰──────────────────────────────────────╯                   │
+ └────────────────────────────────────────────────────────────┘</code></pre>
+<ul>
+<li><strong>The line</strong>: for each truck that is en route or returning, the road of the drive it is on. It runs from where the drive began (its plant, the site, or the spot where it broke down) to where it ends (the site, or its home plant). It is the road as the truck reported it when the drive began: OpenStreetMap’s geometry, simplified to within 5 m, so it follows the streets up to about zoom 17; closer in, a bend can sit up to about 13 px off the road at zoom 18 and 50 px at zoom 20.</li>
+<li><strong>The split</strong>: the road ahead, from the icon on, is the main line, and the road already driven is thinner. The split moves to the icon each time its 1.5 s glide reaches a new fix, or at once under reduced motion, so the driven part never runs ahead of the icon. A hidden tab lets go of the stream, and the snapshot on its return redraws every line. Fixes are 100–180 m apart on most drives, and between them the icon still glides straight. At a sharp corner it leaves the line for up to 1.5 s, by about 11–20 px at zoom 15 and 45–80 px at zoom 17, then sits on it again.</li>
+<li><strong>When</strong>: while the truck is en route or returning. Arrival and a breakdown remove the line, and the next drive brings a new one. Parked trucks have none.</li>
+<li><strong>Style</strong>, one for every line:
+  <ul>
+  <li>the truck’s status colour, sky en route and zinc returning, from the existing light and dark tokens;</li>
+  <li>full opacity, which keeps 3.3–4.8:1 against the light basemap and 4.4–8.1:1 against the dark one; at 70 % the light-theme en-route line would drop to about 2.6:1 on a white road;</li>
+  <li>the road ahead 4 px wide and the road driven 2 px, so the two differ by width;</li>
+  <li>dashed on the way home, so en route and returning differ by more than colour (SPEC §9).</li>
+  </ul>
+  Lines sit under every marker, take no clicks and no focus, and show at every zoom. Below zoom 13 they run into the group badges.</li>
+<li><strong>Legend</strong>: one row across the legend, before “Group of trucks”: “Driven, ahead” beside a sample that is thin, then thick, and “Way home” beside the same sample dashed. Each sample is a 22 px <code>aria-hidden</code> SVG, like the legend’s truck icons. A row of its own keeps both columns as wide as they are, and the first fit depends on the legend’s width. With “Way home” the row is still about 10 px narrower than the two columns, on a desktop and on a phone. The row adds about 24 px of height (22 on a phone). I check the first fit by hand at desktop width and at 390 px in step 7.</li>
+<li><strong>Words</strong>: the popup gains “Heading to Mannheim Kita, Bauwerk AG · 12.4 km to go”, or “Heading home to Weinheim · 3.1 km to go”, hidden when no line shows. The marker’s label adds “, heading to Mannheim Kita, Bauwerk AG” without the km, so it changes once per drive, not with every fix.</li>
+<li><strong>It is the truck’s own drive</strong>, as its telematics report it, not dispatch’s plan. The panel shows the plan, and the two still differ.</li>
+</ul>
+
+<h2 id="how">How it works</h2>
+<pre><code>make routes (by hand)  Geofabrik ─osmium─▶ clip ─OSRM on 127.0.0.1:5005─▶ bin/routes ─▶ deploy/seed/rhine-neckar.routes.json
+build                  rhine-neckar.routes.json ─include_str!─▶ simulators binary
+a drive begins         truck ─MQTT trucks/{id}/route─▶ mosquitto ─▶ ingest ─NATS events.trucks.{id}.route─▶ console (the rule) ─SSE route─▶ page
+while it drives        truck ─MQTT trucks/{id}/gps─▶ … as today ─SSE truck─▶ page: the icon glides, then the line splits at it</code></pre>
+
+<h3 id="roads">The roads</h3>
+<ul>
+<li><strong>The file.</strong> <code>deploy/seed/rhine-neckar.routes.json</code> holds a road from each plant to each site: 3 × 40 = 120 roads, keyed by plant id and site id, as <code>[lat, lon]</code> pairs. The way back is the same road reversed. It sits beside the seed, inside the Docker build context (<code>docs/</code> is outside it), and is compiled into the simulators with <code>include_str!</code>, as the seed is. So there is no runtime file, and no change to compose, Helm, k3d or the Dockerfile. <code>main.rs</code>, the simulators binary, holds the <code>include_str!</code> and passes the text to <code>Roads::parse(&amp;str)</code>, and the coverage tests include the file under <code>#[cfg(test)]</code>. The console and the demo link the simulators library for their orders, so the data stays out of the library: only the simulators binary and its image carry the ODbL data, and decision 4’s one label stays right. The console learns roads only from the trucks.</li>
+<li><strong>Ends.</strong> Each road starts exactly at the plant’s seed location and ends exactly at <code>geocoder.locate(site)</code>, the postal-code centroid for the 6 address-only sites. The generator adds them before and after OSRM’s snapped ends, so the first and last metres are short straight stubs. The seed has at most 4 decimals, interior points are rounded to 5, and <code>serde_json</code>’s <code>float_roundtrip</code> is on, so the ends compare equal. Trucks leave and arrive exactly where they do today, drive times stay bit-identical for the seeded scenario, and a route’s last point names its plant or site on the page.</li>
+<li><strong>Size.</strong> Douglas-Peucker at 5 m, a constant, keeps about 3–6 points per km: about 11k points and 0.2 MB in all. Full geometry would be about 1.3 MB. The generator never writes a road whose route message would pass 8 KiB, and a test pins the same bound on all 120 committed roads. If a road ever breaks it, the tolerance is the knob.</li>
+<li><strong><code>make routes</code></strong> is a one-line target beside <code>sqlx-prepare</code> that runs <code>deploy/seed/routes.sh</code>. The script:
+  <ul>
+  <li>starts with <code>set -euo pipefail</code>, goes to the repo root, and checks for docker, curl and osmium with a brew hint, like <code>k8s.sh</code>;</li>
+  <li>downloads Geofabrik’s <code>karlsruhe-regbez</code>, <code>hessen</code> and <code>rheinland-pfalz</code> extracts, 741 MB, into <code>target/routes</code>, because the seed spans all three states;</li>
+  <li>reads each extract’s date with <code>osmium fileinfo -g header.option.osmosis_replication_timestamp</code>, stops if the three differ, and passes the date to the generator;</li>
+  <li>merges them with osmium and clips to the seed’s extent plus about 10 km on each side, a box the generator prints first (<code>cargo run -p simulators --bin routes -- --bounds</code>) from the same <code>Seed</code> and <code>PostalCodeGeocoder</code>. For today’s seed it is <code>-b 8.29,49.15,9.03,49.64</code>, so the A61 near Frankenthal, just west of a 5 km margin, stays inside. The three extracts stay as named. They cover all of today’s box except its south-east corner, in Regierungsbezirk Stuttgart, which no plant-to-site road needs; the generator’s worst-ratio list would show a detour there. A site outside the extracts would show in the same list as a long snap, with its pair named;</li>
+  <li>runs <code>ghcr.io/project-osrm/osrm-backend:v26.11.0-debian</code>, which is multi-arch (there is no plain <code>v26.11.0</code> tag), with <code>--user "$(id -u):$(id -g)"</code>, so <code>target/routes</code> stays yours on Linux. It runs <code>osrm-extract -p /opt/car.lua</code>, <code>osrm-partition</code> and <code>osrm-customize</code>, then <code>osrm-routed --algorithm mld</code> on <code>127.0.0.1:5005</code>, and stops it on exit;</li>
+  <li>waits up to 60 s until OSRM answers <code>/nearest</code>, so the first request isn’t refused;</li>
+  <li>runs the generator into a temporary file and moves it into place.</li>
+  </ul></li>
+<li><strong>The generator</strong>, <code>crates/simulators/src/bin/routes.rs</code>, takes OSRM’s URL and the extracts’ date, or <code>--bounds</code> alone to print the clip box. It places sites with domain’s <code>Seed</code> and <code>PostalCodeGeocoder</code>, so it can’t drift from the simulators or the console, and talks plain HTTP with <code>reqwest</code>, already a dependency. For each pair it asks <code>/route/v1/driving/{lon},{lat};{lon},{lat}?overview=full&amp;geometries=geojson&amp;exclude=ferry</code>, swaps OSRM’s <code>[lon, lat]</code>, adds the exact ends, simplifies and rounds. It writes the notice fields, then one road per line, sorted by plant and site, so a regeneration diffs road by road. It fails on any pair without a road or over the size bound. It prints the count, the size, the largest road and its message size, the largest snap distance and the worst ratio of road to straight line. It lists any pair over 300 m or 2.5, and a few Rhine crossings, each with an <code>https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&amp;route=&lt;lat&gt;,&lt;lon&gt;;&lt;lat&gt;,&lt;lon&gt;</code> link that compares OSM’s own car route with ours. The links hold only public seed coordinates. No image contains the generator, because the Dockerfile builds one <code>--bin</code> per image.</li>
+<li><strong>Module docs.</strong> <code>roads.rs</code> and <code>bin/routes.rs</code> open with a <code>//!</code> doc, as algorithmic modules must (SPEC §15). It says how a point along a road is found, why the straight fallback’s length is haversine × 1.3, and how the generator fixes the ends, simplifies at 5 m, rounds to 5 decimals and keeps each road within one message.</li>
+<li><strong>Ceiling</strong> (ponytail): the pairs are fixed. A new or moved plant or site needs <code>make routes</code> again, and a coverage test fails <code>make test</code> until then. At runtime a missing pair falls back to today’s straight line, reported as a two-point route. Car profile, no traffic, no arbitrary A to B. The upgrade is the same image and clip run as a routing service, ADR 0006’s path.</li>
+</ul>
+
+<h3 id="driving">Trucks on the road</h3>
+<ul>
+<li>A new <code>crates/simulators/src/roads.rs</code> has <code>Road { points, km }</code>, with <code>km</code> cumulative from domain’s <code>Location::distance_km</code>.
+  <ul>
+  <li><code>at(km)</code> finds the segment with <code>partition_point</code> and interpolates inside it. It returns the exact first or last point at or past either end, and guards zero-length spans and roads, so no fix is ever NaN.</li>
+  <li><code>path(from_km, to_km)</code> is the stretch a drive covers, in its direction: <code>at(from_km)</code>, the points strictly between, then <code>at(to_km)</code>.</li>
+  <li><code>Road::straight(from, to)</code> is two points with a length of haversine × 1.3, which reproduces today’s positions and speeds exactly.</li>
+  <li><code>Roads</code> maps a plant and a site to a road. Its default is empty, which means the straight line everywhere. <code>Roads::parse(&amp;str)</code> parses the file’s text, with an error rather than a panic if a road has fewer than 2 points. <code>main.rs</code> calls it once, with the compiled-in file.</li>
+  </ul></li>
+<li><code>Motion::Driving</code> becomes <code>{ road, from_km, to_km, duration, dead_zone }</code>. The position is <code>road.at(from_km + (to_km − from_km) × min(elapsed ÷ duration, 1))</code>, constant speed along the road. The reported speed is the distance driven along it, |<code>to_km</code> − <code>from_km</code>|, ÷ the drive time.</li>
+<li><code>drive(road, from_km, to_km)</code> takes its ends from <code>road.at()</code> and keeps today’s duration (haversine × 1.3 ÷ 40 km/h × U[0.9, 1.1), at least 60 s), the dead-zone rule and the order of random draws. The road lookup in <code>trip()</code> draws nothing, so seeded runs keep their scenario.</li>
+<li><code>TruckSim</code> keeps its current <code>road</code> and its <code>km</code> along it in place of the bare position, starting at <code>Road::straight(home, home)</code> and km 0. The roads table comes through a <code>with_roads()</code> builder like <code>PlantSim::quiet</code>, so <code>TruckSim::new</code> keeps its 7 parameters, clippy’s limit. Out is <code>drive(road, 0, L)</code> and back is <code>drive(road, L, 0)</code>. When a drive completes, <code>phase()</code> sets the position and <code>km</code> to its end, so a breakdown that lands before the next phase parks and sets off from the same point.</li>
+<li><code>break_down()</code> parks at <code>road.at(km)</code> for the repair, then drives <code>drive(road, km, 0)</code>:
+  <ul>
+  <li>mid-way out, it turns round and retraces the road to its plant;</li>
+  <li>mid-way back, it carries on home along it;</li>
+  <li>at the site, it takes the whole road reversed, as a normal return does;</li>
+  <li>at the plant, it is today’s zero-length 60 s drive at speed 0.</li>
+  </ul></li>
+<li>The existing messages keep their topics, cadences, <code>emit()</code>, <code>seq</code> and modem. Their coordinates now lie on roads, and the GPS speed is the distance driven along the road ÷ the drive time. The route message joins them in step 5.</li>
+</ul>
+
+<h3 id="wire">Each drive’s road on the wire</h3>
+<ul>
+<li><strong>The message</strong> goes on <code>trucks/{id}/route</code>, with QoS 1 and no retain, through the simulators’ one shared MQTT client and the truck’s own modem, like its other three topics. The body is the vendor header plus the path, <code>[lat, lon]</code> pairs at 5 decimals in the drive’s direction, at least 2 of them. A zero-length drive sends two equal ones. It is text JSON, because the DLQ stores raw payloads as text:
+<pre><code>{"vehicle":"truck-07","seq":812,"ts_ms":1794236511059,"path":[[49.4875,8.466],…,[49.4786,8.4842]]}</code></pre></li>
+<li><strong>When.</strong> <code>phase()</code> emits it through <code>emit()</code> for each Driving motion, right after the status (and drum) change and before the first GPS fix: out, back, and home after a repair. So it takes the next <code>seq</code>, and its <code>ts_ms</code> is at or after its status’s, because the simulators’ clock follows tokio’s monotonic one. A dead zone never holds it back: zones start at least 24 s into a drive, and <code>phase()</code> flushes before the status.</li>
+<li><strong>Size.</strong> Every committed road’s route message is 8 KiB or less, measured with the longest truck id and header, so a packet is about 8.2 KB. That is under rumqttc’s 10,240 B default on both the simulators’ and ingest’s clients. A breakdown’s path is a stretch of its road, so it never has more points than the whole road. The default stays, and neither client changes.</li>
+<li><strong>The event.</strong> <code>Event::TruckRouteReported { truck, path: Vec&lt;Location&gt; }</code> is <code>"type": "truck_route_reported"</code> on the wire, with <code>path</code> as <code>{lat, lon}</code> objects like every <code>Location</code>: about 14 KB at most on NATS, whose limit is 1 MB.
+  <ul>
+  <li>It goes on a subject of its own, <code>events.trucks.{id}.route</code>. EVENTS already stores <code>events.&gt;</code>, and the console’s and dispatch’s existing <code>events.trucks.&gt;</code> filters already match it.</li>
+  <li>The console’s consumer starts at each subject’s last message. On the truck’s shared subject, the drive’s first GPS fix, sent right after the route, would bury it at once; on its own subject, it is there after any restart.</li>
+  <li>Its id is <code>{vehicle}:{seq}:{ts_ms}</code>, so a modem duplicate falls in JetStream’s 120 s window, and <code>occurred_at</code> is <code>ts_ms</code>.</li>
+  </ul></li>
+<li><strong>Ingest</strong> (<code>telematics.rs</code>): <code>route</code> joins the topic alternation with an explicit arm before the inner <code>_</code> arm, which means status. Without it, every route would parse as a status and dead-letter with “missing field status”.
+  <ul>
+  <li>It parses <code>{ path: [[lat, lon], …] }</code>, requires at least 2 points, each finite and in range (latitude ±90, longitude ±180), and maps them to <code>Location</code>s in order.</li>
+  <li>The shared header checks stay: the vehicle matches the topic, and the truck is in the seed.</li>
+  <li>A malformed route takes the existing path: <code>dlq.telematics</code>, the dead-lettered counter and the DLQ gauge. <code>ingest-cli dlq replay --customer telematics</code> maps it once its cause is fixed.</li>
+  <li>Routes stay traced, at about two per truck per trip.</li>
+  </ul></li>
+<li><strong>Dispatch</strong> (<code>intake.rs</code>): the variant joins the span’s truck pattern and the <code>=&gt; None</code> arm beside drum rotation and off-plan tickets, with a comment that routes are for the map. Its fleet consumer filters <code>events.trucks.&gt;</code>, so it acks each route and does nothing. The module doc’s <code>events.trucks.*</code> becomes <code>events.trucks.&gt;</code>. So do the README’s and architecture.md’s, because <code>*</code> doesn’t match a route’s four-token subject. ADR 0001 becomes “Accepted, amended” and gets one paragraph, as 0005 records its amendment: “Amendment (milestone 11): each truck’s route has a subject of its own, <code>events.trucks.&lt;id&gt;.route</code>, so the trucks’ subjects are <code>events.trucks.&gt;</code>.”</li>
+</ul>
+
+<h3 id="rule">The console’s rule</h3>
+<ul>
+<li><code>State</code> keeps each truck’s newest route beside its <code>TruckView</code>, not inside it: a path and its time, newest by <code>occurred_at</code>. <code>TruckView</code> doesn’t grow, so a GPS push stays about 194 B and never carries a path.</li>
+<li><strong>One rule</strong>, in Rust: a route shows if and only if its truck’s status is <code>en_route</code> or <code>returning</code>, and the route’s time is at or after the status’s. At or after, not the strict <code>newer()</code>, because a route can carry its status’s millisecond. Every later status has a later time, so it hides the line.</li>
+<li>The console runs the rule after every accepted route, status and <code>/world</code> merge, under the same lock as the change. <code>apply()</code> makes a status change and the route change it causes, and sends both, before it releases the lock, as <code>load_world</code> does for its batch. That keeps <code>subscribe()</code>’s promise: a change is in the snapshot or among the changes, never in both. It remembers what it last pushed for each truck, and pushes a <code>route</code> event only when what shows changes: <code>{"truck":"truck-07","path":[…]}</code>, or <code>"path":null</code>.</li>
+<li><code>snapshot.routes</code> holds only the routes that show, keyed by truck id, and is worked out when the snapshot is taken.</li>
+<li>The existing <code>pushed{kind}</code> counter and <code>event_lag{kind}</code> histogram count route pushes, so there is no new metric, and the dashboard’s by-kind panels show them without an edit. The lag leaves out events received before the console started, so the startup replay of each truck’s last route doesn’t skew it.</li>
+</ul>
+
+<h3 id="lines">The page’s lines</h3>
+<ul>
+<li><strong>Drawing.</strong> One <code>setRoute(t, path)</code> takes both the <code>route</code> events and the snapshot’s <code>routes</code>. It removes the truck’s two lines, and for a path it draws two polylines in the overlay pane, under every marker:
+  <ul>
+  <li><code>className</code> <code>route driven s-&lt;status&gt;</code> and <code>route ahead s-&lt;status&gt;</code>;</li>
+  <li><code>interactive: false</code>;</li>
+  <li>a <code>weight</code> equal to the CSS width, because Leaflet clips by it.</li>
+  </ul>
+  The class is set once. A status change that alters what shows always brings a push, and a truck’s status reaches the page before the route it shows.</li>
+<li>After <code>replace()</code>, <code>applySnapshot</code> calls <code>setRoute(t, s.routes[id] ?? null)</code> for every truck, so trucks that <code>addTruck</code> created get their lines, and a line whose truck arrived or broke down while the stream was closed goes too. <code>replace()</code> removes a vanished truck’s lines with its marker. All of it sits behind the existing <code>map</code> guard. The overlay pane is marked <code>aria-hidden</code>, like the page’s other decorative SVGs, because the words carry the meaning.</li>
+<li><strong>The split</strong> happens when a glide ends: in <code>frame()</code> at <code>f === 1</code>, right after <code>glides.delete(t)</code>, and in <code>glide()</code>’s jump branch.
+  <ul>
+  <li>The page projects the truck’s fix with <code>L.Projection.SphericalMercator</code>. It searches the route’s segments, projected once when the route arrived, from the previous split onwards with the public <code>L.LineUtil.closestPointOnSegment</code>, and keeps the first of the nearest.</li>
+  <li>The road driven runs up to that point, and the road ahead runs from it.</li>
+  <li>A new route starts the search at its first segment, and splits at once unless the icon is gliding.</li>
+  <li>Not <code>Polyline.closestLayerPoint</code>: it scans only the clipped, on-screen parts.</li>
+  <li>Ponytail: a straight scan of at most about 430 segments per fix, fine for 25 trucks.</li>
+  </ul></li>
+<li><strong>Kilometres to go</strong>: the length of the road ahead, summed with <code>map.distance</code> and shown with <code>num()</code>.</li>
+<li><strong>Words.</strong> The place is the route’s last point looked up in <code>markedSpots</code>, which holds plants by name and sites as “name, customer”, because site names repeat across customers. The console places sites with <code>geocoder.locate</code>, as the roads’ ends do, and every seed coordinate has at most 4 decimals, so the 5-decimal <code>spot()</code> key matches. The row says “Heading home to” when that point is the truck’s home plant, and “Heading to” otherwise. With no match it shows only the km. <code>truckPopup</code> gains the row, filled by <code>refresh()</code>, which already runs every second. <code>paintTruck</code> adds “, heading to &lt;place&gt;” to the label.</li>
+<li><strong>CSS</strong>: <code>.route</code> takes <code>stroke: var(--status, var(--text-muted))</code>, no fill, round caps and joins, and no opacity. <code>.route.ahead</code> is 4 px and <code>.route.driven</code> 2 px, and <code>.route.s-returning</code> adds the dash. The legend samples reuse these classes: the “Driven, ahead” sample has no status and takes the neutral <code>--text-muted</code>, and the “Way home” sample carries <code>s-returning</code> for its dash, whose zinc matches <code>--text-muted</code> in both themes. Leaflet’s SVG renderer uses presentation attributes and CSSOM transforms, which the CSP allows, so its test passes unchanged.</li>
+<li>A ponytail comment by the line code says the lines need <code>attribution: ATTRIBUTION</code> if the basemap ever stops being based on OpenStreetMap.</li>
+<li>The page has no rule of its own: the console sends only routes that show and pushes every change.</li>
+</ul>
+
+<h3 id="edges">Restarts, reorders and breakdowns</h3>
+<p>A line can be missing, never wrong.</p>
+<ul>
+<li><strong>Console restart</strong>: the state starts from the seed. The consumer starts at each subject’s last message, which now includes each truck’s last route on <code>events.trucks.{id}.route</code>, however many fixes followed it. <code>/world</code> brings each status. Whichever lands first, the rule runs again when the other lands, so a driving truck’s line is back within seconds. It is as fresh as <code>/world</code>’s status, a limit truck statuses already have. A parked truck’s last route is older than its status, so it stays hidden.</li>
+<li><strong>Stale replays</strong>: a running console ignores a route replayed from the DLQ when it isn’t newer than the one it holds. The consumer takes each subject’s last message by stream order, not by time, so after a console restart the replayed route can be the one it starts from. It is older than the truck’s current status, so the rule hides it, and that truck’s line waits for its next drive.</li>
+<li><strong>NATS reconnect</strong>: the console keeps its memory, the consumer starts again at each subject’s last message, and a replayed route that isn’t newer changes nothing. <code>/world</code> is read again, and its merge reruns the rule, so a truck that arrived during the outage loses its line.</li>
+<li><strong>Page reload, hidden tab</strong>: the next snapshot brings back every line that shows and takes away every other.</li>
+<li><strong>Simulators restart</strong>: every truck reports <code>available</code> first, so every line goes, and each next drive brings a new one.</li>
+<li><strong>Duplicates and reorders</strong>: JetStream drops a repeat by its id, and one that slips through isn’t newer. The modem holds a message until its next send outside a dead zone. At a drive’s start no dead zone is open, so a drive’s status, drum and route each swap at most with the message after them. A route that lands before its status is kept and shows when the status lands. One that lands after the first fix shows all the same.</li>
+<li><strong>Loss</strong>: a route lost on the simulators’ clean-session reconnect, or dead-lettered, leaves that drive without a line. The previous drive’s route stays hidden, because it is older than the new status.</li>
+<li><strong>Dead zones</strong>: buffered fixes flush in order. The icon glides straight across the gap, and the split catches up when its last glide ends.</li>
+<li><strong>Breakdowns</strong>: <code>out_of_service</code> hides the line. After the repair, <code>returning</code> and its route show the way home from the breakdown point, along the same road. A breakdown at the plant reports two identical points, which draw at most a dot under the plant’s marker.</li>
+<li><strong>Make chaos</strong> cuts only the plant-agent’s uplink. Truck telematics go straight to the cloud’s Mosquitto, so lines carry on.</li>
+</ul>
+
+<h2 id="changes">What changes where</h2>
+<table>
+<thead><tr><th>Where</th><th>What changes</th></tr></thead>
+<tbody>
+<tr><td><code>crates/simulators</code></td><td>New <code>roads.rs</code>: <code>Road</code>, <code>Roads</code>, <code>path()</code> and <code>Roads::parse()</code>. <code>fleet.rs</code>: drives follow a road, <code>with_roads()</code>, breakdowns drive home along it, <code>route_message()</code>, <code>phase()</code> reports each drive’s road, and the module doc. <code>main.rs</code> compiles in the file and attaches the roads, <code>lib.rs</code> adds the module and names the new binary, and both module docs drop “no real data”. New <code>bin/routes.rs</code>, the generator.</td></tr>
+<tr><td><code>deploy/seed</code></td><td>New <code>routes.sh</code>, and the generated <code>rhine-neckar.routes.json</code>: about 0.2 MB, ODbL.</td></tr>
+<tr><td><code>Makefile</code></td><td><code>routes</code> in <code>.PHONY</code>, and a one-line target beside <code>sqlx-prepare</code>: “needs Docker, osmium-tool and internet; the output is committed”.</td></tr>
+<tr><td><code>crates/domain</code></td><td><code>events.rs</code>: <code>TruckRouteReported</code>, its subject, the <code>subject()</code> doc, and two test assertions.</td></tr>
+<tr><td><code>crates/ingest</code></td><td><code>telematics.rs</code>: the route arm, its checks and its tests.</td></tr>
+<tr><td><code>crates/dispatch</code></td><td><code>intake.rs</code>: the variant in its two matches, and <code>events.trucks.&gt;</code> in the module doc.</td></tr>
+<tr><td><code>crates/console</code></td><td><code>state.rs</code>: the routes, the rule, the pushes and <code>routes</code> in the snapshot. <code>live.rs</code>: the route arm, a push after each status, the pushes in <code>load_world</code>, and the module doc. <code>http.rs</code> and <code>metrics.rs</code>: <code>route</code> in their doc lists, and one more assertion in the snapshot test. <code>tests/live.rs</code>: two tests. <code>web/app.js</code>: the lines, the split, the legend row, the popup row and the label. <code>web/app.css</code>: <code>.route</code> and the legend samples.</td></tr>
+<tr><td><code>.github/workflows/ci.yml</code></td><td>One line on the metadata step: the simulators image’s licence label (decision 4).</td></tr>
+<tr><td>SPEC and CLAUDE.md</td><td>SPEC §2, §3, §5, §9, §10, §11 and §13, and milestone 11 in CLAUDE.md.</td></tr>
+<tr><td>Other docs</td><td>README: Prerequisites, Commands, Walkthrough step 7, Watching the simulators, Watching ingest, the triggers table, the tracing paragraph, the console’s pushed kinds and event-lag kinds, Map console and the screenshot’s alt text, How it works, the attribution paragraph and License. <code>docs/architecture.md</code>: the Context node and paragraph, the EVENTS labels, the simulators row and the console’s live path. ADRs 0001 and 0006 amended. <code>docs/console.jpg</code> retaken.</td></tr>
+<tr><td>Tools, for <code>make routes</code> only</td><td>osmium-tool from brew, the OSRM image, and Geofabrik’s extracts.</td></tr>
+<tr><td>Unchanged</td><td><code>domain::Truck</code>, the planner and <code>TravelTimeProvider</code>, the NATS streams and consumers, <code>TruckView</code> and <code>/world</code>, the SSE stream’s other events, the CSP, the metrics, the dashboard, the charts, compose, k3d, the e2e, the Dockerfile unless step 1 bumps Rust, and <code>.env.example</code>. No new crate, service, port or variable.</td></tr>
+</tbody>
+</table>
+
+<h2 id="osm">The OpenStreetMap data</h2>
+<ul>
+<li>I read the roads file as a substantial Derivative Database of OpenStreetMap under ODbL 1.0: coordinates for software to read, taken systematically from far more than 100 ways. That is a conservative reading, not legal advice (decision 4).</li>
+<li>So the file is offered under ODbL on its own. It is keyed by our plant and site ids and kept apart from the seed, so the seed and the code stay MIT, as the OSMF’s Collective Database guideline allows.</li>
+<li>Its notice travels with it. <code>attribution</code> “© OpenStreetMap contributors”, <code>license</code> “ODbL-1.0”, <code>license_url</code> and <code>source</code> (OSRM’s version and profile, the extracts’ date, the 5 m tolerance) sit inside the file, and the coverage test checks that they are there.</li>
+<li>README’s License section gets one line, linking the licence, as ODbL §4.2 asks, and OpenStreetMap’s copyright page: “<code>[deploy/seed/rhine-neckar.routes.json](deploy/seed/rhine-neckar.routes.json)</code> contains information from <code>[OpenStreetMap](https://www.openstreetmap.org/copyright)</code>, which is made available here under the <code>[Open Database License (ODbL)](https://opendatacommons.org/licenses/odbl/1-0/)</code>. © OpenStreetMap contributors.” It lands in the same commit as the file.</li>
+<li>The file is compiled into the simulators binary, so the image CI pushes to GHCR carries it too. CI’s <code>docker/metadata-action</code> step labels every image with the repository’s licence, <code>org.opencontainers.image.licenses=MIT</code>, so the simulators image would claim MIT while it carries ODbL data. By default I correct that with one line on that step (decision 4). The action’s custom labels replace generated ones of the same name, while a Dockerfile <code>LABEL</code> would lose to the generated one. I check the label in the pushed image’s config after the next push to <code>main</code>.</li>
+<li>ODbL §4.6 asks for the method to be available: the file is public, and <code>routes.sh</code> and <code>bin/routes.rs</code> are the method.</li>
+<li>The route messages and events carry stretches of these roads through our own broker and stream. The drawn lines are a Produced Work. The map’s existing “© OpenStreetMap” credit, linked to <code>openstreetmap.org/copyright</code>, covers them.</li>
+<li>OSRM, BSD-2-Clause, runs only on your machine, and nothing of it ships.</li>
+</ul>
+
+<h2 id="security">Security</h2>
+<ul>
+<li>The running stack gains one MQTT topic and one NATS subject, and no port, service, stream or consumer. The console serves the lines from its own state over its existing stream, so the CSP and its test stay as they are. The page still loads only its own files, Leaflet and the tiles.</li>
+<li>Ingest checks every route at the trust boundary: the shared header (the vehicle matches the topic, and the truck is in the seed), and at least two points, each finite and in range. A malformed route goes to the DLQ, never to the map, and no route reaches <code>TravelTimeProvider</code>, the planner or <code>domain::Truck</code>.</li>
+<li>A message over rumqttc’s 10,240 B limit from any other sender would stall ingest’s MQTT intake instead of dead-lettering. That is how every truck topic behaves today, and the 8 KiB bound keeps our simulators well clear of it.</li>
+<li>The console holds at most one route per seed truck, 25 in all. Our simulators’ routes have at most about 430 points; another sender’s are bounded only by rumqttc’s 10,240 B packet, about 1,700 short points.</li>
+<li><code>make routes</code> runs by hand. It downloads Geofabrik’s extracts over HTTPS, pulls an OSRM image pinned to an exact tag, binds OSRM to <code>127.0.0.1:5005</code> only, and stops it on exit. The generator talks only to that OSRM, parses its answers with serde, and writes a temporary file that replaces the old one only when every road is there and fits.</li>
+<li>The roads file is data compiled into a binary, never code. One road per line keeps its diff readable, and I read it before I commit it.</li>
+<li>Nothing personal enters the repo: public OpenStreetMap roads, keyed by our simulated seed.</li>
+</ul>
+
+<h2 id="steps">Steps</h2>
+<p>Each step makes its own Conventional Commits once <code>make test</code> is green. Then I build the images from that commit and bring up the <code>make up</code> and <code>make demo</code> stacks, and you run <code>make k8s</code> from the same commit. In this session images build only from <code>COPYFILE_DISABLE</code> tar contexts of <code>git ls-files</code>, which leave out a file git doesn’t track yet, and <code>make k8s</code> builds whatever the working tree holds. Anything those checks find goes in a fix commit, as in M10 (9a2e226, a9b0435), and I ask before I restart anything in the clusters. Behaviour changes start with a failing test. The page’s JavaScript is the one exception: it has no test runner, so I check it by hand in Chrome, and the rule it draws is tested in Rust. The order never breaks the stack or CI’s empty-DLQ check: ingest learns the route topic in step 4, a step before any truck sends one.</p>
+
+<h3 id="step-1">Step 1</h3>
+<p><strong>Spec, CLAUDE.md and the toolchain.</strong> After this plan’s own commit, one <code>docs(spec): milestone 11, truck lines (M11 step 1)</code> commit changes:</p>
+<ul>
+<li>SPEC §2: the fleet drives OpenStreetMap roads, and “no real data” becomes “no real customer or fleet data”;</li>
+<li>§3: one sentence, that OSRM supplies the simulated trucks’ roads offline (<code>make routes</code>), while the plan’s travel time stays on this model and the simulated drive times stay haversine × 1.3 ÷ 40 km/h, ±10 %;</li>
+<li>§5: <code>trucks/{id}/route</code>, “the road a truck is about to drive, once per drive”, beside the other three topics;</li>
+<li>§9: a bullet on the lines, with which trucks show one, ahead and driven, the dash, the legend, the words, and that they are the truck’s own drive, not the plan. The live-updates bullet says that <code>events.trucks.&gt;</code> includes each truck’s route subject;</li>
+<li>§10: <code>deploy/seed/</code> in the layout, “the seed (MIT), and the trucks’ roads (ODbL) that <code>make routes</code> builds”;</li>
+<li>§11: <code>make routes</code>, with OSRM and osmium-tool as offline tools, and the ODbL file;</li>
+<li>§13: item 11, with milestone 11 in CLAUDE.md too.</li>
+</ul>
+<p>I check <code>rust-toolchain.toml</code> (1.100.0), the Dockerfile’s <code>rust:1.100.0-slim-trixie</code> and README’s Prerequisites line against the latest stable. If a newer one exists, I bump all three in their own <code>chore</code> commit, as 774d380 did, and run <code>make test</code>. The spec commit is docs only, so it needs no <code>make test</code>: <code>git diff</code> shows only the planned sentences, with §4 untouched. You approve the SPEC diff before step 2.</p>
+
+<h3 id="step-2">Step 2</h3>
+<p><strong>Trucks drive along a road, with the straight fallback and no data yet.</strong> <code>roads.rs</code> with <code>Road</code>, <code>at()</code>, <code>straight()</code>, an empty <code>Roads</code> and its <code>//!</code> doc. In <code>fleet.rs</code>: a drive along a road, <code>with_roads()</code>, the lookup in <code>trip()</code>, <code>break_down()</code> along the road, the position and <code>km</code> set to a drive’s end when it completes, and the module doc. <code>main.rs</code> attaches no roads yet, so the stack still drives straight lines. Tests first, against a stub (<code>Road</code>, an empty <code>Roads</code> and a <code>with_roads()</code> that stores the roads without using them), so they compile and fail: the stub’s <code>at()</code> misses the road, and the fleet tests fail on today’s straight drive:</p>
+<ul>
+<li><code>a_point_along_a_road_lies_on_it</code>: on a hand-made dog-leg, the ends are exact, the corner’s km gives the corner, values past either end clamp, and <code>straight(home, home)</code> gives home with no NaN.</li>
+<li><code>a_truck_drives_along_its_road_and_keeps_its_drive_time</code>: one site and a dog-leg road through <code>with_roads()</code>. Every en-route fix lies within 1 m of the road, and at least one lies more than 100 m off the straight line. The speed is the distance driven ÷ the drive time, the drive still takes haversine × 1.3 ÷ 40 (±10 %), and the first fix on site is the site.</li>
+<li><code>a_broken_down_truck_drives_home_along_its_road</code>, with its own loop like the existing breakdown test: it breaks down on the first fix past the corner, where retracing the road and driving straight home differ. Every fix on the way home lies on the road between that point and the plant, and the first fix at home is the plant.</li>
+</ul>
+<p>The four existing fleet tests keep their assertions. <code>one_trip</code> gains a roads argument, and its three callers pass <code>Roads::default()</code>, today’s straight drive. The existing breakdown test stays as it is: it breaks down at the plant, which covers the zero-length drive. <code>make test</code> green. Commit: <code>feat(simulators): trucks drive along a road (M11 step 2)</code>.</p>
+
+<h3 id="step-3">Step 3</h3>
+<p><strong>The roads: <code>make routes</code>, the ODbL file and the size bound.</strong> In three parts:</p>
+<ol>
+<li>The generator <code>bin/routes.rs</code> with its <code>//!</code> doc, <code>deploy/seed/routes.sh</code> and the <code>make routes</code> target. <code>route_message(vehicle, path)</code>, a public function in <code>fleet.rs</code>, builds a route message the way <code>emit()</code> will send it: the <code>Envelope</code> with <code>seq</code> <code>u64::MAX</code> and a 13-digit <code>ts_ms</code>, and a <code>Route</code> body whose path is <code>[lat, lon]</code> pairs at 5 decimals. The generator’s bound and <code>every_road_fits_one_route_message</code> both measure it with the seed’s longest truck id. Test first: <code>douglas_peucker_keeps_corners_and_drops_the_rest</code>, in which collinear points collapse to the two ends, a right angle stays, and the ends always stay. <code>make test</code> green. Commit: <code>feat(simulators): make routes builds the trucks’ roads from OpenStreetMap (M11 step 3)</code>.</li>
+<li>You run <code>make routes</code> once (decision 10). We go through its summary together: 120 roads, about 0.2 MB, the largest road and its message size, the largest snap and the worst ratio of road to straight line. You open the OpenStreetMap links it prints for the pairs over 300 m or 2.5 and for a few Rhine crossings, and compare OSM’s own car route with ours.</li>
+<li>With decision 4’s default, <code>ci: label the simulators image MIT AND ODbL-1.0 (M11 step 3)</code> comes first, on its own. Then one commit carries the file with README’s ODbL line, so the data never sits in the public repo without its notice, and every image CI publishes with the data carries the label. The same commit adds <code>Roads::parse()</code>, its tests, and <code>main.rs</code> compiling in the file and attaching the roads. <code>lib.rs</code> and <code>main.rs</code> then open with “… so Pourline runs locally with no real customer or fleet data; the trucks’ roads come from OpenStreetMap (SPEC §2, M2, M11)”, and <code>lib.rs</code> names the routes binary. Tests:
+  <ul>
+  <li><code>every_plant_has_a_road_to_every_site_ending_exactly_there</code>: all 120 pairs, at least 2 points each, the first exactly the plant and the last exactly <code>geocoder.locate(site)</code>, and a notice that names OpenStreetMap and <code>ODbL-1.0</code>;</li>
+  <li><code>every_road_fits_one_route_message</code>: each road’s route message, with the longest truck id and header, is 8 KiB or less.</li>
+  </ul>
+  They can’t fail before the file exists: <code>include_str!</code> makes a missing file a compile error, which is their red step. So I also show them failing on a local copy with one road taken out and one padded past 8 KiB, which I don’t commit. <code>make test</code> green. Commit: <code>feat(simulators): trucks drive OpenStreetMap roads (M11 step 3)</code>. Then <code>make up</code> is healthy, with the simulators logging trips and no startup error. You run <code>make k8s</code>, and about 10 minutes after the rollout, once trucks have set off, I watch moving trucks at zoom 15 in Chrome and check that their fixes step along the streets, before any line exists.</li>
+</ol>
+
+<h3 id="step-4">Step 4</h3>
+<p><strong>The route on the wire, with no producer yet.</strong> In <code>domain</code>: <code>TruckRouteReported { truck, path }</code> on <code>events.trucks.{id}.route</code>, and the <code>subject()</code> doc. In dispatch’s <code>intake.rs</code>: the variant in its two matches, and <code>events.trucks.&gt;</code> in the module doc. Both land in one commit, because dispatch’s matches are exhaustive. In ingest’s <code>telematics.rs</code>: the route arm before the status fallback, and its checks. Nothing sends routes yet, so nothing can be dead-lettered. Tests first. Until the variant exists they don’t compile, and ingest’s then fail on “unknown topic” until its arm exists:</p>
+<ul>
+<li><code>telematics_and_ticket_wire_format</code>: <code>truck_route_reported</code> round-trips exactly;</li>
+<li><code>subjects_partition_by_customer_truck_and_plant</code>: its subject is <code>events.trucks.truck-07.route</code>;</li>
+<li><code>routes_become_route_events</code>: the id <code>truck-07:{seq}:{ts_ms}</code>, the subject, the points mapped in order, and two identical points accepted;</li>
+<li><code>messages_that_contradict_master_data_or_their_topic_are_rejected</code> gains a one-point route (“a route needs at least two points”) and a point out of range, and <code>trucks/truck-07/horn</code> stays unknown.</li>
+</ul>
+<p><code>make test</code> green. Commits: <code>feat(domain): a truck’s route event, which dispatch ignores (M11 step 4)</code> and <code>feat(ingest): map trucks/{id}/route (M11 step 4)</code>. Then <code>make up</code> is healthy, and a route I publish by hand with <code>mosquitto_pub</code> inside the Mosquitto container maps: ingest logs no dead letter, EVENTS’ <code>num_subjects</code> in <code>curl -s '127.0.0.1:8222/jsz?streams=true' | jq '.account_details[].stream_detail[] | select(.name == "EVENTS") | .state.num_subjects'</code> rises by one, and the DLQ stays empty.</p>
+
+<h3 id="step-5">Step 5</h3>
+<p><strong>Trucks report each drive’s road.</strong> <code>Road::path()</code>, and <code>phase()</code> emitting step 3’s <code>Route</code> body through <code>emit()</code> for each Driving motion, right after the status and drum and before the first GPS fix. Ingest has mapped the topic since step 4. Tests first:</p>
+<ul>
+<li>in <code>roads.rs</code>: <code>path()</code> keeps the drive’s direction, a stretch from a mid-road km starts at <code>at(km)</code>, <code>path(0, 0)</code> is two identical points, and a breakdown’s path never has more points than its road;</li>
+<li><code>each_drive_starts_with_its_route</code>: after <code>en_route</code> come the route and then the first fix, with the road as the path. After <code>returning</code> come the drum, the route and the first fix, with the path reversed. The route’s <code>ts_ms</code> is at or after its status’s, <code>seq</code> stays contiguous, and no route body has a <code>status</code> field;</li>
+<li><code>a_broken_down_truck_drives_home_along_its_road</code> also checks that the route after the repair runs from the breakdown point to the plant.</li>
+</ul>
+<p>The existing tests pass untouched: they filter by topic or by the <code>status</code> key, and see a route as one more seq-numbered message. <code>make test</code> green. Commit: <code>feat(simulators): trucks report each drive’s road (M11 step 5)</code>. Then, on <code>make up</code>, ingest logs no dead letter, the DLQ gauge stays at 0, and <code>mosquitto_sub</code> on <code>trucks/+/route</code> shows each drive’s road as it begins.</p>
+
+<h3 id="step-6">Step 6</h3>
+<p><strong>The console keeps routes and pushes the ones that show.</strong> In <code>state.rs</code>: the routes, the rule, the pushes, <code>routes</code> in the snapshot, and a line in the module doc. In <code>live.rs</code>: the route arm, a push after each accepted status, the pushes in <code>load_world</code>, and the module doc. <code>route</code> joins the doc lists in <code>http.rs</code> and <code>metrics.rs</code>. The restart test starts a second console from <code>s.console.settings.clone()</code>, <code>s.mqtt_url</code> with its own MQTT client id, and <code>s.nats</code>; <code>Setup</code> stays as it is. Tests first:</p>
+<ul>
+<li><code>a_route_shows_only_while_its_truck_drives_it</code>, in <code>state.rs</code>. A route that arrives before its status is hidden, and a status at the same millisecond shows it. <code>on_site</code> hides it. A late, older route changes nothing, and a stale replay, older than the current status, stays hidden. <code>available</code> after a simulators restart hides it. <code>out_of_service</code> hides it, and the <code>returning</code> after the repair shows its new route. A <code>/world</code> status changes what shows as an event does.</li>
+<li><code>a_route_is_pushed_only_when_what_shows_changes</code>, in <code>state.rs</code>: a duplicate route or a GPS fix pushes nothing, and the snapshot lists only the routes that show.</li>
+<li><code>a_route_reaches_the_page_while_its_truck_drives_it</code>, in <code>tests/live.rs</code>: <code>en_route</code>, then its route, gives a <code>route</code> push with the path, and <code>on_site</code> gives one with null.</li>
+<li><code>a_restarted_console_gets_each_driving_trucks_route_back</code>, in <code>tests/live.rs</code>: a status, its route and a later fix for truck-07, with <code>/world</code> saying <code>en_route</code>. A second <code>Console</code>, with its own MQTT client id, has the route in its snapshot. Each message gets its own <code>occurred_at</code>, because the test helper makes ids from it and the Bus drops a repeated id within its duplicate window.</li>
+<li><code>the_stream_starts_with_retry_and_the_snapshot</code> also asserts that <code>routes</code> is an object.</li>
+</ul>
+<p>The other console tests and the CSP test pass unchanged. <code>make test</code> green. Commit: <code>feat(console): keep each truck’s route and push the ones that show (M11 step 6)</code>. You run <code>make k8s</code>, and about 10 minutes after the rollout, once trucks have set off, <code>curl -s http://127.0.0.1:8080/console/api/snapshot | jq -e '.routes | length &gt; 0'</code> passes, and the keys are the trucks the snapshot shows as <code>en_route</code> or <code>returning</code>. With your OK, I restart the console pod with <code>KUBECONFIG=target/k3d/kubeconfig</code>, and the same keys come back within seconds. The e2e runs in CI on the next push you approve, or as <code>make e2e</code> once you agree to my deleting the k3d clusters first, because both stacks together exhaust colima’s file watchers.</p>
+
+<h3 id="step-7">Step 7</h3>
+<p><strong>The page draws the lines.</strong> In <code>app.js</code>: <code>setRoute</code>, the <code>route</code> handler, the lines from the snapshot, the split when a glide ends, the cleanup in <code>replace()</code>, the hidden overlay pane, the legend row before “Group of trucks”, the popup row, the label and the attribution comment. In <code>app.css</code>: <code>.route</code>, its widths and dash, and the legend samples. The CSP test stays green in <code>make test</code>. Commit: <code>feat(console): draw each driving truck’s road (M11 step 7)</code>. There is no JS runner, so I check by hand. You run <code>make k8s</code> from that commit, or <code>SKIP_BUILD=1 make k8s</code> after I build the images from it with tar contexts. Then, in Chrome at <code>http://localhost:8080/console</code>, I check:</p>
+<ul>
+<li>lines on the roads at zoom 11, 13, 15, 17 and 20: thick ahead of and thin behind en-route and returning trucks, dashed on the way home, under the icons and the badges;</li>
+<li>the split reaching the icon as each glide ends, and at once under reduced motion;</li>
+<li>arrival removing a line and the drive back bringing one, and <em>Break down</em> removing it;</li>
+<li>a reload and a hidden tab coming back bringing the lines back;</li>
+<li>a truck that arrives on site while the tab is hidden having no line when the tab comes back;</li>
+<li>light, dark and reduced motion, and the lines’ contrast against both basemaps;</li>
+<li>the legend row, and the first fit’s zoom before and after, at desktop width and at 390 px;</li>
+<li>the popup row on driving trucks, hidden on parked ones, and the marker’s label in the accessibility tree;</li>
+<li>no errors in the browser console, CSP ones included.</li>
+</ul>
+<p>With your OK, I restart the console pod and check that the lines come back. You get screenshots in light and dark.</p>
+
+<h3 id="step-8">Step 8</h3>
+<p><strong>Docs, screenshot and done.</strong></p>
+<ul>
+<li>The README gets a <code>make routes</code> row in Commands and the optional prerequisite: Docker, osmium-tool and internet. Walkthrough step 7 says a moving truck shows its road, thick ahead and thin behind.</li>
+<li>Watching the simulators says the trucks drive OpenStreetMap roads and why their speeds vary, and adds <code>/route</code>. Watching ingest and the triggers table say <code>events.trucks.&gt;</code>. The tracing paragraph lists routes among the traced reports, and the Metrics table’s rows for <code>pourline_console_pushed_total</code> and <code>pourline_console_event_lag_seconds</code> gain <code>route</code>.</li>
+<li>Map console and How it works describe the lines: the truck’s own drive, not the plan. The attribution paragraph adds the trucks’ roads under the OpenStreetMap credit.</li>
+<li><code>docs/architecture.md</code> gets the route in the Context node, <code>deploy/seed/rhine-neckar.routes.json</code> (ODbL, built by <code>make routes</code>) in the Context paragraph, <code>events.trucks.&gt;</code> in the EVENTS labels, the simulators row and the console’s live path. ADR 0001 is amended.</li>
+<li>ADR 0006 is amended in Markdown, as 0005 was (decision 9).</li>
+<li><code>docs/console.jpg</code> is retaken with lines, at 1568×776 in the dark theme, and its alt text in README adds “driving trucks with the road ahead drawn thick and the road driven thin, dashed on the way home”. Milestone 11 is ticked in CLAUDE.md.</li>
+</ul>
+<p><code>make test</code> green. <code>make audit</code> clean with no new crate: its own download of the advisory database fails TLS here, so I pull <code>~/.cargo/advisory-db</code>, run <code>cargo audit --no-fetch</code> in both workspaces plus the Makefile’s <code>libsqlite3-sys</code> check, and show the output. CI’s audit job runs <code>make audit</code> itself on the push. <code>make up</code> healthy, and <code>make demo</code> plays its scenario as before. I run <code>/check</code> and ask before any push (decision 11). After it, CI is green with the e2e’s checks unchanged, and the simulators image’s config carries <code>MIT AND ODbL-1.0</code>. Commits: <code>docs: truck lines (M11 step 8)</code> and <code>docs: milestone 11 is done</code>. Then I stop and summarise what changed and what to look at.</p>
+
+<h2 id="decisions">Decisions I need from you</h2>
+<table>
+<thead><tr><th>#</th><th>Question</th><th>My default</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Which line did you mean?</td><td><strong>Decided: the drive’s road, split at the truck</strong>, your answer on 14 November. The alternatives were only the road ahead (the same wire with less drawing) and a trail of GPS fixes (no wire change, but it cuts corners from zoom 15, has only part of each drive after a console restart, and shows nothing ahead).</td></tr>
+<tr><td>2</td><td>Milestone 11, or an add-on like the fake clock?</td><td><strong>Milestone 11.</strong> SPEC §2, §3, §5, §9, §10, §11 and §13 and CLAUDE.md change in step 1, as M10’s did. The plan is <code>docs/context/specs/M11-truck-lines-plan.html</code>, commits end “(M11 step N)”, and CLAUDE.md’s toolchain check runs. Alternative: an add-on, <code>M10-truck-lines-plan.html</code>, with commits ending “(truck lines step N)” and SPEC left alone. Lighter, but SPEC §5 and §9 would no longer describe the system, and the fake clock, the one add-on so far, changed nothing SPEC describes.</td></tr>
+<tr><td>3</td><td>Where do the roads come from?</td><td><strong>A local OSRM v26.11.0-debian on a Geofabrik clip, through <code>make routes</code>.</strong> It is reproducible, its terms are clean, and the file records the data’s date. It needs a 741 MB download, the roughly 128 MB image and brew’s osmium-tool. Alternatives:
+  <ul>
+  <li>FOSSGIS’s public OSRM (<code>routing.openstreetmap.de</code>, 1 request/s, an identifying User-Agent): minutes and no download. But its terms forbid mass downloading and say nothing about storing results, its data date is unknown, it needs TLS, which the workspace’s <code>reqwest</code> leaves out, and the map would add their fixthemap link.</li>
+  <li>osmium in a pinned <code>debian:trixie-20261104-slim</code> container instead of brew’s: no tool on your Mac, but an apt install on every run.</li>
+  </ul></td></tr>
+<tr><td>4</td><td>May an ODbL data file sit in the MIT repo, and what does the simulators image say?</td><td><strong>Yes, as its own file, and the image’s label says both.</strong> The seed and the code stay MIT. The file’s notice sits inside it, README’s License section gets one line with its links, and the map’s existing OpenStreetMap credit covers the drawn lines. CI labels every image MIT today, so one line on <code>ci.yml</code>’s metadata step corrects the simulators image: <code>labels: ${{ matrix.bin == 'simulators' &amp;&amp; 'org.opencontainers.image.licenses=MIT AND ODbL-1.0' || '' }}</code>. This is a conservative reading, not legal advice. Alternatives: leave the label at MIT and rely on the notice in the file and the README; or no OSM data in the repo, which leaves only a runtime routing service or no road lines.</td></tr>
+<tr><td>5</td><td>Do drive times stay on today’s model?</td><td><strong>Yes</strong>: haversine × 1.3 ÷ 40 km/h ±10 %, on the drive’s ends. The reported speed absorbs the road’s length: about 34–66 km/h on five sample routes of 20–51 km, and faster on short or detouring pairs, about 70–85 km/h at the generator’s 2.5 flag. Every simulator test stays as it is. Alternative: road length ÷ 40 km/h. Truer speeds, but it changes M2’s travel model and its pinned test, with a new failing test first and never a looser ratio, and drives across the Rhine get longer than dispatch’s plan assumes.</td></tr>
+<tr><td>6</td><td>How do the lines look, and at which zooms?</td><td><strong>The truck’s status colour at full opacity, 4 px ahead and 2 px driven, dashed on the way home, at every zoom</strong>, under the markers and not clickable. Alternatives: one neutral colour for every line, which loses the tie to the icon; the road driven faded instead of thinner, which drops below 3:1; or lines hidden below zoom 13, with one class toggled on <code>zoomend</code> and one CSS rule, so the first fit shows none.</td></tr>
+<tr><td>7</td><td>Should the popup give an arrival time?</td><td><strong>No.</strong> “Heading to … · N km to go” answers where and how far. Alternative: “arrives about 10:42”, one field on the route message, because the simulator knows each drive’s length when it begins. But that is the simulated truck’s own timing, not the plan’s, and the panel shows the plan.</td></tr>
+<tr><td>8</td><td>Should CI’s e2e prove the route path?</td><td><strong>No, it stays as it is</strong>: 25 trucks, a plan version and an empty DLQ. Its DLQ check may run before any truck’s first drive, so it doesn’t prove the new topic. The Rust tests cover each hop, and the Chrome check the whole path. Alternative: after the snapshot check, wait until the snapshot has a route, then count the DLQ again, and say so in SPEC §12. Trucks first set off no sooner than about 7 minutes after the simulators start (0–2 min stagger, 2.8–9 min batching, 3 min loading, 1–3 min paperwork), so the e2e gets a few minutes slower.</td></tr>
+<tr><td>9</td><td>Amend ADR 0006, or write ADR 0007?</td><td><strong>Amend 0006</strong> in Markdown in step 8, as 0005 was: “Accepted, amended” and an “Amendment (milestone 11)” paragraph. OSRM supplies the simulated trucks’ geometry offline, dispatch’s travel time stays haversine, none of the switch criteria is met, and the weakness 0006 names for a fixed matrix is handled by the straight fallback and the coverage test. Alternative: a new ADR 0007, which also changes README’s “six ADRs”, architecture.md’s list and SPEC §14.</td></tr>
+<tr><td>10</td><td>Who runs <code>make routes</code>?</td><td><strong>You, once</strong>, after <code>brew install osmium-tool</code>. I go through its summary and the diff with you before I commit. Alternative: I run it, with your allowance for <code>download.geofabrik.de</code>. Only that host-side 741 MB download needs it: the generator’s requests to <code>127.0.0.1:5005</code> skip the proxy, because <code>NO_PROXY</code> lists <code>127.0.0.1</code>, and the image pull runs in colima’s VM.</td></tr>
+<tr><td>11</td><td>Where do the commits go?</td><td><strong>On <code>main</code></strong>, as M1–M10 did. I run <code>/check</code> before I ask to push. Alternative: a branch, <code>m11-truck-lines</code>, and a PR, so CI and its e2e, the only run of the new simulators image in kind, are green before anything reaches <code>main</code>.</td></tr>
+</tbody>
+</table>
+
+<h2 id="later">Left out, for later</h2>
+<ul>
+<li>Gliding the icon along the road between fixes, about 25 more lines. Until then the icon glides straight, so at sharp corners from zoom 15 it leaves the line for up to 1.5 s, then sits on it again.</li>
+<li>An arrival time in the popup (decision 7).</li>
+<li>Highlighting the line of the truck whose popup is open.</li>
+<li>Lines for parked trucks, such as their last drive.</li>
+<li>Return roads that respect one-way streets, since the way back is the road out reversed, and a truck profile with HGV rules instead of the car profile.</li>
+<li>OSRM as a runtime service, any A to B, and simulated trucks that drive the plan: ADR 0006’s path. M10 left plan-driving trucks out too.</li>
+<li>A JavaScript test runner for the page.</li>
+</ul>
+
+<h2 id="heads-up">Heads-up</h2>
+<ul>
+<li>Trucks now drive real roads while drive time keeps the haversine model, so reported speeds vary: about 34–66 km/h on five sample routes of 20–51 km, and faster on short or detouring pairs, about 70–85 km/h at the generator’s ratio flag of 2.5. Nothing shows speed today. Dispatch’s plan still ignores roads (ADR 0006).</li>
+<li>OSRM’s car profile models a 2 t car and ignores HGV rules, so a line may take a street a 32 t mixer couldn’t. Ferries are excluded. The six address-only sites end with a short straight stub from the nearest road to their postal-code centroid, and plants have a short one from the road.</li>
+<li>Close up, two things show. The 5 m simplification puts a bend up to about 13 px off the basemap’s road at zoom 18, and about 50 px at zoom 20. And a truck that leaves a busy plant sits in the plant’s parking grid, up to 140 px from the start of its line, until its first moving fix 10 s later.</li>
+<li><code>make routes</code> downloads 741 MB from <code>download.geofabrik.de</code>, pulls the OSRM image and needs osmium-tool. Its work files go to <code>target/routes</code>, which git and Docker ignore, and keep about 2 GB afterwards; <code>rm -r target/routes</code> frees it. OSRM listens on <code>127.0.0.1:5005</code>, because macOS’s AirPlay Receiver holds 5000 and the k3d registry 5050. Its time and memory on the clip are estimates, under a minute and 1 GB per step, not measurements; colima has 4 CPUs and 11.65 GiB.</li>
+<li>A new or moved plant or site fails <code>make test</code> until <code>make routes</code> runs again. At runtime a missing pair falls back to today’s straight line. Geofabrik’s extracts change daily, so a later regeneration moves lines wherever OpenStreetMap changed; the file records its date.</li>
+<li>Dependabot doesn’t bump the OSRM image pinned in <code>routes.sh</code>. Its header says so, for the version check at each milestone.</li>
+<li>Without decision 4’s label line, the simulators image on GHCR stays labelled MIT while it carries ODbL data.</li>
+<li>The legend grows by one row, about 24 px (22 on a phone), which shifts the first fit and the popups’ pan padding a little. I check desktop width and 390 px in step 7.</li>
+<li>The snapshot grows by the routes that show, to about 30 KB typically and at most about 0.3 MB, uncompressed. It is sent on every page connect, including each return from a hidden tab.</li>
+<li>JetStream keeps route events for 7 days like every event: roughly 2 MB a day, tens of MB at most, a few per cent of what the GPS fixes take.</li>
+<li>The page’s roughly 65 new lines have no test runner and are checked by hand. The rule that decides which lines show is in <code>state.rs</code> and tested, and a reload re-syncs a page with the console.</li>
+</ul>
+
+</div>
+</article>
+</div></div></div></div></div>
+</main>
+</div>
+</body>
+</html>
