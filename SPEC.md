@@ -26,6 +26,7 @@ Orders come from contractors with very different IT setups. Trucks report GPS an
 | `ingest-cli` | Validates a new customer's sample files against their mapping config before go-live |
 | `plant-agent` | Edge service at the batching plant: batch tickets, "loaded" events, store-and-forward |
 | `operator` | Kubernetes operator (kube-rs) for a `CustomerIntegration` CRD |
+| `console` | Map console in the k8s stack: plants, sites and trucks live on a map with a status legend, and actions on them (§9) |
 | `simulators` | Fake truck fleet, fake contractor systems, fake plant, so the whole system runs locally with no real data |
 | `domain` | Shared types and canonical event schema |
 
@@ -89,7 +90,7 @@ Plus **truck telematics** over MQTT (`trucks/{id}/gps`, `trucks/{id}/drum`, `tru
 
 Runs at each batching plant (a separate k3s/k3d cluster representing the plant site).
 
-- Pulls the plant's slice of the current dispatch plan.
+- Pulls the plant's slice of the current dispatch plan, and pulls it at once when the cloud sends a sync command over MQTT (`plants/<id>/commands/sync`).
 - Simulates batch tickets and emits `LoadBatched` / `TruckLoaded` events.
 - **Store-and-forward**: when the cloud link is down, events go to a local SQLite outbox and are synced in order once the link returns. No loss, no duplicates (idempotency keys).
 - Keeps working from the last known plan while offline, and reports how stale its plan is.
@@ -120,9 +121,9 @@ The operator reconciles the matching Deployment/CronJob, ConfigMap and Secret re
 
 ## 8. Observability
 
-- `tracing` + OpenTelemetry: a single trace from an incoming order through ingestion → NATS → dispatch → plan diff.
-- Prometheus metrics: ingest throughput per customer, DLQ size, re-dispatch latency, pour-gap distribution, edge sync lag.
-- A provisioned Grafana dashboard ("Dispatch overview") and Jaeger for traces.
+- `tracing` + OpenTelemetry: a single trace from an incoming order through ingestion → NATS → dispatch → plan diff. An action in the map console is one trace too, from the click through dispatch to the plan update the console pushes.
+- Prometheus metrics: ingest throughput per customer, DLQ size, re-dispatch latency, pour-gap distribution, edge sync lag, and the console's clients, pushes and actions.
+- A provisioned Grafana dashboard ("Dispatch overview") and Jaeger for traces, in compose and in the k8s cloud cluster.
 
 ## 9. Running it locally
 
@@ -130,9 +131,9 @@ The operator reconciles the matching Deployment/CronJob, ConfigMap and Secret re
 
 | Command | Result |
 |---|---|
-| `make up` | Docker Compose: Postgres, NATS (JetStream), Mosquitto, SFTP server, Prometheus, Grafana, Jaeger, all services, all simulators |
+| `make up` | Docker Compose: Postgres, NATS (JetStream), Mosquitto, SFTP server, Prometheus, Grafana, Jaeger, every service but the map console, all simulators |
 | `make demo` | Seeds customers and orders, streams truck data, injects a "truck breaks down" and a "site delayed 30 min" event, prints the plan diffs |
-| `make k8s` | Creates two k3d clusters (`cloud`, `plant-walldorf`), installs Helm charts + operator, applies example `CustomerIntegration`s |
+| `make k8s` | Creates two k3d clusters (`cloud`, `plant-walldorf`), installs Helm charts + operator, applies example `CustomerIntegration`s; serves the map console, Grafana and Jaeger at `/console`, `/grafana` and `/jaeger` on the cloud ingress |
 | `make chaos` | Cuts the plant cluster's network for 2 minutes, then restores it; shows the outbox draining |
 | `make test` | fmt, clippy, unit, property and integration tests |
 | `make down` | Tears everything down |
@@ -144,10 +145,21 @@ Grafana, Jaeger and the dispatch API's OpenAPI/Swagger UI are linked from the RE
 - Install on macOS: `brew install k3d kubectl helm` (optional: `k9s`, `tilt`). On Linux: Docker Engine + the k3d install script.
 - A local image registry `k3d-pourline-registry:5050` (`k3d registry create`) that both clusters pull from; images are pushed as `localhost:5050/<service>:dev`. `k3d image import` is the fallback.
 - Both clusters join one Docker network, `pourline-net`; the `cloud` cluster exposes its ingress on `localhost:8080`.
+- The plant reaches the cloud through its uplink, a Toxiproxy in the cloud cluster that the map console can cut. Prometheus and the console watch the plant over a separate monitoring path, LoadBalancer ports on the plant node, so a cut of the uplink leaves the plant visible.
 - `make chaos` runs `docker network disconnect pourline-net k3d-plant-walldorf-server-0`, waits 120 s, then reconnects.
 - `make down` deletes both clusters and the registry.
 - Optional `Tiltfile`: `tilt up` rebuilds and redeploys a service on every save.
 - The README has a "Prerequisites" section with these install commands and a one-line check (`k3d version && kubectl version --client && helm version`); `make k8s` fails early with a clear message if a tool is missing.
+
+**Map console (`make k8s` only)**
+
+- Runs in the cloud cluster at `http://localhost:8080/console`, in the look of the Spotlight design system, with CSS of its own.
+- Shows plants, sites and trucks on a map, trucks coloured by their seven statuses with a legend, and a panel with the plan version, the latest diff with its reasons, the Walldorf edge (links, outbox, sync lag, plan age) and a log of actions linking to their traces.
+- Live updates take the real path: a snapshot, then server-sent events fed by NATS (`events.trucks.>`, `events.plants.>`, and `plans.updated`, which dispatch publishes after storing a version). Dispatch's `GET /world` gives the starting truck and plant state.
+- Actions: break a truck down (the simulators' MQTT command), delay a site, take a plant offline or online, re-plan (all through dispatch's API), sync the plant now (an MQTT command the plant-agent subscribes to), and make chaos.
+- Make chaos runs `make chaos`'s steps inside the cluster: orders near Walldorf, a wait until the plant holds their plan, a 2-minute cut of the plant's uplink, and a report of the tickets that waited out the cut. `make chaos` stays the hard cut.
+- Each action is one trace. Dispatch continues a W3C `traceparent` from callers that did not come through the ingress (no `X-Forwarded-For`), and only from them.
+- The console only uses dispatch's API and the simulators' commands, so the hard constraints of §4 stay with dispatch.
 
 ## 10. Repository layout
 
@@ -160,13 +172,13 @@ pourline/
 │   ├── ingest-cli/
 │   ├── plant-agent/
 │   ├── operator/
+│   ├── console/
 │   └── simulators/
 ├── customers/            # mapping.yaml + sample files per fake customer
 ├── deploy/
 │   ├── compose/
-│   ├── helm/
-│   ├── k3d/
-│   └── grafana/
+│   ├── helm/             # pourline/files/grafana holds the Grafana provisioning and dashboards
+│   └── k3d/
 ├── docs/
 │   ├── architecture.md   # diagrams (Mermaid)
 │   └── adr/
@@ -177,14 +189,14 @@ pourline/
 
 ## 11. Tech choices
 
-Rust stable, `tokio`, `axum`, `sqlx` (Postgres, compile-time checked queries, migrations), `async-nats` (JetStream), `rumqttc`, `serde` / `serde_yaml` / `quick-xml` / `csv`, `utoipa` (OpenAPI), `clap`, `thiserror` / `anyhow`, `tracing` + `opentelemetry-otlp`, `prometheus` or `metrics`, `kube` + `k8s-openapi`, `rusqlite` (edge outbox), `proptest`, `criterion`, `testcontainers`.
+Rust stable, `tokio`, `axum`, `sqlx` (Postgres, compile-time checked queries, migrations), `async-nats` (JetStream), `rumqttc`, `serde` / `serde_yaml` / `quick-xml` / `csv`, `utoipa` (OpenAPI), `clap`, `thiserror` / `anyhow`, `tracing` + `opentelemetry-otlp`, `prometheus` or `metrics`, `kube` + `k8s-openapi`, `rusqlite` (edge outbox), `proptest`, `criterion`, `testcontainers`. The map console's page uses Leaflet with no build step; Toxiproxy is the plant's uplink in k8s.
 
 ## 12. CI (GitHub Actions)
 
 - `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test` (unit + property).
 - Integration tests with `testcontainers` (Postgres, NATS).
 - Build multi-arch images and push to GHCR on `main`.
-- End-to-end smoke test: kind cluster, Helm install, run a short demo scenario, assert that a plan was produced and no DLQ entries exist.
+- End-to-end smoke test: kind cluster, Helm install, run a short demo scenario, assert that a plan was produced and no DLQ entries exist, that Prometheus scrapes every service, and that the map console answers.
 - README badges for CI status.
 
 ## 13. Milestones
@@ -200,6 +212,7 @@ Each milestone ends with a runnable repo, green CI and a commit.
 7. **Edge**: `plant-agent` with SQLite outbox, two k3d clusters, `make chaos`.
 8. **Operator**: `CustomerIntegration` CRD + controller, Helm charts, e2e test in CI.
 9. **Polish**: architecture doc with diagrams, 4–6 ADRs, demo GIF, README walkthrough.
+10. **Map console**: a live map of the fleet in the k8s stack, with a status legend and actions (break down, delay, plant offline, re-plan, sync, make chaos); `plans.updated` and HTTP trace context in dispatch; the plant's uplink through Toxiproxy; Prometheus and Grafana in k8s.
 
 ## 14. ADRs to write
 
