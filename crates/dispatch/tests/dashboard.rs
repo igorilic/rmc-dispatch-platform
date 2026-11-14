@@ -1,5 +1,5 @@
-//! The provisioned Grafana dashboard only queries metrics that ingest, dispatch or the plant-agent
-//! define, so a renamed metric can't leave a panel silently empty.
+//! The provisioned Grafana dashboard only queries metrics that ingest, dispatch, the console or the
+//! plant-agent define, so a renamed metric can't leave a panel silently empty.
 
 // Integration tests are test code; SPEC §15 allows unwrap there.
 #![allow(clippy::unwrap_used)]
@@ -36,6 +36,7 @@ fn the_dashboard_only_queries_metrics_the_services_define() {
     let defined: Vec<&str> = ingest::metrics::NAMES
         .iter()
         .chain(dispatch::metrics::NAMES)
+        .chain(console::metrics::NAMES)
         .copied()
         .chain(agent.iter().map(String::as_str))
         .collect();

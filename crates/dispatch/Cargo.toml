@@ -26,6 +26,8 @@ utoipa.workspace = true
 utoipa-swagger-ui.workspace = true
 
 [dev-dependencies]
+# For its metric names, which the dashboard test checks.
+console = { path = "../console" }
 criterion.workspace = true
 ingest = { path = "../ingest" }
 proptest.workspace = true

@@ -1237,6 +1237,7 @@ dependencies = [
  "axum",
  "chrono",
  "chrono-tz",
+ "console",
  "criterion",
  "domain",
  "futures",
