@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Map console plan</title>
+<link rel="stylesheet" href="../../.design/styles.css">
+</head>
+<body>
+<div class="sp-layout__bg"><div><div></div></div></div>
+<div class="sp-layout__fg">
+<main class="sp-layout__main">
+<div class="sp-container-outer sp-article"><div class="sp-container-outer__in">
+<div class="sp-container-inner"><div class="sp-container-inner__in">
+<div class="sp-article__col">
+<article>
+<header class="sp-article__header">
+<h1 class="sp-h1">Plan: milestone 10, the map console</h1>
+<time class="sp-article__date" datetime="2026-11-14"><span class="sp-bar"></span><span style="margin-left:.75rem">November 14, 2026</span></time>
+</header>
+<div class="sp-prose" style="margin-top:2rem">
+
+<p>Today you watch Pourline through logs, Swagger, Grafana in compose, and <code>make chaos</code>’s status lines. Nothing shows the world itself: where the trucks are, what they’re doing, and how the plan moves when something breaks.</p>
+<p>Milestone 10 adds a map console to the local k8s stack, at <code>http://localhost:8080/console</code> in the cloud cluster. It shows the plants, sites and trucks on a map with a status legend. From it you can break a truck down, delay a site, take a plant offline, re-plan, push a sync to the Walldorf plant, and run <em>Make chaos</em>, which cuts that plant’s uplink as <code>make chaos</code> does.</p>
+<p>Its updates travel the real path: MQTT → ingest → NATS → console → browser. Each action is traced in Jaeger, and the console has a row in Grafana, which now runs in k8s with Prometheus. The page takes the look of your Spotlight design system.</p>
+
+<p>This replaces the first draft, which ran the console on the host with the Docker socket. It follows your answers: sync for the plant action, the console inside local k8s, the Spotlight look, updates through the whole stack with Grafana and Jaeger, chaos in k8s, and milestone 10. Five independent reviews checked it against the code, and their fixes are in.</p>
+
+<p><strong>Done when:</strong></p>
+<ul>
+<li><code>make k8s</code> serves the console at <code>/console</code>, Grafana at <code>/grafana</code> and Jaeger at <code>/jaeger</code>, all on <code>localhost:8080</code>. Dispatch and Swagger stay where they are.</li>
+<li>The first paint shows the 3 plants, 40 sites and 25 trucks, with trucks coloured by status and a legend. Truck state comes from dispatch, and after that through MQTT, ingest and NATS, never from polling.</li>
+<li>The panel shows the world time, the plan version, the latest diff with a reason for each change, and orders that became unplanned. It also shows the Walldorf edge (links, outbox, sync lag, plan version and age, last ticket) and a log of your actions, each linking to its trace.</li>
+<li>Every action in the table below works. When an action stores a new plan version, the diff appears within seconds.</li>
+<li><em>Make chaos</em> does what <code>make chaos</code> does:
+  <ul>
+  <li>it places three orders near Walldorf;</li>
+  <li>it waits until the plant holds their plan;</li>
+  <li>it cuts the uplink for 2 minutes;</li>
+  <li>it reports how many tickets waited out the cut, or says that none fell due.</li>
+  </ul>
+  The outbox climbs and drains both on the map and in Grafana.</li>
+<li>Jaeger shows:
+  <ul>
+  <li>A site delay, plant toggle or re-plan that stores a version as one trace: the click, dispatch’s handler, the re-dispatch and the console’s push. If the worker merged the run with another trigger, the click’s trace gets a link to the run instead.</li>
+  <li>Sync now as one trace: the click, Walldorf’s agent, and dispatch serving its plan.</li>
+  <li>A breakdown’s click as its own trace. The re-dispatch it causes has its own trace from ingest, which the Changes entry links.</li>
+  </ul></li>
+<li>Grafana in k8s shows the existing dashboard with all five rows live, including Edge for the plant, plus a collapsed “Console (k8s)” row. Prometheus finds every target, which the e2e asserts.</li>
+<li><code>make up</code>, <code>make demo</code> and <code>make chaos</code> work as before, and compose’s Grafana loads the moved dashboard. The hard constraints (SPEC §4) and the customer mappings are untouched.</li>
+<li>The milestone wraps up:
+  <ul>
+  <li><code>make test</code> is green and <code>make audit</code> is clean.</li>
+  <li>CI’s e2e is green with the console installed.</li>
+  <li>The README is updated, you have the <code>.env.example</code> lines, and milestone 10 is ticked in CLAUDE.md.</li>
+  <li>No Spotlight file is committed, unless decision E says otherwise.</li>
+  </ul></li>
+</ul>
+
+<h2 id="looks">What it looks like</h2>
+<pre><code>  (P)     ╭─ Pourline   world 10:14 (−9 h)   ● live   Grafana ↗  Jaeger ↗  API ↗ ─╮   ╭─╮
+          ╰─────────────────────────────────────────────────────────────────────╯   │☾│
+ ┌──────────────────────────────────────────────────────┐ ╭──────────────────────────╮╰─╯
+ │ grey basemap                                         │ │ ▁ Plan v14 · 10:13  ↗     │
+ │       ■ Weinheim                                     │ │                  Re-plan │
+ │                    ● truck-03                        │ │ Changes · Log            │
+ │  ■ Mannheim      ○ site                              │ │ truck-07 out of service  │
+ │        ●    ●                                        │ │ PO-881 #3                │
+ │                    ✕ truck-07                        │ │ truck-07 → truck-12      │
+ │            ■ Walldorf                                │ │ +6 min · nearest free    │
+ │ ╭ Legend ───────────────────────────╮                │ ├──────────────────────────┤
+ │ │ ● available  ● loading  ● en route│                │ │ Walldorf edge            │
+ │ │ ● on site  ● discharging          │                │ │ chaos: uplink cut, 84 s  │
+ │ │ ● returning  ✕ out of service     │                │ │ outbox 3 · sync lag 41 s │
+ │ │ ■ plant  □ offline  ○ site        │                │ │ plan v13, 84 s old       │
+ │ ╰───────────────────────────────────╯                │ │ Sync now     Reconnect   │
+ └──────────────────────────────────────────────────────┘ ╰──────────────────────────╯</code></pre>
+<ul>
+<li><strong>The look is Spotlight’s</strong>:
+  <ul>
+  <li>a floating pill header with a blurred, translucent background, and a sun/moon toggle;</li>
+  <li>hairline panels with 16 px corners, quiet zinc buttons, and the eyebrow bar before timestamps;</li>
+  <li>one teal accent for links and focus;</li>
+  <li>short plain labels and no emoji.</li>
+  </ul>
+  Light and dark follow the system and the toggle. The map’s background takes the theme’s surface colour, so a missing tile never shows a white field.</li>
+<li><strong>Trucks</strong> are dots in one colour per status: <code>available</code>, <code>loading</code>, <code>en_route</code>, <code>on_site</code>, <code>discharging</code>, <code>returning</code>, <code>out_of_service</code>. The colours are hues from Tailwind’s palette, and teal stays the accent. Out of service also gets an ×, so colour isn’t the only signal. A truck fades after 2 minutes without a report; parked trucks report every 60 s. The popup shows capacity, home plant and last report, and has <em>Break down</em>, which is hidden while the truck is out of service.</li>
+<li><strong>Plants</strong> are squares, hollow when offline. The popup, fetched when it opens, shows the bays, the next loads from dispatch and the last ticket, and has <em>Take offline / Bring online</em>.</li>
+<li><strong>Sites</strong> are rings. The popup, fetched when it opens, shows name, customer and today’s orders, and has <em>Delay 30 min</em>.</li>
+<li><strong>Panel</strong>: a header with the plan version, its time, its trace and <em>Re-plan</em>. Below it, the tabs <em>Changes</em> (the latest diff) and <em>Log</em> (your actions and chaos reports, each with “trace ↗”), then the Walldorf edge card with <em>Sync now</em>, <em>Make chaos</em> and <em>Reconnect</em>. During a run, the card shows its progress.</li>
+<li><strong>Header</strong>: the world time with its shift, one live/reconnecting marker, and links to Grafana, Jaeger and the API.</li>
+</ul>
+<p><strong>Using the kit.</strong> The Spotlight Design System artifact was extracted from Spotlight, a paid Tailwind Plus template. Tailwind Plus allows open-source end products. It forbids publishing its templates, or derivatives, as such. I couldn’t read the full licence because it sits behind a login. Your own rule is the firm constraint: Spotlight is never committed.</p>
+<p>So the kit is used where it lives. Step 1 builds a mockup on a Claude Design canvas from your Spotlight Design System artifact, and you approve the look before any page code exists. The repo then gets original CSS. It keeps the kit’s token names and Tailwind’s MIT-licensed zinc and teal values, and has component rules written for the console. Copying the kit’s CSS in instead is decision E.</p>
+
+<h2 id="how">How it works</h2>
+<pre><code>localhost:8080 (Traefik)
+  /           → dispatch     API and Swagger, as today
+  /console    → console      page, server-sent events, actions
+  /grafana    → grafana  ◀── prometheus ◀── ingest, integrations, dispatch, console, plant
+  /jaeger     → jaeger   ◀── OTLP from ingest, dispatch, operator, console, plant
+
+cloud node :1884 :8088 :4318 → uplink (Toxiproxy) → mosquitto, dispatch, jaeger    ◀── plant-agent
+plant node :8082 :9466       → plant-agent /status, /metrics (monitoring path)    ◀── console, prometheus</code></pre>
+<pre><code>live   truck sim ─MQTT─▶ mosquitto ─▶ ingest ─NATS events.trucks.&gt;, events.plants.&gt;─▶ console ─SSE─▶ page
+plan   click ─HTTP + traceparent─▶ dispatch ─▶ re-dispatch ─▶ saved ─NATS plans.updated─▶ console ─SSE─▶ page
+edge   click ─MQTT plants/plant-walldorf/commands/sync─▶ plant-agent ─uplink, HTTP + traceparent─▶ dispatch</code></pre>
+
+<h3 id="state">The console’s state</h3>
+<ul>
+<li>One state per console, never one per page. Master data comes from the seed compiled into every binary: names, customers, sites with the postal-code geocoder, capacities and bays. So the first paint never waits for dispatch.</li>
+<li>At startup the console subscribes before it reads anything.
+  <ul>
+  <li>It subscribes to <code>plans.updated</code>, and opens an ordered consumer on the EVENTS stream for <code>events.trucks.&gt;</code> and <code>events.plants.&gt;</code> that starts at each subject’s last message.</li>
+  <li>Then it reads the new <code>GET /world</code>: truck status and position with their report times, plant status and the latest plan version. It also reads the latest diff.</li>
+  <li>Every truck field keeps its newest value by time, whichever source it came from, so a lagging <code>/world</code> can’t undo a newer event. Starting at the last message gives each truck and plant its latest event at once. It also avoids an async-nats quirk that replays the whole 7-day stream after an early reconnect.</li>
+  </ul></li>
+<li>It reads <code>/world</code> again after each <code>plans.updated</code> and after a NATS reconnect. A newer plan version there catches an announcement that core NATS dropped. For each new version it fetches the diff once and pushes it once.</li>
+<li>A connecting page gets <code>retry:</code>, then a copy of the state taken under the same lock as the broadcast, then the live events. A heartbeat carries the world time every 15 s. A page that falls behind is dropped; its browser reconnects and gets a new copy. Only popups make a page call dispatch.</li>
+<li>The page keeps the newest value per truck field and ignores plan versions that aren’t newer than its own. An error response, such as a 502 or 503 during a rollout, ends an EventSource for good, so the page creates a new one after a random 1–5 s. It does the same after 45 s without a heartbeat. It closes the stream while the tab is hidden, so idle tabs don’t hold the browser’s six connections to <code>localhost:8080</code>.</li>
+<li>Ages and fading use the world time from the heartbeat, not the browser’s clock. That way a shifted world fades correctly.</li>
+</ul>
+
+<h3 id="traces">Traces</h3>
+<ul>
+<li>Each action starts a root span in the console, and the response returns its <code>trace_id</code> for the log.</li>
+<li><code>telemetry</code> gains two string helpers, with no new crate: one returns the current span’s <code>traceparent</code>, and one continues a span from such a string. They carry the trace in an HTTP header and in the sync command’s payload.</li>
+<li>Dispatch opens a request span only for a request that has a valid <code>traceparent</code> and no <code>X-Forwarded-For</code>, that is, one that didn’t come through Traefik. That covers cloud pods, the plant through the uplink, compose’s loopback port and port-forwards. Its handlers then join the caller’s trace. Every other request passes through untouched: probes and polls add no traces, and requests through the ingress start their own traces, as today (decision F).</li>
+<li>Dispatch publishes <code>plans.updated</code> with the re-dispatch’s <code>traceparent</code>, and the console’s push continues that trace. So each Changes entry links its trace; for a breakdown, that is the trace ingest started.</li>
+<li>The plant-agent opens a span for a commanded sync. The span continues the command’s <code>traceparent</code>, and the agent sends the span’s own on that fetch. Its spans reach Jaeger through the uplink, so a cut drops them too. Periodic polls open no span.</li>
+<li>GPS and drum events stay out of Jaeger, as today: ingest samples them out, and the console follows that decision.</li>
+</ul>
+
+<h3 id="metrics">Metrics and dashboards</h3>
+<ul>
+<li>The console exports:
+  <ul>
+  <li><code>pourline_console_clients</code></li>
+  <li><code>pourline_console_pushed_total{kind}</code></li>
+  <li><code>pourline_console_actions_total{action,outcome}</code></li>
+  <li><code>pourline_console_event_lag_seconds{kind}</code>: the time from ingest receiving a truck or ticket event to the push, on the world clock. The replay at startup is left out.</li>
+  </ul></li>
+<li>They go in a collapsed “Console (k8s)” row, so compose’s Grafana isn’t cluttered. The dashboard test reads their names from <code>console::metrics::NAMES</code>, as it does for ingest.</li>
+<li>Prometheus in k8s finds pods in its namespace through a namespaced Role:
+  <ul>
+  <li>containers with a port named <code>metrics</code> (ingest, dispatch, console);</li>
+  <li>the operator’s <code>ingest-&lt;name&gt;</code> pods, through one relabel to <code>:9464</code>, so the operator doesn’t change. The SFTP CronJob’s pods live seconds, so they mostly go unscraped, as before.</li>
+  </ul>
+  The plant is a static target with the <code>plant=plant-walldorf</code> label that the Edge row needs.</li>
+</ul>
+
+<h2 id="actions">Actions</h2>
+<table>
+<thead><tr><th>Action</th><th>Path</th><th>Refused while</th><th>What you see</th></tr></thead>
+<tbody>
+<tr><td>Break down (truck)</td><td>MQTT <code>sim/trucks/{id}/breakdown</code>, the demo’s command</td><td>the truck is out of service, or a breakdown is pending. A second command would break it again after its repair.</td><td>The truck turns red with an ×. If it had planned loads, a new plan moves them.</td></tr>
+<tr><td>Delay 30 min (site)</td><td><code>POST /sites/{id}/delays</code></td><td>—</td><td>If the site pours today, its loads move later and the diff appears. Otherwise the log says nothing changed.</td></tr>
+<tr><td>Take offline / bring online (plant)</td><td><code>PUT /plants/{id}/status</code></td><td>—</td><td>The plant turns hollow or solid, and its loads move.</td></tr>
+<tr><td>Re-plan</td><td><code>POST /plans</code></td><td>—</td><td>A new version and its diff.</td></tr>
+<tr><td>Sync now (Walldorf)</td><td>MQTT <code>plants/plant-walldorf/commands/sync</code>, then the agent’s fetch</td><td>Walldorf’s MQTT link is down or the uplink is cut. The command would be dropped, and the agent fetches within 15 s of reconnecting anyway.</td><td>The plan age drops to 0 s.</td></tr>
+<tr><td>Make chaos / Reconnect</td><td>Webhook orders, then Toxiproxy</td><td>a run is active</td><td>See below.</td></tr>
+</tbody>
+</table>
+<p>For the plant action I picked sync over batching the next load early. Batching early starts the discharge clock early, so the load can exceed its mix’s time limit (SPEC §4). The plants also batch on schedule already.</p>
+
+<h3 id="chaos">Make chaos, from the console</h3>
+<p>The console runs <code>make chaos</code>’s steps inside the cluster, and the edge card shows each one:</p>
+<ol>
+<li>It places three orders at the ship-tos nearest Walldorf, through the <code>bauwerk-ag</code> and <code>neckar-infra</code> webhooks, as <code>demo edge</code> does. That code moves from the demo binary into the <code>simulators</code> library, so both use the same orders.</li>
+<li>It waits until a plan version plans them and Walldorf’s agent holds that version.</li>
+<li>It disables the uplink’s proxies for <code>CHAOS_SECONDS</code> (120). Toxiproxy closes both sides of every connection and refuses new ones. <em>Reconnect</em> ends the cut early.</li>
+<li>After the reconnect it waits up to 120 s for the outbox to drain, and reports as <code>chaos.sh</code> does: “3 tickets waited out the cut, sent in order within 9 s”, or “No ticket fell due; run it again”.</li>
+</ol>
+<p>Only one run happens at a time, and its state lives in the console. The uplink’s real state comes from Toxiproxy every 2 s. At startup the console resets the uplink, retrying until Toxiproxy answers, so a console that died mid-cut can’t leave the plant cut. <code>make chaos</code> stays the hard cut, the plant node off the network, and now starts by ending a console run, best effort.</p>
+
+<h2 id="changes">What changes where</h2>
+<ul>
+<li><strong><code>telemetry</code></strong>: the two string helpers.</li>
+<li><strong><code>dispatch</code></strong>:
+  <ul>
+  <li><code>GET /world</code>: a new store query for the report times, which are stored but unread today, and the latest plan version. Master data stays in the seed.</li>
+  <li><code>plans.updated</code>, carrying the version and its time, with the <code>traceparent</code> in its headers. The worker publishes it right after <code>save_plan</code>; a failed publish is logged, never returned. The worker takes an optional NATS client, so the API tests stay NATS-free.</li>
+  <li>The request-span middleware.</li>
+  <li>The OpenAPI route-list test gains <code>/world</code>.</li>
+  </ul></li>
+<li><strong><code>domain</code></strong>: the <code>plans.updated</code> subject and message, the sync topic, and the breakdown topic. The simulators, the demo and the console share one copy instead of three.</li>
+<li><strong><code>simulators</code></strong>: <code>demo edge</code>’s order selection moves into the library.</li>
+<li><strong><code>plant-agent</code></strong>:
+  <ul>
+  <li>It subscribes to its sync topic after every ConnAck.</li>
+  <li>The forwarder’s driver task sees every packet and hands a command to the sync loop through a watch channel, so a command that arrives while a ticket waits for its PUBACK isn’t lost.</li>
+  <li>A commanded sync opens a span and passes the <code>traceparent</code> on if it is valid; a malformed one is ignored.</li>
+  <li>No persistent session, and no extra resync on reconnect.</li>
+  </ul></li>
+<li><strong><code>console</code></strong>, a new crate (library plus binary) built by the same Dockerfile:
+  <ul>
+  <li>It uses <code>[lints] workspace = true</code>, <code>thiserror</code> in the library and <code>anyhow</code> in <code>main</code>.</li>
+  <li>axum, async-nats, rumqttc, reqwest and futures, all already workspace dependencies.</li>
+  <li>It reads dispatch’s JSON without types, so it doesn’t depend on <code>dispatch</code>.</li>
+  <li>The page is one HTML, one CSS and one JS file, embedded, with Leaflet 1.9.4 pinned with SRI (2.0 is still in beta), and no build step.</li>
+  <li>Markers glide between fixes with a <code>requestAnimationFrame</code> tween, because a CSS transition fights Leaflet’s zoom.</li>
+  </ul></li>
+<li><strong><code>pourline</code> chart</strong>:
+  <ul>
+  <li>The console’s Deployment (one replica, Recreate, probes on <code>/healthz</code>, a <code>metrics</code> port) and Service.</li>
+  <li>The Ingress paths <code>/console</code>, <code>/grafana</code> and <code>/jaeger</code>. Traefik ranks longer paths first and strips nothing, so each backend serves under its own prefix.</li>
+  <li>Prometheus (Role, scrape config) and Grafana, which loads its files from the chart, takes its root URL from a <code>publicUrl</code> value, and gets its two compose links rewritten to absolute k8s URLs with <code>replace</code>.</li>
+  <li>Jaeger’s base path, <code>--set=extensions.jaeger_query.base_path=/jaeger</code>.</li>
+  <li>The uplink, rendered only when <code>edge.plantAddress</code> is set:
+    <ul>
+    <li>Toxiproxy <code>ghcr.io/shopify/toxiproxy:2.13.0</code>, with its three proxies in a ConfigMap (<code>-host=0.0.0.0 -config=…</code>).</li>
+    <li>A readiness probe on its API, <code>GET /proxies/dispatch</code>, which still answers during a cut, and no liveness probe.</li>
+    <li>Its API on a ClusterIP Service, and its proxies on a LoadBalancer.</li>
+    </ul></li>
+  <li>Checksum annotations, so a config change rolls Prometheus, Grafana and Toxiproxy.</li>
+  <li>Mosquitto goes back to ClusterIP, because nothing outside the cluster uses <code>cloud:1883</code> any more. <code>mosquitto.serviceType</code> and its e2e override go.</li>
+  </ul></li>
+<li><strong><code>plant-agent</code> chart</strong>: <code>dispatchUrl: http://cloud:8088</code>, <code>mqttUrl: mqtt://cloud:1884</code>, and an OTLP endpoint at <code>http://cloud:4318</code>. Its Service becomes a LoadBalancer on the plant node, and keeps its name and port names, so <code>chaos.sh</code>’s status read still works.</li>
+<li><strong>Scripts</strong>: <code>k8s.sh</code> builds the console image and passes the plant node’s IP as <code>edge.plantAddress</code>. <code>chaos.sh</code> first ends a console run.</li>
+<li><strong>Grafana’s files</strong> move to <code>deploy/helm/pourline/files/grafana/</code> (decision C). Compose mounts them from there, and the dashboard test’s path follows.</li>
+<li><strong>CI and e2e</strong>: the console joins the image and publish lists. The e2e installs it without a plant, so with no uplink and no edge card. It asserts that Prometheus has ingest, dispatch, the console and <code>ingest-bauwerk-ag</code> up, and reads <code>/console/api/snapshot</code> through the API server proxy.</li>
+</ul>
+
+<h3 id="config">The console’s settings</h3>
+<table>
+<thead><tr><th>Variable</th><th>Default</th><th>In the chart</th></tr></thead>
+<tbody>
+<tr><td><code>CONSOLE_ADDR</code> / <code>CONSOLE_METRICS_ADDR</code></td><td><code>0.0.0.0:8083</code> / <code>0.0.0.0:9468</code></td><td>same</td></tr>
+<tr><td><code>DISPATCH_URL</code>, <code>NATS_URL</code>, <code>MQTT_URL</code></td><td>localhost ports</td><td>in-cluster Services</td></tr>
+<tr><td><code>BAUWERK_WEBHOOK_URL</code>, <code>NECKAR_WEBHOOK_URL</code>, <code>WEBHOOK_TOKEN_*</code></td><td>the demo’s defaults</td><td>the simulators’ values</td></tr>
+<tr><td><code>UPLINK_URL</code></td><td>empty: no <em>Make chaos</em></td><td><code>http://uplink:8474</code> when there is a plant</td></tr>
+<tr><td><code>PLANT_AGENT_URL</code></td><td>empty: no edge card</td><td><code>http://&lt;edge.plantAddress&gt;:8082</code></td></tr>
+<tr><td><code>CHAOS_SECONDS</code></td><td><code>120</code></td><td>same</td></tr>
+<tr><td><code>PUBLIC_URL</code></td><td><code>http://localhost:8080</code></td><td><code>publicUrl</code>. It gives the Jaeger, Grafana and API links, and the hosts allowed to change things.</td></tr>
+<tr><td><code>CLOCK_OFFSET_HOURS</code>, <code>OTEL_EXPORTER_OTLP_ENDPOINT</code>, <code>RUST_LOG</code></td><td>as in every service</td><td>as in every service</td></tr>
+</tbody>
+</table>
+
+<h2 id="security">Security</h2>
+<ul>
+<li>The console is reachable only through <code>127.0.0.1:8080</code>, all that k3d publishes. Nothing gets the Docker socket. Toxiproxy’s API has only a ClusterIP Service, and it refuses browser user agents anyway.</li>
+<li>Every <code>POST</code>, <code>PUT</code> and <code>DELETE</code> needs an <code>X-Pourline-Console</code> header and a <code>Host</code> from <code>PUBLIC_URL</code>: <code>localhost:8080</code>, or <code>127.0.0.1:8080</code> with it. The header stops other sites, which can’t send it without a CORS preflight the console never answers. The Host check stops DNS rebinding.</li>
+<li>GETs aren’t guarded. They serve only simulated data, and that lets the e2e read the snapshot through the API server proxy. <code>/healthz</code> sits at the root, outside <code>/console</code>, for the probes.</li>
+<li>Truck, site and plant ids must exist in the seed before they reach an MQTT topic or a dispatch URL. Commands are published with QoS 1 and never retained, because a retained breakdown would break the truck again on every reconnect.</li>
+</ul>
+
+<h2 id="steps">Steps</h2>
+<p>Each step ends with <code>make test</code> green and its own Conventional Commits. Behaviour changes start with a failing test. The page’s JavaScript is the one exception: it has no test runner, so I check it by hand in Chrome, and as much as possible is tested on the server side. The k8s risks come early, before the console exists.</p>
+
+<h3 id="step-1">Step 1</h3>
+<p><strong>Spec, toolchain, look.</strong></p>
+<ul>
+<li>SPEC: milestone 10 in §13, the console in §2’s table and in a section of its own (the uplink, <em>Make chaos</em>, the traces), k8s observability in §8 and §9, and §10’s layout (<code>crates/console</code>, the moved Grafana files). CLAUDE.md gets the milestone too.</li>
+<li>I check <code>rust-toolchain.toml</code> and the Dockerfile’s Rust image against the latest stable.</li>
+<li>The mockup goes on a Claude Design canvas, built from your Spotlight artifact with seed data, in light and dark. You get the link. Page code waits for your approval, but the backend steps don’t.</li>
+</ul>
+
+<h3 id="step-2">Step 2</h3>
+<p><strong>Grafana’s files move into the chart.</strong> A pure move: compose mounts them from the new place, and the dashboard test follows. I check that <code>make up</code> loads the dashboard and that <code>make test</code> passes.</p>
+
+<h3 id="step-3">Step 3</h3>
+<p><strong>Observability in k8s.</strong> Prometheus with its Role and scrape config, Grafana and Jaeger with their paths, and the e2e assertion on Prometheus’s targets. The sandbox blocks a plain <code>docker build</code>, so I build the images from tar contexts and run <code>SKIP_BUILD=1 make k8s</code>. I check that the dashboard is live in k8s, except Edge.</p>
+
+<h3 id="step-4">Step 4</h3>
+<p><strong>The uplink and the monitoring path.</strong> Toxiproxy, the plant LoadBalancer, the plant scrape target, the plant chart’s URLs and OTLP endpoint, Mosquitto back to ClusterIP, <code>k8s.sh</code> and <code>chaos.sh</code>. I check three things:</p>
+<ul>
+<li>the Edge row is live in k8s;</li>
+<li>after <code>demo edge</code>, disabling the proxies from a pod makes the outbox climb in Grafana, and it drains after they come back;</li>
+<li><code>make chaos</code> still passes.</li>
+</ul>
+
+<h3 id="step-5">Step 5</h3>
+<p><strong>The plant-agent’s sync.</strong> Tests first:</p>
+<ul>
+<li>a command fetches at once even with an hour-long interval;</li>
+<li>against a real Mosquitto, a command on the topic wakes the agent, including while a ticket waits for its PUBACK;</li>
+<li>a command’s <code>traceparent</code> reaches the stand-in dispatch;</li>
+<li>a malformed one is ignored and the fetch still works.</li>
+</ul>
+
+<h3 id="step-6">Step 6</h3>
+<p><strong>Dispatch</strong>, in three commits, each test first:</p>
+<ol>
+<li>The telemetry helpers and the middleware. A trusted <code>traceparent</code> puts the handler and the re-dispatch in that trace. <code>X-Forwarded-For</code> keeps today’s root span. No <code>traceparent</code> opens no span.</li>
+<li><code>/world</code>, plus <code>make sqlx-prepare</code>. It returns 25 trucks, one with a reported position and its time, the plant statuses and the plan version.</li>
+<li><code>plans.updated</code>. After a re-plan, the message arrives with the version, and its <code>traceparent</code> belongs to the re-dispatch’s trace.</li>
+</ol>
+
+<h3 id="step-7">Step 7</h3>
+<p><strong>The console backend</strong>, deployed with a bare page, plus its chart entries, CI, the e2e, and the dashboard’s Console row. Tests first, against NATS and Mosquitto in testcontainers, with dispatch, the webhooks and Toxiproxy as small in-process servers, in real time:</p>
+<ul>
+<li>A page gets <code>retry:</code>, then the state, then a truck event published on NATS. A newer event beats an older <code>/world</code>.</li>
+<li><code>plans.updated</code> becomes one push per version, continuing its trace.</li>
+<li>Actions send a <code>traceparent</code> and return the trace id. Break down and sync publish on their topics, and are refused in the cases in the table.</li>
+<li>A chaos run places the orders, waits for the plan, cuts and reconnects, both after a short <code>CHAOS_SECONDS</code> and on Reconnect, and reports the held tickets.</li>
+<li>Startup resets the uplink.</li>
+<li>Mutating requests without the header, or with a foreign Host, get 403. Unknown ids get 400. GET <code>/healthz</code> answers with any Host.</li>
+</ul>
+<p>Then in k8s:</p>
+<ul>
+<li>An SSE stream through Traefik stays open past 60 s (<code>curl -N</code>).</li>
+<li>Every action works with curl, and its trace shows in Jaeger.</li>
+<li>A full <em>Make chaos</em> run completes.</li>
+<li><code>make e2e</code>: I ask before deleting the k3d clusters, because both stacks together exhaust colima’s file watchers. Or we leave the e2e to CI.</li>
+</ul>
+
+<h3 id="step-8">Step 8</h3>
+<p><strong>The page</strong>, built to the approved mockup. In Chrome I use every action, restart the console pod with the page open and check that it recovers, and send you screenshots in light and dark.</p>
+
+<h3 id="step-9">Step 9</h3>
+<p><strong>Docs.</strong></p>
+<ul>
+<li>The README gets a “Map console” section with a screenshot, plus the k8s URLs, the GHCR install line with <code>images.console</code>, the trace paragraph, Prometheus’s targets, the image counts and the console’s metrics.</li>
+<li><code>docs/architecture.md</code> gets the console in its diagrams.</li>
+<li>I give you the <code>.env.example</code> lines, which the sandbox blocks me from writing, and tick milestone 10 in CLAUDE.md.</li>
+<li>Then <code>make audit</code> and the last commits.</li>
+</ul>
+
+<h2 id="decisions">Decisions I need from you</h2>
+<table>
+<thead><tr><th>#</th><th>Question</th><th>My default</th></tr></thead>
+<tbody>
+<tr><td>A</td><td>How does the console cut the plant’s link?</td><td><strong>Toxiproxy in the cloud cluster</strong> as the plant’s uplink. It closes both sides of every connection, and the console controls it in-cluster with no extra privilege. A NetworkPolicy can’t do the job: k3s’s policy controller lets established connections through, so the agent’s MQTT session would survive. Alternatives:
+  <ul>
+  <li>Toxiproxy in the plant cluster. That puts the uplink at the plant, but the console then needs a path into a second cluster.</li>
+  <li>The Docker socket mounted into the console. That repeats <code>make chaos</code> exactly, but gives a pod root on the Docker VM, blinds the console to the plant during the cut, and needs <code>make down</code> to re-create the clusters.</li>
+  </ul></td></tr>
+<tr><td>B</td><td>Which basemap?</td><td><strong>Stadia Alidade Smooth</strong> (light) and <strong>Smooth Dark</strong>. They are zinc-grey like Spotlight and need no key from <code>localhost</code>. They are rate-limited and free only for non-commercial use. CARTO now needs a key for each user. Alternatives:
+  <ul>
+  <li>CARTO with your own key in an environment variable.</li>
+  <li>OSM’s standard tiles with a grey filter. No key, but colourful underneath.</li>
+  <li>OpenFreeMap’s vector tiles with MapLibre. No key and no limits, but a 1 MB library and no finished dark style.</li>
+  </ul></td></tr>
+<tr><td>C</td><td>Where do Grafana’s files live?</td><td><strong>In the chart</strong>, with compose mounting them from there, as <code>mosquitto.conf</code> moved before. There is one copy, and a plain <code>helm install</code> gets the dashboards. This changes SPEC §10’s layout. Alternative: keep <code>deploy/grafana/</code> and have <code>k8s.sh</code> build the ConfigMaps from it; a plain Helm install then gets no dashboards.</td></tr>
+<tr><td>D</td><td>Must a breakdown be a single trace?</td><td><strong>No, two traces.</strong> The breakdown travels over MQTT 3.1.1, which has no headers, through the simulated truck, so ingest starts a new trace. That is how a real truck’s telematics would arrive too. The log links the click’s trace, and the Changes entry links the re-dispatch’s trace. Alternative: one trace, which needs MQTT 5 user properties from the console through the simulators to ingest, OpenTelemetry in the simulators, and a change to ingest’s rule of not trusting caller trace context.</td></tr>
+<tr><td>E</td><td>How does the page use the Spotlight kit?</td><td><strong>A mockup from the kit, and original CSS in the repo</strong> with the kit’s token names, Tailwind’s MIT palette and the same component rules. No kit file is committed, so your rule holds. Alternative: copy the kit’s tokens and <code>spotlight.css</code> (about 20 KB) into <code>crates/console</code>. That is closest to “use the kit”, but it needs an exception to your never-commit rule and leaves the licence question above in a public repo.</td></tr>
+<tr><td>F</td><td>May dispatch continue a trace from a caller that didn’t come through Traefik?</td><td><strong>Yes.</strong> Without that, the actions and the sync can’t be one trace each. Dispatch’s API has no authentication anyway: anyone who can send it a <code>traceparent</code> can already re-plan. Requests through the ingress stay untrusted, as ingest’s webhooks are. Alternative: never, so each action’s trace ends at the console.</td></tr>
+</tbody>
+</table>
+
+<h2 id="later">Left out, for later</h2>
+<ul>
+<li>A slow uplink. Toxiproxy can add latency, but the agent’s fixed 5 s fetch timeout leaves no setting that is both safe and visible.</li>
+<li>Simulated trucks that drive the plan. Today they drive to random sites (README), so the map shows real telemetry and the panel shows the plan, and the two don’t match. For the same reason there are no next-load lines on trucks and no plan table.</li>
+<li>Orders from the map beyond <em>Make chaos</em>’s, a repair button, a shorter repair time in k8s, route lines and a per-plant timeline.</li>
+<li>The console in compose. <code>make up</code> and <code>make demo</code> stay as they are.</li>
+<li>Authentication: the console listens behind localhost only.</li>
+<li>Re-recording the demo GIF with the map.</li>
+</ul>
+
+<h2 id="heads-up">Heads-up</h2>
+<ul>
+<li>The simulated plants ignore plant status. After <em>Take offline</em> the plan moves away from the plant, but simulated trucks still load there.</li>
+<li>Stadia’s keyless tiles work only from <code>localhost</code> or <code>127.0.0.1</code>, and the browser needs internet access for them. If tiles fail, the map says so instead of going blank.</li>
+<li>When the worker merges two triggers into one run, the run joins the first trigger’s trace and only links to the second.</li>
+<li>A plant toggled elsewhere, for example in Swagger, with an empty diff shows on the console after the next plan update or reconnect.</li>
+<li>The cloud cluster gains four pods: the console, the uplink, Prometheus and Grafana. README’s 4 CPUs and 8 GB should hold; I check in steps 3 and 4.</li>
+<li>The console’s GHCR image starts private. After the first push to <code>main</code>, you set it to public; I don’t change package settings.</li>
+<li>Dependabot doesn’t bump Toxiproxy or the chart’s Prometheus and Grafana images. <code>infra.yaml</code>’s header notes them for the version check at each milestone.</li>
+<li>The simulation never produces delivery statuses after <code>loaded</code>, or order statuses after <code>in_progress</code>, so the legend shows only what can appear.</li>
+<li>While the world is shifted, the console shows world time, and Jaeger and Grafana show the clock on your wall.</li>
+</ul>
+
+</div>
+</article>
+</div></div></div></div></div>
+</main>
+</div>
+</body>
+</html>
