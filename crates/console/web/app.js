@@ -423,13 +423,16 @@ function popupRoot(m, ...children) {
   return h("div", { class: "pop", onkeydown }, ...children);
 }
 
-/** Pans once more after fetched content has grown an open popup, which the opening pan missed. */
+/**
+ * Pans once more after fetched content has grown an open popup past the map's top edge, which the
+ * opening pan couldn't foresee. A popup grows upwards only: its width is fixed and its tip stays on
+ * the marker. Not popup.update(), which would build the content, and so fetch it, all over again.
+ */
 function repan(m) {
-  const popup = m.getPopup();
-  if (!popup?.isOpen()) return;
-  popup.options.autoPan = true;
-  popup.update();
-  popup.options.autoPan = false;
+  const el = m.isPopupOpen() ? m.getPopup().getElement() : null;
+  if (!el || !map) return;
+  const over = el.getBoundingClientRect().top - map.getContainer().getBoundingClientRect().top - 16;
+  if (over < 0) map.panBy([0, over], { animate: !reduceMotion.matches });
 }
 
 /** Fetches a popup's content again on each call; only the latest answer is shown. */
