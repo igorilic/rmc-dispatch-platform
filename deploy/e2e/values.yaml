@@ -4,6 +4,7 @@ images:
   dispatch: pourline/dispatch:e2e
   simulators: pourline/simulators:e2e
   operator: pourline/operator:e2e
+  console: pourline/console:e2e
 # Loaded into kind with `kind load`, never pulled.
 imagePullPolicy: Never
 simulators:
@@ -11,6 +12,3 @@ simulators:
   # (an empty order book drops nothing). The demo skips plan versions that other orders cause.
   orderIntervalSecs: 30
   rheinbauDropIntervalSecs: 30
-mosquitto:
-  # kind has no load balancer, so a LoadBalancer would never get an address.
-  serviceType: ClusterIP

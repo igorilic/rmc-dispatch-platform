@@ -219,14 +219,15 @@ flowchart LR
             k_agent["plant-agent<br/>SQLite on a volume"]
         end
         subgraph cloud["cluster cloud (chart deploy/helm/pourline)"]
-            k_ingress["ingress on :8080,<br/>Mosquitto on :1883"]
-            k_infra["Postgres, NATS, SFTP, Jaeger"]
+            k_ingress["ingress on :8080"]
+            k_uplink["the plant's uplink, Toxiproxy:<br/>:1884, :8088, :4318"]
+            k_infra["Postgres, NATS, Mosquitto, SFTP, Jaeger"]
             k_apps["dispatch, simulators,<br/>ingest for MQTT only"]
             k_op["operator"]
             k_ci["one workload per CustomerIntegration:<br/>a Deployment for a webhook,<br/>a CronJob for SFTP"]
             k_op --> k_ci
         end
-        k_agent -- "http://cloud, mqtt://cloud:1883" --> k_ingress
+        k_agent -- "mqtt://cloud:1884, http://cloud:8088,<br/>http://cloud:4318" --> k_uplink
     end
 ```
 

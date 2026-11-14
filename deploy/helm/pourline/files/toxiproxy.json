@@ -1,0 +1,5 @@
+[
+  { "name": "mqtt", "listen": "0.0.0.0:1884", "upstream": "mosquitto:1883", "enabled": true },
+  { "name": "dispatch", "listen": "0.0.0.0:8088", "upstream": "dispatch:8081", "enabled": true },
+  { "name": "otlp", "listen": "0.0.0.0:4318", "upstream": "jaeger:4318", "enabled": true }
+]

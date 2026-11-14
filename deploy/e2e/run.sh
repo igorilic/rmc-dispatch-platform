@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # make e2e (SPEC §12): the cloud chart and the three example customers on a fresh kind cluster,
 # then the demo scenario, then checks that a plan exists, that rheinbau's CronJob ingests, that
-# the DLQ is empty and that Prometheus scrapes every service. CI runs it on every push; locally it needs kind (brew install kind).
+# the DLQ is empty, that Prometheus scrapes every service and that the map console answers. CI runs it on every push; locally it needs kind (brew install kind).
 # It writes its kubeconfig under target/, so ~/.kube/config is never touched.
 #   E2E_KEEP=1    keeps the cluster afterwards (delete it with: kind delete cluster --name pourline-e2e)
 #   SKIP_BUILD=1  reuses the pourline/<service>:e2e images built last time
@@ -11,7 +11,7 @@ cd "$(dirname "$0")/../.."
 CLUSTER=pourline-e2e
 # The default node image of kind v0.33.0.
 NODE_IMAGE=kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
-SERVICES=(ingest dispatch simulators demo operator)
+SERVICES=(ingest dispatch simulators demo operator console)
 NS=pourline
 mkdir -p target/e2e
 export KUBECONFIG=$PWD/target/e2e/kubeconfig
@@ -135,10 +135,22 @@ scraped() {
     jq -r '[.data.activeTargets[] | select(.health == "up") | .labels.job] | unique | .[]'
 }
 deadline=$((SECONDS + 120))
-for job in ingest dispatch ingest-bauwerk-ag; do
+for job in ingest dispatch console ingest-bauwerk-ag; do
   until scraped | grep -qx "$job"; do
     [ $SECONDS -lt $deadline ] || { echo "Prometheus doesn't scrape $job"; scraped; exit 1; }
     sleep 5
   done
 done
-echo "✓ Prometheus scrapes ingest, dispatch and ingest-bauwerk-ag"
+echo "✓ Prometheus scrapes ingest, dispatch, the console and ingest-bauwerk-ag"
+
+# The console has the world: the seed's trucks, which it starts with, and a plan, which it hears
+# of over NATS (plans.updated) and reads from dispatch.
+snapshot() { proxy console:8083 console/api/snapshot; }
+trucks=$(snapshot | jq '.trucks | length')
+[ "$trucks" = 25 ] || { echo "the console's snapshot has $trucks trucks, not 25"; exit 1; }
+deadline=$((SECONDS + 60))
+until version=$(snapshot | jq -e '.plan.version'); do
+  [ $SECONDS -lt $deadline ] || { echo "the console has no plan: can it reach NATS and dispatch?"; exit 1; }
+  sleep 5
+done
+echo "✓ the console's snapshot has the 25 trucks and plan v$version"

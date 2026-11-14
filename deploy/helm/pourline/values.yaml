@@ -6,6 +6,7 @@ images:
   dispatch: k3d-pourline-registry:5050/dispatch:dev
   simulators: k3d-pourline-registry:5050/simulators:dev
   operator: k3d-pourline-registry:5050/operator:dev
+  console: k3d-pourline-registry:5050/console:dev
 imagePullPolicy: IfNotPresent
 
 # Shifts the simulated world's clock by whole hours (domain::clock), the same in every service; the
@@ -27,10 +28,9 @@ simulators:
   bauwerkWebhookUrl: http://ingest-bauwerk-ag:8080/webhooks/bauwerk-ag
   neckarWebhookUrl: http://ingest-neckar-infra:8080/webhooks/neckar-infra
 
-mosquitto:
-  # LoadBalancer: k3s opens 1883 on the cloud node, where the plant cluster reaches it. Without a
-  # load balancer (kind), ClusterIP, or `helm --wait` waits for an address forever.
-  serviceType: LoadBalancer
+# The map console (SPEC §9): how long Make chaos cuts the plant's uplink.
+console:
+  chaosSeconds: 120
 
 # Everything but /webhooks/<name>, which each webhook integration adds, goes to dispatch.
 ingress:

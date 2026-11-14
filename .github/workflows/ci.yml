@@ -34,7 +34,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        bin: [simulators, ingest, dispatch, demo, plant-agent, operator]
+        bin: [simulators, ingest, dispatch, demo, plant-agent, operator, console]
         arch: [amd64, arm64]
         include:
           - { arch: amd64, runner: ubuntu-latest }
@@ -87,7 +87,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        bin: [simulators, ingest, dispatch, demo, plant-agent, operator]
+        bin: [simulators, ingest, dispatch, demo, plant-agent, operator, console]
     permissions:
       packages: write
     env:

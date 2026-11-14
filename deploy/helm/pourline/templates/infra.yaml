@@ -84,14 +84,12 @@ spec:
         - { name: config, configMap: { name: mosquitto-config } }
         - { name: data, emptyDir: {} }
 ---
-# With k3s, a LoadBalancer: its service load balancer opens 1883 on the cloud node, where the
-# plant cluster reaches it over pourline-net. Inside the cluster it is mosquitto:1883 as usual.
+# Inside the cluster only: the plant reaches Mosquitto through its uplink (cloud:1884), below.
 apiVersion: v1
 kind: Service
 metadata:
   name: mosquitto
 spec:
-  type: {{ .Values.mosquitto.serviceType }}
   selector: { app: mosquitto }
   ports: [{ port: 1883 }]
 ---
@@ -155,6 +153,74 @@ spec:
   selector: { app: jaeger }
   ports: [{ name: ui, port: 16686 }, { name: otlp-http, port: 4318 }]
 ---
+{{- if .Values.edge.plantAddress }}
+# The plant's uplink (SPEC §9): the plant-agent reaches Mosquitto, dispatch and Jaeger only through
+# these proxies, on the cloud node's LoadBalancer ports, so the console can cut and restore the
+# link. Toxiproxy's API stays inside the cluster. Only with a plant (edge.plantAddress), so kind
+# gets no LoadBalancer. Nothing bumps this image: check it at each milestone.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: uplink-config
+data:
+  toxiproxy.json: |
+{{ .Files.Get "files/toxiproxy.json" | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: uplink
+spec:
+  selector: { matchLabels: { app: uplink } }
+  template:
+    metadata:
+      labels: { app: uplink }
+      # Toxiproxy reads its proxies at startup.
+      annotations: { checksum/config: {{ .Files.Get "files/toxiproxy.json" | sha256sum }} }
+    spec:
+      containers:
+        - name: toxiproxy
+          image: ghcr.io/shopify/toxiproxy:2.13.0
+          # Args replace the image's own -host=0.0.0.0, so it is repeated here.
+          args: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+          ports:
+            - { name: api, containerPort: 8474 }
+            - { name: mqtt, containerPort: 1884 }
+            - { name: dispatch, containerPort: 8088 }
+            - { name: otlp, containerPort: 4318 }
+          # On the API, which answers during a cut too, and 404s if the config didn't load. A
+          # probe on a proxy would fail during every cut, take the API's Service away with it,
+          # and keep Reconnect from reaching it. No liveness probe: a restart would end a cut
+          # behind the console's back.
+          readinessProbe:
+            httpGet: { path: /proxies/dispatch, port: api }
+            periodSeconds: 2
+          volumeMounts: [{ name: config, mountPath: /config, readOnly: true }]
+      volumes:
+        - { name: config, configMap: { name: uplink-config } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: uplink
+spec:
+  selector: { app: uplink }
+  ports: [{ name: api, port: 8474 }]
+---
+# The proxies on the cloud node, where the plant cluster reaches them as `cloud`.
+apiVersion: v1
+kind: Service
+metadata:
+  name: uplink-edge
+spec:
+  type: LoadBalancer
+  selector: { app: uplink }
+  ports:
+    - { name: mqtt, port: 1884 }
+    - { name: dispatch, port: 8088 }
+    - { name: otlp, port: 4318 }
+---
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

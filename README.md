@@ -462,7 +462,7 @@ are alternatives.
 2. It creates the clusters from `deploy/k3d/cloud.yaml` and `deploy/k3d/plant-walldorf.yaml`, on
    that network, with a pinned k3s. The plant cluster gets a host alias, `cloud`, for the cloud
    node's address.
-3. It builds the six images and pushes them as `localhost:5050/<service>:dev`.
+3. It builds the seven images and pushes them as `localhost:5050/<service>:dev`.
 4. It applies the CRD, installs the Helm chart `deploy/helm/pourline` into `cloud` with each image
    pinned to the digest it just pushed, and applies the three example customers from
    `deploy/integrations/`. It waits until the operator reports all three as `Running`.
@@ -470,13 +470,13 @@ are alternatives.
 
 | Cluster | Runs | Reach it |
 |---|---|---|
-| `cloud` | Postgres, NATS, Mosquitto, SFTP, Jaeger, ingest (MQTT), dispatch, the simulators, the operator, and one workload per customer integration | http://localhost:8080: webhooks at `/webhooks/<name>`, the dispatch API everywhere else; `kubectl --context k3d-cloud` (API on `127.0.0.1:6550`) |
+| `cloud` | Postgres, NATS, Mosquitto, SFTP, Jaeger, Prometheus, Grafana, ingest (MQTT), dispatch, the simulators, the map console, the plant's uplink, the operator, and one workload per customer integration | http://localhost:8080: the console at `/console`, Grafana at `/grafana`, Jaeger at `/jaeger`, webhooks at `/webhooks/<name>`, the dispatch API everywhere else; `kubectl --context k3d-cloud` (API on `127.0.0.1:6550`) |
 | `plant-walldorf` | the plant-agent, with its SQLite file on a volume | `kubectl --context k3d-plant-walldorf` (API on `127.0.0.1:6551`) |
 
-The plant-agent fetches its plan from `http://cloud` through the cloud's ingress, and sends its
-tickets to `mqtt://cloud:1883`, which the cloud's Mosquitto opens on its node. Prometheus and
-Grafana run only in compose; Jaeger runs in both:
-`kubectl --context k3d-cloud -n pourline port-forward svc/jaeger 16686`.
+The plant-agent reaches the cloud only through its uplink, a Toxiproxy on the cloud node: the plan
+from `http://cloud:8088`, the tickets to `mqtt://cloud:1884` and its spans to `http://cloud:4318`.
+The console cuts and restores that link. It and Prometheus read the agent on the plant node's own
+address, which a cut leaves alone.
 
 ```sh
 kubectl --context k3d-cloud -n pourline get customerintegrations
@@ -557,7 +557,7 @@ CI's `e2e` job runs `make e2e` (SPEC §12), and so can you, with kind (`brew ins
 
 1. creates the kind cluster `pourline-e2e` from a pinned node image, with its kubeconfig in
    `target/e2e/`, so `~/.kube/config` stays as it is;
-2. lints both charts, builds five images (no plant-agent: one cluster tests the cloud) and loads
+2. lints both charts, builds six images (no plant-agent: one cluster tests the cloud) and loads
    them into kind;
 3. installs the cloud chart with `deploy/e2e/values.yaml` and the three customers from
    `deploy/integrations/`, sets rheinbau's schedule to every minute, and waits until all three
@@ -565,7 +565,8 @@ CI's `e2e` job runs `make e2e` (SPEC §12), and so can you, with kind (`brew ins
 4. plays the demo scenario in a pod, which fails if an order isn't planned, a frozen load moves
    or a diff is missing;
 5. checks that rheinbau's CronJob ingested a drop, that the latest plan has loads, that the DLQ
-   holds nothing, and that every integration reports 0 dead letters.
+   holds nothing, that every integration reports 0 dead letters, that Prometheus scrapes ingest,
+   dispatch, the console and ingest-bauwerk-ag, and that the console has the trucks and a plan.
 
 On failure it prints the integrations, pods, events and logs. It deletes the cluster at the end,
 unless `E2E_KEEP=1`. `SKIP_BUILD=1` reuses the `pourline/<service>:e2e` images, which saves
@@ -627,6 +628,7 @@ ghcr.io/igorilic/rmc-dispatch-platform/simulators
 ghcr.io/igorilic/rmc-dispatch-platform/demo
 ghcr.io/igorilic/rmc-dispatch-platform/plant-agent
 ghcr.io/igorilic/rmc-dispatch-platform/operator
+ghcr.io/igorilic/rmc-dispatch-platform/console
 ```
 
 Each image is tagged `sha-<first 7 characters of the commit>`, and `main` points at the newest.
@@ -640,11 +642,12 @@ helm upgrade --install pourline deploy/helm/pourline --skip-crds -n pourline --c
   --set images.dispatch=ghcr.io/igorilic/rmc-dispatch-platform/dispatch:main \
   --set images.simulators=ghcr.io/igorilic/rmc-dispatch-platform/simulators:main \
   --set images.operator=ghcr.io/igorilic/rmc-dispatch-platform/operator:main \
+  --set images.console=ghcr.io/igorilic/rmc-dispatch-platform/console:main \
   --set imagePullPolicy=Always
 kubectl kustomize --load-restrictor LoadRestrictionsNone deploy/integrations | kubectl apply -f -
 ```
 
-On a cluster without a load balancer, such as kind, also set `mosquitto.serviceType=ClusterIP`.
+The chart needs a load balancer only for a plant's uplink, which `edge.plantAddress` turns on.
 
 ## Dependencies and security
 

@@ -93,11 +93,58 @@ spec:
             - { name: RHEINBAU_DROP_INTERVAL_SECS, value: {{ .rheinbauDropIntervalSecs | quote }} }
             - { name: AGENT_PLANTS, value: {{ .agentPlants | quote }} }
             {{- end }}
+---
+# The map console (SPEC §9), at /console through the ingress. One replica, replaced rather than
+# rolled: a Make chaos run lives in the pod that started it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: console
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: console } }
+  template:
+    metadata: { labels: { app: console } }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: console
+          image: {{ .Values.images.console }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          env:
+            - { name: DISPATCH_URL, value: "http://dispatch:8081" }
+            - { name: NATS_URL, value: "nats://nats:4222" }
+            - { name: MQTT_URL, value: "mqtt://mosquitto:1883" }
+            - { name: PLANT_ID, value: {{ .Values.edge.plant | quote }} }
+            {{- with .Values.edge.plantAddress }}
+            # The agent over the plant's monitoring path, and the uplink's API.
+            - { name: PLANT_AGENT_URL, value: {{ printf "http://%s:8082" . | quote }} }
+            - { name: UPLINK_URL, value: "http://uplink:8474" }
+            {{- end }}
+            - { name: CHAOS_SECONDS, value: {{ .Values.console.chaosSeconds | quote }} }
+            - { name: PUBLIC_URL, value: {{ .Values.publicUrl | quote }} }
+            - { name: BAUWERK_WEBHOOK_URL, value: {{ .Values.simulators.bauwerkWebhookUrl | quote }} }
+            - { name: NECKAR_WEBHOOK_URL, value: {{ .Values.simulators.neckarWebhookUrl | quote }} }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://jaeger:4318" }
+            - { name: CLOCK_OFFSET_HOURS, value: {{ $.Values.clockOffsetHours | quote }} }
+          ports: [{ name: http, containerPort: 8083 }, { name: metrics, containerPort: 9468 }]
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: console
+spec:
+  selector: { app: console }
+  ports: [{ port: 8083 }]
 {{- if .Values.ingress.enabled }}
 ---
 # The cluster's ingress: http://localhost:8080 from the host with k3d. Dispatch takes everything
-# but /grafana, /jaeger and each webhook integration's /webhooks/<name>, which the operator adds
-# as an Ingress of its own.
+# but /console, /grafana, /jaeger and each webhook integration's /webhooks/<name>, which the
+# operator adds as an Ingress of its own.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -110,6 +157,9 @@ spec:
             pathType: Prefix
             backend: { service: { name: dispatch, port: { number: 8081 } } }
           # Longer paths win in Traefik, and each of these serves under its own prefix.
+          - path: /console
+            pathType: Prefix
+            backend: { service: { name: console, port: { number: 8083 } } }
           - path: /grafana
             pathType: Prefix
             backend: { service: { name: grafana, port: { number: 3000 } } }

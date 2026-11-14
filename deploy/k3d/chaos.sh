@@ -14,6 +14,15 @@ if ! k3d cluster get plant-walldorf >/dev/null 2>&1 || ! k3d cluster get cloud >
   echo "make chaos needs the k3d clusters: run make k8s first."
   exit 1
 fi
+# A cut the console made would keep the agent from the plan this script waits for: end it first.
+# The console can't end a Make chaos run before its cut, so wait (about 2 min at most) until it cuts.
+for i in $(seq 65); do
+  s=$(curl -fs http://localhost:8080/console/api/snapshot) || break
+  grep -Eq '"step":"(ordering|planning|syncing)"' <<<"$s" || break
+  [ "$i" -gt 1 ] || echo "Waiting for the console's Make chaos run to cut the uplink, to end its cut…"
+  sleep 2
+done
+curl -fs -X DELETE -H 'X-Pourline-Console: 1' http://localhost:8080/console/api/chaos >/dev/null || true
 
 status() {
   docker exec "$NODE" kubectl get --raw \

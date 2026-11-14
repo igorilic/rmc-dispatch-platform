@@ -10,7 +10,7 @@ cd "$(dirname "$0")/../.."
 NETWORK=pourline-net
 SUBNET=172.28.0.0/24 # fixed, so make chaos can reconnect the plant node with its old IP
 REGISTRY=pourline-registry
-SERVICES=(ingest dispatch simulators demo plant-agent operator)
+SERVICES=(ingest dispatch simulators demo plant-agent operator console)
 
 for tool in docker k3d kubectl helm; do
   command -v "$tool" >/dev/null || {
@@ -30,6 +30,8 @@ k3d cluster get cloud >/dev/null 2>&1 || k3d cluster create --config deploy/k3d/
 cloud_ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$NETWORK\").IPAddress}}" k3d-cloud-server-0)
 k3d cluster get plant-walldorf >/dev/null 2>&1 ||
   k3d cluster create --config deploy/k3d/plant-walldorf.yaml --host-alias "$cloud_ip:cloud" --wait
+# The plant node's own address: the console and Prometheus read the agent there, past the uplink.
+plant_ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$NETWORK\").IPAddress}}" k3d-plant-walldorf-server-0)
 
 if [ "${SKIP_BUILD:-}" != 1 ]; then
   for service in "${SERVICES[@]}"; do
@@ -49,7 +51,7 @@ image() {
   echo "k3d-pourline-registry:5050/$1@$digest"
 }
 images=()
-for service in ingest dispatch simulators operator; do
+for service in ingest dispatch simulators operator console; do
   ref=$(image "$service") # a plain assignment, so a missing image stops the script
   images+=(--set "images.$service=$ref")
 done
@@ -70,7 +72,7 @@ done
 kubectl --context k3d-cloud apply --server-side --force-conflicts -f deploy/helm/pourline/crds/
 helm upgrade --install pourline deploy/helm/pourline --skip-crds --kube-context k3d-cloud \
   --namespace pourline --create-namespace --wait --timeout 5m \
-  "${images[@]}" --set simulators.agentPlants=plant-walldorf \
+  "${images[@]}" --set simulators.agentPlants=plant-walldorf --set "edge.plantAddress=$plant_ip" \
   --set "clockOffsetHours=${CLOCK_OFFSET_HOURS:-0}"
 kubectl kustomize --load-restrictor LoadRestrictionsNone deploy/integrations |
   kubectl --context k3d-cloud apply -f -
@@ -87,7 +89,12 @@ Pourline runs in two k3d clusters on $NETWORK:
   cloud            the operator runs the three customer integrations; webhooks at
                    http://localhost:8080/webhooks/<name>, the dispatch API everywhere else
                    (Swagger UI at /swagger-ui/)
-  plant-walldorf   the plant-agent, which reaches the cloud as \`cloud\` ($cloud_ip)
+  plant-walldorf   the plant-agent ($plant_ip), which reaches the cloud as \`cloud\`
+                   ($cloud_ip) through the uplink
+
+  http://localhost:8080/console   the map console
+  http://localhost:8080/grafana   Grafana
+  http://localhost:8080/jaeger    Jaeger
 
   kubectl --context k3d-cloud -n pourline get customerintegrations
   kubectl --context k3d-cloud -n pourline get pods

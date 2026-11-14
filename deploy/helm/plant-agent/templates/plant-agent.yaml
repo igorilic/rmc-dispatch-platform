@@ -27,6 +27,7 @@ spec:
             - { name: PLANT_ID, value: {{ .Values.plantId | quote }} }
             - { name: DISPATCH_URL, value: {{ .Values.dispatchUrl | quote }} }
             - { name: MQTT_URL, value: {{ .Values.mqttUrl | quote }} }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.otlpUrl | quote }} }
             - { name: PLANT_AGENT_DB, value: /data/plant-agent.sqlite }
             - { name: CLOCK_OFFSET_HOURS, value: {{ $.Values.clockOffsetHours | quote }} }
           ports:
@@ -47,6 +48,7 @@ kind: Service
 metadata:
   name: plant-agent
 spec:
+  type: {{ .Values.serviceType }}
   selector: { app: plant-agent }
   ports:
     - { name: http, port: 8082 }
