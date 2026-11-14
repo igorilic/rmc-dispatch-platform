@@ -1,16 +1,21 @@
 //! The dispatch REST API. Its OpenAPI document is at `/api-docs/openapi.json`, and Swagger UI at
 //! `/swagger-ui/`.
+//!
+//! Tracing: a request continues the caller's trace when it carries a W3C `traceparent` and did not
+//! come through the ingress ([`trace_context`]). The map console and the plant's uplink call
+//! dispatch directly (SPEC §9); requests through Traefik start their own traces, as ingest's do.
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::{StatusCode, header};
-use axum::response::IntoResponse;
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use chrono::{DateTime, TimeDelta, TimeZone, Utc};
 use chrono_tz::Europe::Berlin;
 use domain::{Order, OrderStatus, PlantId, PlantPlan, PlantStatus, SiteId};
 use serde::{Deserialize, Serialize};
-use tracing::error;
+use tracing::{Instrument, error, info_span};
 use utoipa::{IntoParams, OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -81,7 +86,31 @@ pub fn router(store: Store, jobs: Jobs, clock: fn() -> DateTime<Utc>) -> Router 
         .route("/plants/{id}/status", put(set_plant_status))
         .route("/sites/{id}/delays", post(delay_site))
         .with_state(AppState { store, jobs, clock })
+        .layer(middleware::from_fn(trace_context))
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+}
+
+/// Puts the request in a span that continues the caller's trace, when the request carries a
+/// `traceparent` and no `X-Forwarded-For`. Traefik adds that header to everything it proxies, so
+/// its absence means a caller inside the cluster, or the plant through its uplink. Every other
+/// request passes untouched: probes and polls add no traces, and outside callers keep their own.
+async fn trace_context(request: Request, next: Next) -> Response {
+    let headers = request.headers();
+    let traceparent = headers
+        .get("traceparent")
+        .and_then(|v| v.to_str().ok())
+        .filter(|_| !headers.contains_key("x-forwarded-for"))
+        .map(str::to_owned);
+    let Some(traceparent) = traceparent else {
+        return next.run(request).await;
+    };
+    let span = info_span!(
+        "http request",
+        method = %request.method(),
+        path = %request.uri().path()
+    );
+    telemetry::continue_from(&span, &traceparent);
+    next.run(request).instrument(span).await
 }
 
 /// Logs the cause and answers 500 without it.

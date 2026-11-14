@@ -9,7 +9,7 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
-use common::{at, order, postgres};
+use common::{at, finished, named, order, postgres};
 use dispatch::api::{self, Redispatched, VersionedPlan};
 use dispatch::redispatch::{ChangeKind, Diff, Settings};
 use dispatch::search::Budget;
@@ -21,7 +21,9 @@ use domain::{
     DeliveryStatus, Load, LoadRef, Order, OrderStatus, PlantId, PlantPlan, PlantStatus, Seed,
 };
 use serde_json::{Value, json};
+use telemetry::testing::{SpanData, capture};
 use tower::ServiceExt;
+use tracing::info_span;
 
 /// The planning clock, with nanoseconds that Postgres can't keep.
 fn clock() -> DateTime<Utc> {
@@ -81,6 +83,19 @@ async fn send(router: &Router, method: &str, uri: &str, body: Option<Value>) -> 
         .header(header::CONTENT_TYPE, "application/json")
         .body(body.map_or_else(Body::empty, |b| Body::from(b.to_string())))
         .unwrap();
+    reply(router, request).await
+}
+
+/// A request without a body, with `headers`.
+async fn call_with(router: &Router, method: &str, uri: &str, headers: &[(&str, &str)]) -> Reply {
+    let mut request = Request::builder().method(method).uri(uri);
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+    reply(router, request.body(Body::empty()).unwrap()).await
+}
+
+async fn reply(router: &Router, request: Request<Body>) -> Reply {
     let response = router.clone().oneshot(request).await.unwrap();
     Reply {
         status: response.status(),
@@ -466,4 +481,73 @@ async fn an_order_with_a_delivery_is_in_progress() {
         .await
         .json();
     assert!(pending.is_empty());
+}
+
+/// `child` belongs to `parent`'s trace, right under it.
+fn under(child: &SpanData, parent: &SpanData) {
+    assert_eq!(
+        (child.span_context.trace_id(), child.parent_span_id),
+        (
+            parent.span_context.trace_id(),
+            parent.span_context.span_id()
+        ),
+        "{} under {}",
+        child.name,
+        parent.name
+    );
+}
+
+#[tokio::test]
+async fn a_caller_inside_the_cluster_carries_its_trace_into_the_redispatch() {
+    let (_guard, exporter) = capture();
+    let s = setup(&[order("BW-1", 18.0, at(9, 0))]).await;
+    let click = info_span!("console action");
+    let traceparent = telemetry::traceparent(&click).unwrap();
+    let replanned = call_with(
+        &s.router,
+        "POST",
+        "/plans",
+        &[("traceparent", &traceparent)],
+    )
+    .await;
+    assert_eq!(replanned.status, StatusCode::CREATED);
+    drop(click);
+
+    let spans = finished(&exporter, "redispatch").await;
+    let request = named(&spans, "http request");
+    under(request, named(&spans, "console action"));
+    under(named(&spans, "POST /plans"), request);
+    under(named(&spans, "redispatch"), named(&spans, "POST /plans"));
+}
+
+#[tokio::test]
+async fn callers_through_the_ingress_and_untraced_ones_start_their_own_traces() {
+    let (_guard, exporter) = capture();
+    let s = setup(&[order("BW-1", 18.0, at(9, 0))]).await;
+    let outside = info_span!("outside caller");
+    let traceparent = telemetry::traceparent(&outside).unwrap();
+    // Traefik adds X-Forwarded-For to everything it proxies.
+    let through_ingress = [
+        ("traceparent", traceparent.as_str()),
+        ("x-forwarded-for", "10.42.0.1"),
+    ];
+    let replanned = call_with(&s.router, "POST", "/plans", &through_ingress).await;
+    assert_eq!(replanned.status, StatusCode::CREATED);
+    assert_eq!(
+        call(&s.router, "GET", "/healthz").await.status,
+        StatusCode::OK
+    );
+    drop(outside);
+
+    let spans = finished(&exporter, "redispatch").await;
+    assert_ne!(
+        named(&spans, "POST /plans").span_context.trace_id(),
+        named(&spans, "outside caller").span_context.trace_id(),
+        "the ingress caller's trace isn't continued"
+    );
+    under(named(&spans, "redispatch"), named(&spans, "POST /plans"));
+    assert!(
+        spans.iter().all(|s| s.name != "http request"),
+        "no request span without a trusted traceparent"
+    );
 }

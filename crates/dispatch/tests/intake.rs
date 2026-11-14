@@ -9,7 +9,7 @@ mod common;
 use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
-use common::{at, nats, order, postgres};
+use common::{at, finished, named, nats, order, postgres};
 use dispatch::redispatch::{Settings, Trigger};
 use dispatch::search::Budget;
 use dispatch::store::{Store, VersionedPlan};
@@ -19,7 +19,7 @@ use domain::{
     OrderStatus, Seed, SiteId, TruckId, TruckStatus,
 };
 use ingest::nats::Bus;
-use telemetry::testing::{InMemorySpanExporter, SpanData, capture};
+use telemetry::testing::{SpanData, capture};
 use tracing::{Instrument, info_span};
 
 fn upserted(order: &Order, occurred_at: DateTime<Utc>) -> EventEnvelope {
@@ -365,25 +365,6 @@ async fn a_batch_ticket_freezes_its_load() {
     assert!(frozen.frozen);
     assert_eq!((frozen.sequence, frozen.planned_batch_at), (1, started));
     tasks.iter().for_each(tokio::task::JoinHandle::abort);
-}
-
-/// Polls until a span named `name` has ended, or fails after 10 s.
-async fn finished(exporter: &InMemorySpanExporter, name: &str) -> Vec<SpanData> {
-    for _ in 0..100 {
-        let spans = exporter.get_finished_spans().unwrap();
-        if spans.iter().any(|s| s.name == name) {
-            return spans;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    panic!("no {name} span ended");
-}
-
-fn named<'a>(spans: &'a [SpanData], name: &str) -> &'a SpanData {
-    spans
-        .iter()
-        .find(|s| s.name == name)
-        .unwrap_or_else(|| panic!("no {name} span"))
 }
 
 fn attribute(span: &SpanData, key: &str) -> String {

@@ -362,10 +362,12 @@ dispatch         load world · plan · save plan
 ```
 
 A truck breakdown looks the same, starting from its `mqtt message`. The three API endpoints that
-trigger a re-dispatch start their own traces. When the worker merges several triggers into one
-run, the run joins the first trigger's trace and links to the others. A webhook's `202` response
-carries the delivery's `trace_id`, so http://localhost:16686/trace/{trace_id} finds it. Dead
-letters show as red spans.
+trigger a re-dispatch start their own traces, unless the caller is inside the cluster and sends a
+W3C `traceparent`: then the request, and the re-dispatch it causes, continue the caller's trace.
+Requests through the ingress carry `X-Forwarded-For` and always start their own. When the worker
+merges several triggers into one run, the run joins the first trigger's trace and links to the
+others. A webhook's `202` response carries the delivery's `trace_id`, so
+http://localhost:16686/trace/{trace_id} finds it. Dead letters show as red spans.
 
 GPS and drum readings aren't traced. At about two a second they would bury every other trace, and
 they never trigger a re-dispatch. Status reports, batch tickets and every dead letter are traced.

@@ -2,9 +2,12 @@
 
 #![allow(dead_code)]
 
+use std::time::Duration;
+
 use chrono::{DateTime, TimeZone, Utc};
 use chrono_tz::Europe::Berlin;
 use domain::{CustomerId, MixCode, Order, OrderId, OrderStatus, SiteId};
+use telemetry::testing::{InMemorySpanExporter, SpanData};
 use testcontainers::core::{IntoContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
@@ -59,4 +62,23 @@ pub fn order(number: &str, volume: f64, start: DateTime<Utc>) -> Order {
         max_gap_minutes: 20,
         status: OrderStatus::Pending,
     }
+}
+
+/// Polls until a span named `name` has ended, or fails after 10 s.
+pub async fn finished(exporter: &InMemorySpanExporter, name: &str) -> Vec<SpanData> {
+    for _ in 0..100 {
+        let spans = exporter.get_finished_spans().unwrap();
+        if spans.iter().any(|s| s.name == name) {
+            return spans;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("no {name} span ended");
+}
+
+pub fn named<'a>(spans: &'a [SpanData], name: &str) -> &'a SpanData {
+    spans
+        .iter()
+        .find(|s| s.name == name)
+        .unwrap_or_else(|| panic!("no {name} span"))
 }
