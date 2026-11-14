@@ -30,6 +30,7 @@ tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "signal",
 tracing = "0.1.44"
 
 [dev-dependencies]
+telemetry = { path = "../telemetry", features = ["testing"] }
 testcontainers = "0.28.0"
 tower = { version = "0.5.3", features = ["util"] }
 

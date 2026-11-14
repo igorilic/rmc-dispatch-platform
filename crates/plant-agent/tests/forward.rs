@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use domain::PlantId;
 use plant_agent::forward::{self, Link, Settings};
 use plant_agent::store::Store;
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
@@ -69,13 +70,35 @@ async fn subscribe(url: &str) -> mpsc::UnboundedReceiver<Vec<u8>> {
     rx
 }
 
+fn sync_topic() -> String {
+    domain::sync_topic(&PlantId("plant-walldorf".into()))
+}
+
 fn settings(url: &str) -> Settings {
     Settings {
         ack_timeout: Duration::from_secs(2),
         keep_alive: Duration::from_secs(2),
         retry: Duration::from_millis(300),
-        ..Settings::new(url, "test-plant-agent")
+        ..Settings::new(url, "test-plant-agent", sync_topic())
     }
+}
+
+/// Publishes `payload` on `topic` at QoS 1, as the console does, and waits for the broker's PUBACK.
+async fn publish(url: &str, topic: &str, payload: &str) {
+    let options = MqttOptions::parse_url(format!("{url}?client_id=test-console")).unwrap();
+    let (client, mut eventloop) = AsyncClient::new(options, 10);
+    client
+        .publish(topic, QoS::AtLeastOnce, false, payload.as_bytes().to_vec())
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(10), async {
+        while !matches!(
+            eventloop.poll().await,
+            Ok(Event::Incoming(Packet::PubAck(_)))
+        ) {}
+    })
+    .await
+    .unwrap();
 }
 
 fn temp_db(name: &str) -> PathBuf {
@@ -214,5 +237,38 @@ async fn a_restarted_agent_sends_what_the_last_one_queued() {
         "a resend carries exactly the stored bytes"
     );
     until("the outbox to drain", || store.oldest().unwrap().is_none()).await;
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn a_sync_command_reaches_the_agent_even_while_tickets_are_in_flight() {
+    let (_broker, url) = mosquitto().await;
+    let mut received = subscribe(&url).await;
+    let path = temp_db("sync");
+    let store = Arc::new(Store::open(&path).unwrap());
+    let (wake, link) = (Arc::new(Notify::new()), Arc::new(Link::default()));
+    tokio::spawn(forward::run(
+        Arc::clone(&store),
+        settings(&url),
+        Arc::clone(&wake),
+        Arc::clone(&link),
+    ));
+    until("the link to be up, subscription included", || link.up()).await;
+
+    // A burst keeps tickets waiting for their PUBACKs while the command comes in.
+    let burst: Vec<Vec<u8>> = (1..=50).map(ticket).collect();
+    for payload in &burst {
+        store.enqueue(TOPIC, payload, Utc::now()).unwrap();
+    }
+    wake.notify_one();
+    let traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    publish(&url, &sync_topic(), traceparent).await;
+
+    let requested = timeout(Duration::from_secs(10), link.sync_requested())
+        .await
+        .unwrap();
+    assert_eq!(requested.as_deref(), Some(traceparent));
+    let all = receive_all(&mut received, &burst).await;
+    assert_eq!(first_arrivals(&all), burst, "the outbox drains as before");
     let _ = std::fs::remove_file(&path);
 }

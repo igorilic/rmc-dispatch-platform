@@ -12,7 +12,7 @@ mod edge;
 mod events;
 mod seed;
 
-pub use edge::{PlantLoad, PlantPlan, PlantTicket};
+pub use edge::{PlantLoad, PlantPlan, PlantTicket, sync_topic};
 pub use events::{Channel, DrumRotation, Event, EventEnvelope, EventSource};
 pub use seed::Seed;
 

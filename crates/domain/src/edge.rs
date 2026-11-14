@@ -5,6 +5,7 @@
 //! - [`PlantTicket`]: a batch ticket as a plant's batch computer sends it on
 //!   `plants/{id}/tickets` over MQTT. Ingest reads it with its own parser, so a mistake on the
 //!   sending side can't slip through unnoticed.
+//! - [`sync_topic`]: where the cloud asks a plant's agent to fetch its plan now.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -55,6 +56,12 @@ impl PlantTicket {
     pub fn topic(&self) -> String {
         format!("plants/{}/tickets", self.plant.0)
     }
+}
+
+/// The MQTT topic on which the cloud asks a plant's agent to fetch its plan now. The payload is
+/// empty, or a W3C `traceparent` that the agent's fetch continues.
+pub fn sync_topic(plant: &PlantId) -> String {
+    format!("plants/{}/commands/sync", plant.0)
 }
 
 #[cfg(test)]

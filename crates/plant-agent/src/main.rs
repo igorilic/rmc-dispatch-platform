@@ -103,6 +103,7 @@ async fn main() -> anyhow::Result<()> {
     let settings = Settings::new(
         config.mqtt_url.clone(),
         format!("pourline-plant-agent-{}", config.plant),
+        domain::sync_topic(&agent.plant.id),
     );
     let (store, wake, link) = (
         Arc::clone(&agent.store),
