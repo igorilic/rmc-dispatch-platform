@@ -4,11 +4,11 @@ use std::time::Duration;
 
 /// Pages connected to the live stream.
 pub const CLIENTS: &str = "pourline_console_clients";
-/// Changes pushed to the pages, by `kind` (truck, plant, plan, edge, uplink, log).
+/// Changes pushed to the pages, by `kind` (truck, route, plant, plan, edge, uplink, log).
 pub const PUSHED: &str = "pourline_console_pushed_total";
 /// Actions by `action` and `outcome` (done, refused, failed).
 pub const ACTIONS: &str = "pourline_console_actions_total";
-/// From ingest receiving a truck or ticket event to the console pushing it, by `kind`.
+/// From ingest receiving a truck, route or ticket event to the console pushing it, by `kind`.
 pub const EVENT_LAG: &str = "pourline_console_event_lag_seconds";
 
 /// Every metric the console exports. The dashboard test reads these names.

@@ -7,8 +7,8 @@
 //! Reads are open: they serve simulated data.
 //!
 //! The live stream is server-sent events: `retry:` and a `snapshot` first, then one event per
-//! change (`truck`, `plant`, `plan`, `edge`, `uplink`, `log`) and a `heartbeat` every 15 s. A
-//! page that falls behind is dropped; its browser reconnects and gets a new snapshot.
+//! change (`truck`, `route`, `plant`, `plan`, `edge`, `uplink`, `log`) and a `heartbeat` every
+//! 15 s. A page that falls behind is dropped; its browser reconnects and gets a new snapshot.
 
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -454,6 +454,7 @@ mod tests {
         let data = text.lines().find_map(|l| l.strip_prefix("data: ")).unwrap();
         let snapshot: Value = serde_json::from_str(data).unwrap();
         assert_eq!(snapshot["trucks"].as_array().unwrap().len(), 25);
+        assert!(snapshot["routes"].is_object(), "{data}");
         assert_eq!(snapshot["features"]["chaos"], false);
     }
 }

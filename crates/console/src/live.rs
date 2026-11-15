@@ -2,7 +2,8 @@
 //! before the rest of the stack and rides out restarts.
 //!
 //! - EVENTS: an ordered consumer on `events.trucks.>` and `events.plants.>` that starts at each
-//!   subject's last message, so every truck and plant has its latest event at once. Starting
+//!   subject's last message, so every truck and plant has its latest event at once, and every
+//!   truck its latest route, which has a subject of its own (`events.trucks.{id}.route`). Starting
 //!   there also sets the consumer's sequence right away, so a reconnect resumes from it instead
 //!   of replaying the whole stream. After a NATS reconnect it starts over, because the stream may
 //!   have been created anew with its sequence reset; `/world` fills in what it missed.
@@ -31,7 +32,7 @@ use tokio::time::{MissedTickBehavior, interval, sleep};
 use tracing::field::Empty;
 use tracing::{Instrument, Span, info, info_span, warn};
 
-use crate::state::{EdgeView, PlanView, Ticket, World};
+use crate::state::{EdgeView, PlanView, RouteView, Ticket, World};
 use crate::{Console, Update, metrics};
 
 const RETRY: Duration = Duration::from_secs(2);
@@ -100,10 +101,24 @@ pub fn apply(console: &Console, payload: &[u8], headers: Option<&HeaderMap>) {
             if *status == TruckStatus::OutOfService {
                 console.breakdown_seen(&truck.0);
             }
+            // The status, then the line it shows or takes away, under one lock: a page has a
+            // truck's status before the route it shows.
             console
-                .change("truck", |s| s.truck_status(&truck.0, *status, at))
+                .change_all(|s| {
+                    let Some(view) = s.truck_status(&truck.0, *status, at) else {
+                        return Vec::new();
+                    };
+                    let route = s.route_shown(&truck.0);
+                    Update::new("truck", &view)
+                        .into_iter()
+                        .chain(route.and_then(|r| Update::new("route", &r)))
+                        .collect()
+                })
                 .then_some("truck")
         }
+        Event::TruckRouteReported { truck, path } => console
+            .change("route", |s| s.truck_route(&truck.0, path.clone(), at))
+            .then_some("route"),
         Event::BatchTicketIssued {
             plant,
             ticket_no,
@@ -331,10 +346,15 @@ impl Console {
         {
             let mut state = self.state();
             let (plants, trucks) = state.world(&world);
+            let routes: Vec<RouteView> = trucks
+                .iter()
+                .filter_map(|t| state.route_shown(&t.id))
+                .collect();
             let updates = plants
                 .iter()
                 .filter_map(|p| Update::new("plant", p))
-                .chain(trucks.iter().filter_map(|t| Update::new("truck", t)));
+                .chain(trucks.iter().filter_map(|t| Update::new("truck", t)))
+                .chain(routes.iter().filter_map(|r| Update::new("route", r)));
             for update in updates {
                 metrics::pushed(update.event);
                 let _ = self.updates.send(update);

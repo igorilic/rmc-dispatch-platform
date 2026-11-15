@@ -266,6 +266,18 @@ impl Console {
         true
     }
 
+    /// Changes the state and pushes every update the change makes, in order, under one lock.
+    fn change_all(&self, change: impl FnOnce(&mut State) -> Vec<Update>) -> bool {
+        let mut state = self.state();
+        let updates = change(&mut state);
+        let changed = !updates.is_empty();
+        for update in updates {
+            metrics::pushed(update.event);
+            let _ = self.updates.send(update);
+        }
+        changed
+    }
+
     /// Pushes something that isn't state, such as the heartbeat.
     fn push(&self, update: Option<Update>) {
         if let Some(update) = update {

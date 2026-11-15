@@ -5,6 +5,8 @@
 //! The merge rules keep the copy right whatever arrives first:
 //! - a truck field keeps its newest value by report time, so a `/world` read while dispatch is
 //!   still behind never undoes a newer event, and an event that arrives late changes nothing;
+//! - a truck's route shows only while the truck is en route or returning and the route is no
+//!   older than that status, so a stale or replayed route is never drawn, only none;
 //! - a plant keeps its newest ticket;
 //! - plan versions only move forward, so a version announced twice is pushed once.
 
@@ -62,6 +64,21 @@ pub struct TruckView {
     pub status_at: Option<DateTime<Utc>>,
     pub position: Option<Location>,
     pub position_at: Option<DateTime<Utc>>,
+}
+
+/// What a page draws for a truck's road: the route it reported for the drive it is on, or
+/// `None` when no line shows.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RouteView {
+    pub truck: String,
+    pub path: Option<Vec<Location>>,
+}
+
+/// A truck's newest route, and when it was reported.
+#[derive(Debug, Clone)]
+struct Route {
+    at: DateTime<Utc>,
+    path: Vec<Location>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -161,6 +178,8 @@ pub struct Snapshot {
     pub plants: Vec<PlantView>,
     pub sites: Vec<SiteView>,
     pub trucks: Vec<TruckView>,
+    /// The roads that show, by truck id.
+    pub routes: BTreeMap<String, Vec<Location>>,
     pub plan: Option<PlanView>,
     pub edge: Option<EdgeView>,
     pub uplink: UplinkView,
@@ -194,6 +213,9 @@ pub struct State {
     pub plants: BTreeMap<String, PlantView>,
     pub sites: Vec<SiteView>,
     pub trucks: BTreeMap<String, TruckView>,
+    routes: BTreeMap<String, Route>,
+    /// When the route each truck shows was reported: what the pages were last told.
+    shown: BTreeMap<String, DateTime<Utc>>,
     pub plan: Option<PlanView>,
     pub edge: Option<EdgeView>,
     pub uplink: UplinkView,
@@ -274,6 +296,8 @@ impl State {
             plants,
             sites,
             trucks,
+            routes: BTreeMap::new(),
+            shown: BTreeMap::new(),
             plan: None,
             edge: None,
             uplink: UplinkView {
@@ -314,6 +338,56 @@ impl State {
         truck.position = Some(position);
         truck.position_at = Some(at);
         Some(truck.clone())
+    }
+
+    /// A route report, unless the stored one is newer. Returns what a page should draw for the
+    /// truck when that changed.
+    pub fn truck_route(
+        &mut self,
+        id: &str,
+        path: Vec<Location>,
+        at: DateTime<Utc>,
+    ) -> Option<RouteView> {
+        if !self.trucks.contains_key(id) {
+            return None;
+        }
+        if !newer(Some(at), self.routes.get(id).map(|r| r.at)) {
+            return None;
+        }
+        self.routes.insert(id.to_owned(), Route { at, path });
+        self.route_shown(id)
+    }
+
+    /// What a page should draw for the truck, when it differs from what the pages were told.
+    /// Call it after every change to the truck's status or route.
+    pub fn route_shown(&mut self, id: &str) -> Option<RouteView> {
+        let shows = self.shows(id).map(|r| r.at);
+        if shows == self.shown.get(id).copied() {
+            return None;
+        }
+        match shows {
+            Some(at) => self.shown.insert(id.to_owned(), at),
+            None => self.shown.remove(id),
+        };
+        Some(RouteView {
+            truck: id.to_owned(),
+            path: self.shows(id).map(|r| r.path.clone()),
+        })
+    }
+
+    /// The route a truck shows: its newest, while the truck drives the drive it began. A route
+    /// goes out right after the status that starts its drive, so it is never older than that
+    /// status; one that is older belongs to an earlier drive, and any later status means the
+    /// drive is over. So a stale, replayed or lost report leaves no line, never a wrong one.
+    fn shows(&self, id: &str) -> Option<&Route> {
+        let truck = self.trucks.get(id)?;
+        let route = self.routes.get(id)?;
+        let driving = matches!(truck.status, TruckStatus::EnRoute | TruckStatus::Returning);
+        (driving
+            && truck
+                .status_at
+                .is_some_and(|status_at| route.at >= status_at))
+        .then_some(route)
     }
 
     pub fn plant_status(&mut self, id: &str, status: PlantStatus) -> Option<PlantView> {
@@ -434,6 +508,11 @@ impl State {
             plants: self.plants.values().cloned().collect(),
             sites: self.sites.clone(),
             trucks: self.trucks.values().cloned().collect(),
+            routes: self
+                .trucks
+                .keys()
+                .filter_map(|id| Some((id.clone(), self.shows(id)?.path.clone())))
+                .collect(),
             plan: self.plan.clone(),
             edge: self.edge.clone(),
             uplink: self.uplink.clone(),
@@ -510,6 +589,132 @@ mod tests {
         assert_eq!(changed.len(), 1);
         assert_eq!(changed[0].status, TruckStatus::EnRoute);
         assert_eq!(changed[0].position_at, Some(at(3)));
+    }
+
+    fn road() -> Vec<Location> {
+        vec![
+            Location {
+                lat: 49.4875,
+                lon: 8.466,
+            },
+            Location {
+                lat: 49.5512,
+                lon: 8.6589,
+            },
+        ]
+    }
+
+    /// Whether a change draws the line (`Some(true)`), takes it away (`Some(false)`), or is none.
+    fn draws(change: Option<RouteView>) -> Option<bool> {
+        change.map(|r| r.path.is_some())
+    }
+
+    fn snapshot(s: &State) -> Snapshot {
+        let links = Links {
+            jaeger: String::new(),
+            grafana: String::new(),
+            api: String::new(),
+        };
+        let features = Features {
+            edge: true,
+            chaos: true,
+        };
+        s.snapshot(at(0), "plant-walldorf", features, links)
+    }
+
+    #[test]
+    fn a_route_shows_only_while_its_truck_drives_it() {
+        let mut s = state();
+        // A drive's route goes out right after its status: one that lands first waits for the
+        // status, and a status at the same millisecond shows it.
+        assert_eq!(draws(s.truck_route("truck-07", road(), at(1))), None);
+        s.truck_status("truck-07", TruckStatus::EnRoute, at(1));
+        assert_eq!(draws(s.route_shown("truck-07")), Some(true));
+        // Arriving takes it away, and a late, older route changes nothing.
+        s.truck_status("truck-07", TruckStatus::OnSite, at(2));
+        assert_eq!(draws(s.route_shown("truck-07")), Some(false));
+        assert_eq!(draws(s.truck_route("truck-07", road(), at(0))), None);
+        // The drive back shows its own route, never the one from before it.
+        s.truck_status("truck-07", TruckStatus::Returning, at(3));
+        assert_eq!(draws(s.route_shown("truck-07")), None);
+        assert_eq!(draws(s.truck_route("truck-07", road(), at(3))), Some(true));
+        // A simulators restart reports available first.
+        s.truck_status("truck-07", TruckStatus::Available, at(4));
+        assert_eq!(draws(s.route_shown("truck-07")), Some(false));
+        // A breakdown takes the line away; the drive home after the repair brings its own.
+        s.truck_status("truck-07", TruckStatus::EnRoute, at(5));
+        assert_eq!(draws(s.truck_route("truck-07", road(), at(5))), Some(true));
+        s.truck_status("truck-07", TruckStatus::OutOfService, at(6));
+        assert_eq!(draws(s.route_shown("truck-07")), Some(false));
+        s.truck_status("truck-07", TruckStatus::Returning, at(7));
+        assert_eq!(draws(s.route_shown("truck-07")), None);
+        let home = vec![road()[1], road()[0]];
+        let change = s.truck_route("truck-07", home.clone(), at(7));
+        assert_eq!(change.and_then(|r| r.path), Some(home));
+        // A /world status changes what shows as an event does.
+        let arrived = WorldTruck {
+            id: "truck-07".into(),
+            status: TruckStatus::OnSite,
+            status_at: Some(at(8)),
+            position: None,
+            position_at: None,
+        };
+        assert_eq!(s.world(&world(arrived)).1.len(), 1);
+        assert_eq!(draws(s.route_shown("truck-07")), Some(false));
+
+        // After a console restart, /world brings the status and the stream replays each truck's
+        // last route: one from an earlier drive stays hidden.
+        let mut restarted = state();
+        let driving = WorldTruck {
+            id: "truck-07".into(),
+            status: TruckStatus::EnRoute,
+            status_at: Some(at(5)),
+            position: None,
+            position_at: None,
+        };
+        restarted.world(&world(driving));
+        assert_eq!(draws(restarted.route_shown("truck-07")), None);
+        assert_eq!(
+            draws(restarted.truck_route("truck-07", road(), at(3))),
+            None
+        );
+    }
+
+    #[test]
+    fn a_route_is_pushed_only_when_what_shows_changes() {
+        let mut s = state();
+        s.truck_status("truck-07", TruckStatus::EnRoute, at(1));
+        assert_eq!(
+            draws(s.route_shown("truck-07")),
+            None,
+            "nothing to draw yet"
+        );
+        assert_eq!(draws(s.truck_route("truck-07", road(), at(1))), Some(true));
+        assert_eq!(
+            draws(s.truck_route("truck-07", road(), at(1))),
+            None,
+            "a duplicate"
+        );
+        s.truck_position("truck-07", road()[0], at(2));
+        assert_eq!(
+            draws(s.route_shown("truck-07")),
+            None,
+            "a fix changes nothing"
+        );
+        s.truck_status("truck-08", TruckStatus::Returning, at(2));
+        assert_eq!(
+            draws(s.truck_route("truck-08", road(), at(1))),
+            None,
+            "older than its drive"
+        );
+        assert_eq!(
+            draws(s.truck_route("truck-99", road(), at(1))),
+            None,
+            "no such truck"
+        );
+        let routes = snapshot(&s).routes;
+        assert_eq!(routes.keys().collect::<Vec<_>>(), ["truck-07"]);
+        assert_eq!(routes["truck-07"], road());
     }
 
     #[test]

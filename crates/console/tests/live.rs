@@ -415,6 +415,21 @@ fn status(truck: &str, status: TruckStatus, at: DateTime<Utc>) -> EventEnvelope 
     envelope(Event::TruckStatusReported { truck, status }, at)
 }
 
+fn route(truck: &str, at: DateTime<Utc>) -> EventEnvelope {
+    let path = vec![
+        Location {
+            lat: 49.4875,
+            lon: 8.466,
+        },
+        Location {
+            lat: 49.5512,
+            lon: 8.6589,
+        },
+    ];
+    let truck = TruckId(truck.into());
+    envelope(Event::TruckRouteReported { truck, path }, at)
+}
+
 /// Every message on `filters`, as (topic, payload).
 async fn listen(url: &str, filters: &[&'static str]) -> mpsc::UnboundedReceiver<(String, String)> {
     let options = MqttOptions::parse_url(format!("{url}?client_id=test-listener")).unwrap();
@@ -502,6 +517,72 @@ async fn a_page_gets_the_world_then_live_events_and_the_newest_report_wins() {
     let merged = next(&mut updates, "truck", |t| t["id"] == "truck-08").await;
     assert_eq!(merged["status"], "returning");
     assert_eq!(s.truck("truck-07").status, TruckStatus::OutOfService);
+}
+
+#[tokio::test]
+async fn a_route_reaches_the_page_while_its_truck_drives_it() {
+    let s = setup(Duration::from_secs(1)).await;
+    let (_, mut updates) = s.console.subscribe();
+    s.bus
+        .publish(&status("truck-07", TruckStatus::EnRoute, at(1)))
+        .await
+        .unwrap();
+    s.bus.publish(&route("truck-07", at(2))).await.unwrap();
+    let drawn = next(&mut updates, "route", |r| r["truck"] == "truck-07").await;
+    assert_eq!(
+        drawn["path"],
+        json!([{ "lat": 49.4875, "lon": 8.466 }, { "lat": 49.5512, "lon": 8.6589 }])
+    );
+    s.bus
+        .publish(&status("truck-07", TruckStatus::OnSite, at(3)))
+        .await
+        .unwrap();
+    let gone = next(&mut updates, "route", |r| r["truck"] == "truck-07").await;
+    assert!(gone["path"].is_null(), "{gone}");
+}
+
+#[tokio::test]
+async fn a_restarted_console_gets_each_driving_trucks_route_back() {
+    let s = setup(Duration::from_secs(1)).await;
+    s.fake().world["trucks"] = json!([{
+        "id": "truck-07", "status": "en_route", "status_at": at(1),
+        "position": null, "position_at": null,
+    }]);
+    // truck-07 sets off: its status, its route, then a fix, now the last message on
+    // events.trucks.truck-07. Each gets a time of its own, because the ids come from the time
+    // and JetStream drops a repeated id.
+    let fix = Event::TruckPositionReported {
+        truck: TruckId("truck-07".into()),
+        location: Location {
+            lat: 49.48,
+            lon: 8.47,
+        },
+        speed_kmh: 40.0,
+    };
+    for event in [
+        status("truck-07", TruckStatus::EnRoute, at(1)),
+        route("truck-07", at(2)),
+        envelope(fix, at(3)),
+    ] {
+        s.bus.publish(&event).await.unwrap();
+    }
+    until("the route on the first console", || {
+        s.console.snapshot().routes.contains_key("truck-07")
+    })
+    .await;
+
+    // A console started afresh, with an MQTT client id of its own: with the same id, the broker
+    // would keep throwing one of the two off.
+    let options =
+        MqttOptions::parse_url(format!("{}?client_id=test-console-restarted", s.mqtt_url)).unwrap();
+    let (mqtt, eventloop) = AsyncClient::new(options, 10);
+    let restarted = Console::new(s.console.settings.clone(), mqtt).unwrap();
+    restarted.start(s.nats.clone(), eventloop);
+    until("the route on the restarted console", || {
+        restarted.snapshot().routes.contains_key("truck-07")
+    })
+    .await;
+    assert_eq!(restarted.snapshot().routes["truck-07"].len(), 2);
 }
 
 #[tokio::test]
