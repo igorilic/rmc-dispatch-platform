@@ -4,9 +4,10 @@
 //! - [`run`] reads `events.orders.*`. It upserts and cancels orders, keeping the newest revision of
 //!   each by `occurred_at`. A new order, a cancellation, or a change to anything planning uses
 //!   (volume, start, pour rate, gap, ship-to, mix) is a trigger.
-//! - [`run_fleet`] reads `events.trucks.*` and `events.plants.*`. It keeps each truck's newest
+//! - [`run_fleet`] reads `events.trucks.>` and `events.plants.>`. It keeps each truck's newest
 //!   status and position, and turns batch tickets for planned loads into deliveries, which
-//!   freeze those loads. A truck going out of service is a trigger.
+//!   freeze those loads. A truck going out of service is a trigger. A truck's route, on
+//!   `events.trucks.{id}.route`, is for the map: it is acked and changes nothing.
 //!
 //! Each event is applied inside an `apply event` span that continues the trace ingest started, from
 //! the message's `traceparent`. A trigger carries that span to the worker, so the re-dispatch it
@@ -156,6 +157,7 @@ async fn apply(store: &Store, payload: &[u8]) -> Result<Option<Trigger>, IntakeE
         Event::TruckStatusReported { truck, .. }
         | Event::TruckPositionReported { truck, .. }
         | Event::DrumRotationReported { truck, .. }
+        | Event::TruckRouteReported { truck, .. }
         | Event::BatchTicketIssued { truck, .. } => span.record("truck", truck.0.as_str()),
     };
     let at = envelope.occurred_at;
@@ -214,8 +216,11 @@ async fn apply(store: &Store, payload: &[u8]) -> Result<Option<Trigger>, IntakeE
             }
             None
         }
-        // Tickets for trips outside the plan, and drum rotation, don't concern planning.
-        Event::BatchTicketIssued { load: None, .. } | Event::DrumRotationReported { .. } => None,
+        // Tickets for trips outside the plan, drum rotation and routes, which are for the map,
+        // don't concern planning.
+        Event::BatchTicketIssued { load: None, .. }
+        | Event::DrumRotationReported { .. }
+        | Event::TruckRouteReported { .. } => None,
     };
     span.record("outcome", "applied");
     Ok(trigger)

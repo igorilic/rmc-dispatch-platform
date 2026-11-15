@@ -81,6 +81,12 @@ pub enum Event {
         rotation: DrumRotation,
         rpm: f64,
     },
+    /// The road a truck is about to drive, from where it stands to where the drive ends, as its
+    /// telematics report it once per drive. It is for the map: planning never reads it.
+    TruckRouteReported {
+        truck: TruckId,
+        path: Vec<Location>,
+    },
     /// From the plant's batch computer: `batching`, `loading` or `loaded`.
     BatchTicketIssued {
         plant: PlantId,
@@ -96,7 +102,9 @@ pub enum Event {
 }
 
 impl EventEnvelope {
-    /// One subject per customer, truck or plant, so each one's events stay in order.
+    /// One subject per customer, truck or plant, so each one's events stay in order. A truck's
+    /// route has a subject of its own, `events.trucks.{id}.route`: a consumer that starts at each
+    /// subject's last message then still gets it after the GPS fixes that follow it.
     pub fn subject(&self) -> String {
         match &self.event {
             Event::OrderUpserted { order, .. } => format!("events.orders.{}", order.customer.0),
@@ -104,6 +112,7 @@ impl EventEnvelope {
             Event::TruckPositionReported { truck, .. }
             | Event::TruckStatusReported { truck, .. }
             | Event::DrumRotationReported { truck, .. } => format!("events.trucks.{}", truck.0),
+            Event::TruckRouteReported { truck, .. } => format!("events.trucks.{}.route", truck.0),
             Event::BatchTicketIssued { plant, .. } => format!("events.plants.{}", plant.0),
         }
     }
@@ -187,6 +196,11 @@ mod tests {
             "rpm": 8.0
         })));
         assert_wire_format::<EventEnvelope>(envelope(json!({
+            "type": "truck_route_reported",
+            "truck": "truck-07",
+            "path": [{ "lat": 49.4875, "lon": 8.466 }, { "lat": 49.5512, "lon": 8.6589 }]
+        })));
+        assert_wire_format::<EventEnvelope>(envelope(json!({
             "type": "batch_ticket_issued",
             "plant": "plant-walldorf",
             "ticket_no": "WAL-000002",
@@ -238,6 +252,13 @@ mod tests {
             "location": { "lat": 49.43, "lon": 8.53 }, "speed_kmh": 0.0
         }));
         assert_eq!(subject(position), "events.trucks.truck-07");
+        // A route has a subject of its own, so the GPS fixes after it don't bury it for a
+        // consumer that starts at each subject's last message.
+        let route = envelope(json!({
+            "type": "truck_route_reported", "truck": "truck-07",
+            "path": [{ "lat": 49.4875, "lon": 8.466 }, { "lat": 49.5512, "lon": 8.6589 }]
+        }));
+        assert_eq!(subject(route), "events.trucks.truck-07.route");
         let ticket = envelope(json!({
             "type": "batch_ticket_issued", "plant": "plant-walldorf", "ticket_no": "WAL-000002",
             "truck": "truck-25", "event": "batching", "mix": "C30/37-XC4", "volume_m3": 8.0
