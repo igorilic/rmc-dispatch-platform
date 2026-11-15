@@ -12,11 +12,14 @@
 //! A drive home from part-way along it reports the km it covers along the line, within 0.15 % of
 //! the haversine figure.
 //! [`Roads`] looks a road up by plant and site; a truck drives the way back on the same road.
+//! [`Roads::parse`] reads them from the file `make routes` writes, `src/bin/routes.rs`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use anyhow::{Context, ensure};
 use domain::{Location, PlantId, SiteId};
+use serde::Deserialize;
 
 use crate::fleet::ROAD_FACTOR;
 
@@ -84,7 +87,43 @@ impl Road {
 #[derive(Debug, Default)]
 pub struct Roads(HashMap<(PlantId, SiteId), Arc<Road>>);
 
+/// A roads file: the ODbL notice, which only the tests read, then the roads.
+#[derive(Deserialize)]
+struct RoadsFile {
+    roads: Vec<FileRoad>,
+}
+
+#[derive(Deserialize)]
+struct FileRoad {
+    plant: PlantId,
+    site: SiteId,
+    /// `[lat, lon]` pairs.
+    path: Vec<[f64; 2]>,
+}
+
 impl Roads {
+    /// The roads in `text`, a roads file like `deploy/seed/rhine-neckar.routes.json`. A pair given
+    /// twice is an error, so an edit can't hide that another road is gone.
+    pub fn parse(text: &str) -> anyhow::Result<Roads> {
+        let file: RoadsFile = serde_json::from_str(text).context("read the roads file")?;
+        let mut roads = HashMap::new();
+        for r in file.roads {
+            let pair = format!("{} to {}", r.plant.0, r.site.0);
+            let points = r
+                .path
+                .into_iter()
+                .map(|[lat, lon]| Location { lat, lon })
+                .collect();
+            let road = Road::new(points)
+                .with_context(|| format!("the road from {pair} has fewer than 2 points"))?;
+            ensure!(
+                roads.insert((r.plant, r.site), Arc::new(road)).is_none(),
+                "two roads from {pair}"
+            );
+        }
+        Ok(Roads(roads))
+    }
+
     /// The road from `plant` at `from` to `site` at `to`, or the straight line without one.
     pub fn between(
         &self,
@@ -140,6 +179,83 @@ impl FromIterator<(PlantId, SiteId, Road)> for Roads {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fleet::{MAX_ROUTE_MESSAGE, route_message};
+    use domain::Seed;
+
+    /// Only the simulators binary compiles the roads in; the library's tests read them here.
+    const FILE: &str = include_str!("../../../deploy/seed/rhine-neckar.routes.json");
+
+    #[test]
+    fn every_plant_has_a_road_to_every_site_ending_exactly_there() {
+        let seed = Seed::rhine_neckar().unwrap();
+        let roads = Roads::parse(FILE).unwrap();
+        assert_eq!(roads.0.len(), seed.plants.len() * seed.sites.len());
+        for plant in &seed.plants {
+            for site in &seed.sites {
+                let road = roads
+                    .0
+                    .get(&(plant.id.clone(), site.id.clone()))
+                    .unwrap_or_else(|| panic!("no road from {} to {}", plant.id.0, site.id.0));
+                assert_eq!(road.points[0], plant.location, "it starts at the plant");
+                assert_eq!(
+                    road.points[road.points.len() - 1],
+                    seed.geocoder.locate(site).unwrap(),
+                    "it ends where the simulators place {}",
+                    site.id.0
+                );
+            }
+        }
+        // The data is ODbL: a regeneration must never drop its notice.
+        let notice: serde_json::Value = serde_json::from_str(FILE).unwrap();
+        assert!(
+            notice["attribution"]
+                .as_str()
+                .unwrap()
+                .contains("OpenStreetMap")
+        );
+        assert_eq!(notice["license"], "ODbL-1.0");
+        assert_eq!(
+            notice["license_url"],
+            "https://opendatacommons.org/licenses/odbl/1-0/"
+        );
+        assert!(!notice["source"].as_str().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_roads_file_with_a_pair_twice_is_rejected() {
+        let road = r#"{"plant":"plant-a","site":"site-1","path":[[49.4,8.6],[49.5,8.7]]}"#;
+        assert!(Roads::parse(&format!(r#"{{"roads":[{road}]}}"#)).is_ok());
+        assert!(
+            Roads::parse(&format!(r#"{{"roads":[{road},{road}]}}"#)).is_err(),
+            "a pair twice, as from a hand edit or a merge, would hide that one road is gone"
+        );
+    }
+
+    #[test]
+    fn every_road_fits_one_route_message() {
+        let seed = Seed::rhine_neckar().unwrap();
+        let vehicle = seed
+            .trucks
+            .iter()
+            .map(|t| t.id.0.as_str())
+            .max_by_key(|id| id.len())
+            .unwrap();
+        let roads = Roads::parse(FILE).unwrap();
+        assert_eq!(
+            roads.0.len(),
+            seed.plants.len() * seed.sites.len(),
+            "measures every road"
+        );
+        for ((plant, site), road) in &roads.0 {
+            let bytes = route_message(vehicle, &road.points).unwrap().len();
+            assert!(
+                bytes <= MAX_ROUTE_MESSAGE,
+                "the road from {} to {} makes a {bytes}-byte route message",
+                plant.0,
+                site.0
+            );
+        }
+    }
 
     const A: Location = Location {
         lat: 49.40,

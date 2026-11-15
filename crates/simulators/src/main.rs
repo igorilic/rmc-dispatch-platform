@@ -1,4 +1,5 @@
-//! Fake trucks, plants and customers, so Pourline runs locally with no real data (SPEC §2, M2).
+//! Fake trucks, plants and customers, so Pourline runs locally with no real customer or fleet
+//! data; the trucks' roads come from OpenStreetMap (SPEC §2, M2, M11).
 //!
 //! One process runs everything as tokio tasks: 25 trucks, 3 plants and 3 customers. Truck and
 //! plant messages go to Mosquitto. Customer orders go to ingest's webhooks and to the SFTP server.
@@ -21,6 +22,7 @@ use simulators::fleet::{FleetConfig, TruckSim};
 use simulators::link::{self, Chaos};
 use simulators::orders::{OrderBook, OrderNumbers};
 use simulators::plant::PlantSim;
+use simulators::roads::Roads;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tracing::info;
@@ -109,6 +111,11 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let config = Config::from_lookup(|key| std::env::var(key).ok())?;
     let world = Arc::new(Seed::rhine_neckar()?);
+    // The trucks' roads, compiled in like the seed. They are ODbL, so only this binary carries
+    // them, not the library that the console and the demo link.
+    let roads = Arc::new(Roads::parse(include_str!(
+        "../../../deploy/seed/rhine-neckar.routes.json"
+    ))?);
     info!(
         offset_hours = domain::clock::init_from_env()?.num_hours(),
         "world clock (CLOCK_OFFSET_HOURS)"
@@ -160,7 +167,8 @@ async fn main() -> anyhow::Result<()> {
             clock,
             config.fleet,
             config.seed.wrapping_add(i as u64),
-        );
+        )
+        .with_roads(Arc::clone(&roads));
         breakdowns.insert(truck.id.0.clone(), sim.breakdown());
         tasks.spawn(sim.run());
     }

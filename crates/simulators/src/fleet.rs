@@ -139,6 +139,10 @@ struct Status {
     status: TruckStatus,
 }
 
+/// The largest a route message may be, well under rumqttc's 10,240-byte packet limit: a larger
+/// packet doesn't fail alone, it drops the client's queued messages or stalls ingest.
+pub const MAX_ROUTE_MESSAGE: usize = 8 * 1024;
+
 /// The road a drive is about to take, as `[lat, lon]` pairs at 5 decimals, about a metre.
 #[derive(Serialize)]
 struct Route {

@@ -7,8 +7,9 @@
 //! the snapped ones: the site's postal-code centroid when it has no coordinates, as the simulators
 //! place it. Then Douglas-Peucker drops points as long as none of them ends up more than
 //! [`TOLERANCE_M`] off the line, and the points in between are rounded to 5 decimals, about a
-//! metre; the seed's own ends keep theirs. A road whose route message would pass [`MAX_MESSAGE`]
-//! bytes fails the run, because rumqttc drops a packet over 10 KiB; a larger tolerance is the knob.
+//! metre; the seed's own ends keep theirs. A road whose route message would pass
+//! [`MAX_ROUTE_MESSAGE`] bytes fails the run, because rumqttc drops a packet over 10 KiB; a larger
+//! tolerance is the knob.
 //! The file holds the ODbL notice, then one road per line, sorted by plant and site, so a
 //! regeneration diffs road by road. A summary for review goes to stderr.
 //!
@@ -17,13 +18,11 @@
 use anyhow::{Context, bail, ensure};
 use domain::{Location, Seed, Site};
 use serde::{Deserialize, Serialize};
-use simulators::fleet::route_message;
+use simulators::fleet::{MAX_ROUTE_MESSAGE, route_message};
 use simulators::roads::{Road, metres_off};
 
 /// How far Douglas-Peucker may move the line: invisible below zoom 18.
 const TOLERANCE_M: f64 = 5.0;
-/// The largest route message a road may make, under rumqttc's 10,240-byte packet limit.
-const MAX_MESSAGE: usize = 8 * 1024;
 const MARGIN_KM: f64 = 10.0;
 const KM_PER_DEGREE: f64 = 111.195;
 const ATTRIBUTION: &str = "© OpenStreetMap contributors";
@@ -175,8 +174,8 @@ async fn generate(seed: &Seed, osrm: &str, source: &str) -> anyhow::Result<()> {
             }
             let message = route_message(vehicle, &path)?.len();
             ensure!(
-                message <= MAX_MESSAGE,
-                "the road from {pair} makes a {message}-byte route message, over {MAX_MESSAGE}: raise TOLERANCE_M"
+                message <= MAX_ROUTE_MESSAGE,
+                "the road from {pair} makes a {message}-byte route message, over {MAX_ROUTE_MESSAGE}: raise TOLERANCE_M"
             );
             let km = Road::new(path.clone()).map_or(0.0, |road| road.length());
             checked.push(Checked {
@@ -237,7 +236,7 @@ fn summarise(checked: &[Checked], bytes: usize) {
             .map(|c| (c.pair.as_str(), key(c)))
     };
     if let Some((pair, message)) = by(|c| c.message as f64) {
-        eprintln!("largest route message: {message} of {MAX_MESSAGE} bytes ({pair})");
+        eprintln!("largest route message: {message} of {MAX_ROUTE_MESSAGE} bytes ({pair})");
     }
     if let Some((pair, snap)) = by(|c| c.snap_m) {
         eprintln!("largest snap to a road: {snap:.0} m ({pair})");

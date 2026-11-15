@@ -852,3 +852,5 @@ which share `target/`. The agent moves back into the root workspace once sqlx al
 ## License
 
 [MIT](LICENSE)
+
+[`deploy/seed/rhine-neckar.routes.json`](deploy/seed/rhine-neckar.routes.json) contains information from [OpenStreetMap](https://www.openstreetmap.org/copyright), which is made available here under the [Open Database License (ODbL)](https://opendatacommons.org/licenses/odbl/1-0/). © OpenStreetMap contributors.

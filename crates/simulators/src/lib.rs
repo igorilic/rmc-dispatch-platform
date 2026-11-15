@@ -1,4 +1,5 @@
-//! Fake trucks, plants and customers, so Pourline runs locally with no real data (SPEC §2, M2).
+//! Fake trucks, plants and customers, so Pourline runs locally with no real customer or fleet
+//! data; the trucks' roads come from OpenStreetMap (SPEC §2, M2, M11).
 //!
 //! The `simulators` binary runs all of them; the `demo` binary reuses the customers' formats to
 //! play `make demo`'s scenario, and `routes` builds the trucks' roads for `make routes`.
