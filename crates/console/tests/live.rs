@@ -542,6 +542,70 @@ async fn a_route_reaches_the_page_while_its_truck_drives_it() {
 }
 
 #[tokio::test]
+async fn a_status_reaches_the_page_before_the_route_it_shows() {
+    let s = setup(Duration::from_secs(1)).await;
+    let (_, mut updates) = s.console.subscribe();
+    // The route lands first, as when the modem holds the status back behind it.
+    s.bus.publish(&route("truck-07", at(2))).await.unwrap();
+    s.bus
+        .publish(&status("truck-07", TruckStatus::EnRoute, at(1)))
+        .await
+        .unwrap();
+    s.bus
+        .publish(&status("truck-07", TruckStatus::OnSite, at(3)))
+        .await
+        .unwrap();
+    // One deadline for all four: heartbeats come every 15 s, so a wait per push would never end.
+    let seen = timeout(Duration::from_secs(20), async {
+        let mut seen = Vec::new();
+        while seen.len() < 4 {
+            let update = updates.recv().await.unwrap();
+            let data: Value = serde_json::from_str(&update.data).unwrap();
+            if data["id"] == "truck-07" || data["truck"] == "truck-07" {
+                seen.push((update.event, data));
+            }
+        }
+        seen
+    })
+    .await
+    .expect("four pushes for truck-07");
+    let events: Vec<&str> = seen.iter().map(|(event, _)| *event).collect();
+    assert_eq!(events, ["truck", "route", "truck", "route"]);
+    assert_eq!(seen[0].1["status"], "en_route");
+    assert!(seen[1].1["path"].is_array());
+    assert_eq!(seen[2].1["status"], "on_site");
+    assert!(seen[3].1["path"].is_null());
+}
+
+#[tokio::test]
+async fn a_route_shows_when_world_brings_its_status() {
+    let s = setup(Duration::from_secs(1)).await;
+    let (_, mut updates) = s.console.subscribe();
+    // The route comes before any status, so it waits. The fix after it shows when the console
+    // has applied both: it applies the stream in order.
+    let fix = Event::TruckPositionReported {
+        truck: TruckId("truck-07".into()),
+        location: Location {
+            lat: 49.48,
+            lon: 8.47,
+        },
+        speed_kmh: 40.0,
+    };
+    s.bus.publish(&route("truck-07", at(2))).await.unwrap();
+    s.bus.publish(&envelope(fix, at(3))).await.unwrap();
+    until("the fix", || s.truck("truck-07").position_at == Some(at(3))).await;
+    assert!(s.console.snapshot().routes.is_empty());
+
+    s.fake().world["trucks"] = json!([{
+        "id": "truck-07", "status": "en_route", "status_at": at(1),
+        "position": null, "position_at": null,
+    }]);
+    s.console.resync();
+    let drawn = next(&mut updates, "route", |r| r["truck"] == "truck-07").await;
+    assert_eq!(drawn["path"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn a_restarted_console_gets_each_driving_trucks_route_back() {
     let s = setup(Duration::from_secs(1)).await;
     s.fake().world["trucks"] = json!([{

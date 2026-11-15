@@ -6,7 +6,8 @@
 //! - a truck field keeps its newest value by report time, so a `/world` read while dispatch is
 //!   still behind never undoes a newer event, and an event that arrives late changes nothing;
 //! - a truck's route shows only while the truck is en route or returning and the route is no
-//!   older than that status, so a stale or replayed route is never drawn, only none;
+//!   older than that status, so a route from an earlier drive, stale or replayed, is never drawn:
+//!   a line can be missing, never wrong;
 //! - a plant keeps its newest ticket;
 //! - plan versions only move forward, so a version announced twice is pushed once.
 
@@ -214,8 +215,9 @@ pub struct State {
     pub sites: Vec<SiteView>,
     pub trucks: BTreeMap<String, TruckView>,
     routes: BTreeMap<String, Route>,
-    /// When the route each truck shows was reported: what the pages were last told.
-    shown: BTreeMap<String, DateTime<Utc>>,
+    /// What the pages were last told each truck shows: when its route was reported, and the
+    /// status a page draws it as.
+    shown: BTreeMap<String, (DateTime<Utc>, TruckStatus)>,
     pub plan: Option<PlanView>,
     pub edge: Option<EdgeView>,
     pub uplink: UplinkView,
@@ -361,12 +363,15 @@ impl State {
     /// What a page should draw for the truck, when it differs from what the pages were told.
     /// Call it after every change to the truck's status or route.
     pub fn route_shown(&mut self, id: &str) -> Option<RouteView> {
-        let shows = self.shows(id).map(|r| r.at);
+        // A page draws a line in its truck's status, so a new status under the same route sends
+        // the line again, after the truck.
+        let status = self.trucks.get(id).map(|t| t.status);
+        let shows = self.shows(id).map(|r| r.at).zip(status);
         if shows == self.shown.get(id).copied() {
             return None;
         }
         match shows {
-            Some(at) => self.shown.insert(id.to_owned(), at),
+            Some(drawn) => self.shown.insert(id.to_owned(), drawn),
             None => self.shown.remove(id),
         };
         Some(RouteView {
@@ -378,7 +383,8 @@ impl State {
     /// The route a truck shows: its newest, while the truck drives the drive it began. A route
     /// goes out right after the status that starts its drive, so it is never older than that
     /// status; one that is older belongs to an earlier drive, and any later status means the
-    /// drive is over. So a stale, replayed or lost report leaves no line, never a wrong one.
+    /// drive is over. So a report from an earlier drive, or a lost one, leaves no line, never a
+    /// wrong one.
     fn shows(&self, id: &str) -> Option<&Route> {
         let truck = self.trucks.get(id)?;
         let route = self.routes.get(id)?;
@@ -625,8 +631,9 @@ mod tests {
     #[test]
     fn a_route_shows_only_while_its_truck_drives_it() {
         let mut s = state();
-        // A drive's route goes out right after its status: one that lands first waits for the
-        // status, and a status at the same millisecond shows it.
+        // A drive's route goes out right after its status: one that lands while the truck still
+        // loads waits for the status, and a status at the same millisecond shows it.
+        s.truck_status("truck-07", TruckStatus::Loading, at(0));
         assert_eq!(draws(s.truck_route("truck-07", road(), at(1))), None);
         s.truck_status("truck-07", TruckStatus::EnRoute, at(1));
         assert_eq!(draws(s.route_shown("truck-07")), Some(true));
@@ -695,6 +702,11 @@ mod tests {
             None,
             "a duplicate"
         );
+        assert_eq!(
+            draws(s.truck_route("truck-07", road(), at(0))),
+            None,
+            "a late, older route changes nothing"
+        );
         s.truck_position("truck-07", road()[0], at(2));
         assert_eq!(
             draws(s.route_shown("truck-07")),
@@ -712,8 +724,26 @@ mod tests {
             None,
             "no such truck"
         );
+        assert!(!s.routes.contains_key("truck-99"));
+        s.truck_status("truck-09", TruckStatus::Loading, at(1));
+        assert_eq!(
+            draws(s.truck_route("truck-09", road(), at(2))),
+            None,
+            "loading: not driving yet"
+        );
+        // A page styles a line by its truck's status, so a new status under the line that shows
+        // sends it again: here the next drive's route showed under an en_route the console had
+        // from before, and returning lands after it.
+        s.truck_status("truck-10", TruckStatus::EnRoute, at(1));
+        assert_eq!(draws(s.truck_route("truck-10", road(), at(3))), Some(true));
+        s.truck_status("truck-10", TruckStatus::Returning, at(3));
+        assert_eq!(
+            draws(s.route_shown("truck-10")),
+            Some(true),
+            "drawn again, as returning"
+        );
         let routes = snapshot(&s).routes;
-        assert_eq!(routes.keys().collect::<Vec<_>>(), ["truck-07"]);
+        assert_eq!(routes.keys().collect::<Vec<_>>(), ["truck-07", "truck-10"]);
         assert_eq!(routes["truck-07"], road());
     }
 
