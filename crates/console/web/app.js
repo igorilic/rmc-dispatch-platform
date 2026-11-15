@@ -708,6 +708,8 @@ function frame(now) {
 // already credits; a basemap that isn't OSM-based would need `attribution: ATTRIBUTION` on them.
 
 const project = (latlng) => L.Projection.SphericalMercator.project(latlng);
+/** The length of a line of latlngs, in km. */
+const km = (line) => line.reduce((sum, point, i) => (i ? sum + map.distance(line[i - 1], point) / 1000 : 0), 0);
 
 /** Draws a truck's road, or takes it away when `path` is null. */
 function setRoute(t, path) {
@@ -727,13 +729,14 @@ function setRoute(t, path) {
     latlngs,
     points: latlngs.map(project),
     from: 0, // where the last cut fell: the next search starts there, so a road that passes near itself can't pull the cut back
-    left: 0, // km to go
+    left: km(latlngs), // km to go: the whole road until the first cut
     driven: line("driven", 2, []),
     ahead: line("ahead", 4, latlngs),
     place: markedSpots.get(end),
     home: !!home && spot(home) === end,
   };
-  paintRoute(t);
+  // New lines go on top, so the selected truck's road comes up again, whichever truck's this is.
+  if (pop?.item?.route) paintRoute(pop.item);
   if (!glides.has(t)) split(t);
 }
 
@@ -771,7 +774,7 @@ function split(t) {
   const ahead = [here, ...r.latlngs.slice(best + 1)];
   r.driven.setLatLngs([...r.latlngs.slice(0, best + 1), here]);
   r.ahead.setLatLngs(ahead);
-  r.left = ahead.reduce((km, point, i) => (i ? km + map.distance(ahead[i - 1], point) / 1000 : 0), 0);
+  r.left = km(ahead);
   if (pop?.item === t) pop.refresh();
 }
 
