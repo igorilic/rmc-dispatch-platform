@@ -328,6 +328,15 @@ a:hover { color: var(--accent-hover); }
 .s-discharging { --status: var(--c-discharging); }
 .s-returning { --status: var(--c-returning); }
 .s-out_of_service { --status: var(--c-out_of_service); }
+
+/* A driving truck's road (SPEC §9): thin where driven, thick ahead, in its status colour and
+   dashed on the way home. Every road is dimmed but the selected truck's, whose popup is open; at
+   full opacity it keeps 3:1 against both basemaps. Leaflet's weight matches these widths. */
+.route { fill: none; stroke: var(--status, var(--text-muted)); stroke-linecap: round; stroke-linejoin: round; opacity: 0.35; }
+.route.driven { stroke-width: 2px; }
+.route.ahead { stroke-width: 4px; }
+.route.s-returning { stroke-linecap: butt; stroke-dasharray: 8 6; }
+.route.selected { opacity: 1; }
 .west .truck-icon { transform: scaleX(-1); }
 .stale .truck-icon { opacity: 0.4; }
 .t-halo { fill: var(--map-land); stroke: var(--map-land); stroke-width: 3; stroke-linejoin: round; }
@@ -418,6 +427,10 @@ a:hover { color: var(--accent-hover); }
 .legend .truck-icon { width: 22px; height: 15px; }
 .legend .group-icon { width: 22px; height: 22px; }
 .legend-list .legend-wide { grid-column: 1 / -1; }
+.legend-roads { gap: 16px; }
+.legend-roads span { display: flex; align-items: center; gap: 8px; }
+.legend .road-sample { width: 22px; height: 8px; overflow: visible; }
+.legend .route { opacity: 1; }
 .legend .plant-mark { width: 12px; height: 12px; border-radius: 3px; box-shadow: none; margin: 0 5px; }
 .legend .plant-mark.offline { box-shadow: inset 0 0 0 2px var(--text-strong); }
 .legend .site-mark { margin: 0 6px; }

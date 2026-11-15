@@ -223,6 +223,15 @@ function groupIcon(rows, total) {
   );
 }
 
+/** A legend sample of a truck's road: thin where it was driven, thick ahead. */
+const roadSample = (cls) =>
+  svg(
+    "svg",
+    { class: "road-sample", viewBox: "0 0 22 8", width: 22, height: 8, "aria-hidden": "true", focusable: "false" },
+    svg("path", { class: `route driven ${cls}`, d: "M1 4H11" }),
+    svg("path", { class: `route ahead ${cls}`, d: "M11 4H21" }),
+  );
+
 // Start
 
 function start() {
@@ -247,7 +256,13 @@ function start() {
   setUpTabs();
   $("legend-trucks").replaceChildren(
     ...Object.entries(STATUSES).map(([status, word]) => h("li", {}, h("span", { class: truckClass(status) }, truckIcon()), word)),
-    // A row of its own: in the second column it would widen the legend and cost the first fit a zoom.
+    // Rows of their own: in the second column they would widen the legend and cost the first fit a zoom.
+    h(
+      "li",
+      { class: "legend-wide legend-roads" },
+      h("span", {}, roadSample(""), "Driven, ahead"),
+      h("span", {}, roadSample("s-returning"), "Way home"),
+    ),
     h("li", { class: "legend-wide" }, groupIcon([["available", 2], ["loading", 1]], 3), "Group of trucks"),
   );
   // Without Leaflet the panel and its actions still work.
@@ -327,14 +342,18 @@ function startMap() {
   tiles.on("load", () => {
     if (!failed) basemapNotice(false);
   });
+  // The trucks' roads are pictures of what the popups and labels say in words.
+  map.getPane("overlayPane").setAttribute("aria-hidden", "true");
   // Only the opening pans the map: a gliding truck would drag it along on every frame.
   map.on("popupopen", (e) => {
     e.popup.options.autoPan = false;
     e.popup.getElement()?.querySelector(".pop-title")?.focus({ preventScroll: true });
+    trucks.forEach(paintRoute); // a truck's popup selects its road
   });
   map.on("popupclose", (e) => {
     e.popup.options.autoPan = true;
     pop = null;
+    trucks.forEach(paintRoute);
     queueMicrotask(regroup); // its truck may join a group, once Escape has given it the focus back
   });
   map.on("zoomend", regroup);
@@ -628,7 +647,8 @@ function paintTruck(t) {
     (out || (named.has(v.id) && !t.crowded) ? " labelled" : "") +
     (faded ? " stale" : "");
   if (t.el.className !== cls) t.el.className = cls;
-  label(t.marker, `${v.id}, ${words(v.status)}${faded ? ", no recent report" : ""}`);
+  const heading = t.route?.place ? `, heading to ${t.route.place}` : "";
+  label(t.marker, `${v.id}, ${words(v.status)}${heading}${faded ? ", no recent report" : ""}`);
 }
 
 function setTruck(t, view) {
@@ -657,6 +677,7 @@ function glide(t, to) {
   if (reduceMotion.matches || document.hidden) {
     glides.delete(t);
     t.marker.setLatLng(target);
+    split(t);
     return;
   }
   glides.set(t, { from: t.marker.getLatLng(), to: target, start: performance.now() });
@@ -671,10 +692,87 @@ function frame(now) {
     const f = Math.min(1, Math.max(0, (now - g.start) / GLIDE));
     const eased = f * (2 - f);
     t.marker.setLatLng([g.from.lat + (g.to.lat - g.from.lat) * eased, g.from.lng + (g.to.lng - g.from.lng) * eased]);
-    if (f === 1) glides.delete(t);
+    if (f === 1) {
+      glides.delete(t);
+      split(t); // the road's cut follows the icon, never runs ahead of it
+    }
   }
   gliding = glides.size > 0;
   if (gliding) requestAnimationFrame(frame);
+}
+
+// Roads. A driving truck shows the road of its drive, as its telematics reported it: thin where
+// it has driven, thick ahead, in its status colour and dashed on the way home. The console decides
+// which roads show and sends only those; the page draws what it gets. Every road is dimmed but the
+// selected truck's. ponytail: the roads come from OpenStreetMap, which the basemap's attribution
+// already credits; a basemap that isn't OSM-based would need `attribution: ATTRIBUTION` on them.
+
+const project = (latlng) => L.Projection.SphericalMercator.project(latlng);
+
+/** Draws a truck's road, or takes it away when `path` is null. */
+function setRoute(t, path) {
+  if (t.route) {
+    t.route.driven.remove();
+    t.route.ahead.remove();
+    t.route = null;
+  }
+  if (!map || !path?.length) return;
+  const latlngs = path.map((p) => L.latLng(p.lat, p.lon));
+  // Its status is set once: a status change that alters what shows always brings a new road.
+  const line = (part, weight, points) =>
+    L.polyline(points, { className: `route ${part} s-${t.view.status}`, interactive: false, weight }).addTo(map);
+  const end = spot(path[path.length - 1]);
+  const home = plants.get(t.view.home)?.view.location;
+  t.route = {
+    latlngs,
+    points: latlngs.map(project),
+    from: 0, // where the last cut fell: the next search starts there, so a road that passes near itself can't pull the cut back
+    left: 0, // km to go
+    driven: line("driven", 2, []),
+    ahead: line("ahead", 4, latlngs),
+    place: markedSpots.get(end),
+    home: !!home && spot(home) === end,
+  };
+  paintRoute(t);
+  if (!glides.has(t)) split(t);
+}
+
+/** The selected truck's road, the one whose popup is open, at full opacity and on top. */
+function paintRoute(t) {
+  if (!t.route) return;
+  const selected = pop?.item === t;
+  for (const line of [t.route.driven, t.route.ahead]) {
+    line.getElement()?.classList.toggle("selected", selected);
+    if (selected) line.bringToFront();
+  }
+}
+
+/** Cuts a truck's road where its icon is: the road driven up to there, the road ahead from there. */
+function split(t) {
+  const r = t.route;
+  const position = t.view.position;
+  if (!r || !position) return;
+  const p = project(L.latLng(position.lat, position.lon));
+  // ponytail: a straight scan from the last cut on, a few hundred segments at most per fix.
+  let best = r.from;
+  let cut = r.points[r.from];
+  let nearest = Infinity;
+  for (let i = r.from; i < r.points.length - 1; i += 1) {
+    const point = L.LineUtil.closestPointOnSegment(p, r.points[i], r.points[i + 1]);
+    const distance = p.distanceTo(point);
+    if (distance < nearest) {
+      best = i;
+      cut = point;
+      nearest = distance;
+    }
+  }
+  r.from = best;
+  const here = L.Projection.SphericalMercator.unproject(cut);
+  const ahead = [here, ...r.latlngs.slice(best + 1)];
+  r.driven.setLatLngs([...r.latlngs.slice(0, best + 1), here]);
+  r.ahead.setLatLngs(ahead);
+  r.left = ahead.reduce((km, point, i) => (i ? km + map.distance(ahead[i - 1], point) / 1000 : 0), 0);
+  if (pop?.item === t) pop.refresh();
 }
 
 // Trucks that share a point (parked at a plant, pouring at a site, not reported yet) park in a grid
@@ -846,6 +944,8 @@ function truckPopup(t) {
   const icon = h("span", {}, truckIcon());
   const chip = h("span", { class: "chip" });
   const report = h("dd");
+  const headingTerm = h("dt");
+  const heading = h("dd");
   const breakDown = button("Break down", "btn secondary", () =>
     act(`breakdown:${t.view.id}`, "Break down", "POST", `api/trucks/${enc(t.view.id)}/breakdown`, null, "sent"),
   );
@@ -861,6 +961,8 @@ function truckPopup(t) {
       h("dd", { text: `${num(t.view.capacity_m3)} m³` }),
       h("dt", { text: "Home plant" }),
       h("dd", { text: plantName(t.view.home) }),
+      headingTerm,
+      heading,
       h("dt", { text: "Last report" }),
       report,
     ),
@@ -875,6 +977,13 @@ function truckPopup(t) {
     const gps = at(v.position_at);
     const status = at(v.status_at);
     report.textContent = !gps && !status ? "none yet" : gps >= status ? `GPS, ${ago(v.position_at)}` : `status, ${ago(v.status_at)}`;
+    // Where its road ends, and how much of it is left: what the line shows, in words.
+    const r = t.route;
+    headingTerm.hidden = heading.hidden = !r;
+    if (r) {
+      headingTerm.textContent = r.home ? "Heading home to" : "Heading to";
+      heading.textContent = `${r.place ? `${r.place} · ` : ""}${num(r.left)} km to go`;
+    }
     note.hidden = !out;
     // Break down leaves while it may have the focus: the note takes it, inside the popup.
     if (out && breakRow.contains(document.activeElement)) note.focus({ preventScroll: true });
@@ -1161,6 +1270,9 @@ function applySnapshot(s) {
       p.view = view;
     });
     replace(trucks, s.trucks, addTruck, setTruck);
+    // Every truck's road from the snapshot, which holds only the roads that show: a truck that
+    // arrived or broke down while the stream was closed loses its road here.
+    trucks.forEach((t, id) => setRoute(t, s.routes?.[id] ?? null));
     replace(sites, s.sites, addSite, (site, view) => {
       site.view = view;
     });
@@ -1194,6 +1306,7 @@ function replace(items, views, add, update) {
   for (const [id, item] of items) {
     if (ids.has(id)) continue;
     item.marker.remove();
+    if (item.route) setRoute(item, null);
     glides.delete(item);
     items.delete(id);
   }
@@ -1221,6 +1334,15 @@ function truckEvent(view) {
   if (newer(view.status_at, next.status_at)) Object.assign(next, { status: view.status, status_at: view.status_at });
   if (newer(view.position_at, next.position_at)) Object.assign(next, { position: view.position, position_at: view.position_at });
   setTruck(t, next);
+}
+
+/** A truck's road: drawn, replaced, or taken away when its path is null. */
+function routeEvent(r) {
+  const t = trucks.get(r.truck);
+  if (!t) return;
+  setRoute(t, r.path);
+  paintTruck(t);
+  if (pop?.item === t) pop.refresh();
 }
 
 function plantEvent(view) {
@@ -1275,6 +1397,7 @@ function connect() {
       setLive(true);
     },
     truck: truckEvent,
+    route: routeEvent,
     plant: plantEvent,
     plan: planEvent,
     edge: (next) => {
