@@ -81,6 +81,26 @@ impl Road {
             lon: a.lon + (b.lon - a.lon) * t,
         }
     }
+
+    /// The stretch a drive from `from_km` to `to_km` covers, in its direction: the point at
+    /// `from_km`, the road's points strictly between, and the point at `to_km`. It never has more
+    /// points than the road, and a drive that goes nowhere is its one point twice.
+    pub fn path(&self, from_km: f64, to_km: f64) -> Vec<Location> {
+        let (low, high) = (from_km.min(to_km), from_km.max(to_km));
+        let mut path = vec![self.at(low)];
+        path.extend(
+            self.points
+                .iter()
+                .zip(&self.km)
+                .filter(|&(_, &km)| low < km && km < high)
+                .map(|(point, _)| *point),
+        );
+        path.push(self.at(high));
+        if from_km > to_km {
+            path.reverse();
+        }
+        path
+    }
 }
 
 /// Roads by plant and site. The default has none, so every drive is the straight line.
@@ -184,6 +204,33 @@ mod tests {
 
     /// Only the simulators binary compiles the roads in; the library's tests read them here.
     const FILE: &str = include_str!("../../../deploy/seed/rhine-neckar.routes.json");
+
+    #[test]
+    fn a_stretch_of_road_keeps_the_drive_s_direction() {
+        let road = Road::new(vec![A, B, C]).unwrap();
+        let (corner, end) = (A.distance_km(B), road.length());
+        assert_eq!(road.path(0.0, end), [A, B, C], "out: the whole road");
+        assert_eq!(
+            road.path(end, 0.0),
+            [C, B, A],
+            "back: the same road reversed"
+        );
+        let halfway = road.at(corner / 2.0);
+        assert_eq!(
+            road.path(corner / 2.0, 0.0),
+            [halfway, A],
+            "home from part-way out"
+        );
+        assert_eq!(
+            road.path(corner / 2.0, end),
+            [halfway, B, C],
+            "on from part-way out"
+        );
+        assert_eq!(road.path(0.0, 0.0), [A, A], "standing at the plant");
+        for (from, to) in [(0.0, end), (end, 0.0), (corner / 2.0, 0.0), (0.0, 0.0)] {
+            assert!(road.path(from, to).len() <= road.points.len());
+        }
+    }
 
     #[test]
     fn every_plant_has_a_road_to_every_site_ending_exactly_there() {

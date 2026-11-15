@@ -11,12 +11,14 @@
 //! 8. rest (`available`)
 //!
 //! GPS is sent every 10 s while moving and every 60 s while parked. Drum state is sent on change
-//! and every 30 s, and status on change. A truck drives out and back along the road from its plant
-//! to the site ([`crate::roads`]), or the straight line without one, at a constant speed. A drive
-//! takes the haversine distance between its ends × [`ROAD_FACTOR`] ÷ [`AVG_SPEED_KMH`], ±10 %,
-//! whatever the road's length, so the speed it reports is the road's km over that time. A share
-//! of trips crosses a dead zone. Every trip goes to a random site: the trucks don't follow
-//! dispatch's plan yet (M7).
+//! and every 30 s, and status on change. Each drive's road goes out once, as the drive begins:
+//! after its status and before its first fix, on `trucks/{id}/route`, in the drive's direction.
+//!
+//! A truck drives out and back along the road from its plant to the site ([`crate::roads`]), or
+//! the straight line without one, at a constant speed. A drive takes the haversine distance
+//! between its ends × [`ROAD_FACTOR`] ÷ [`AVG_SPEED_KMH`], ±10 %, whatever the road's length, so
+//! the speed it reports is the road's km over that time. A share of trips crosses a dead zone.
+//! Every trip goes to a random site: the trucks don't follow dispatch's plan yet (M7).
 //!
 //! A truck breaks down on command ([`TruckSim::breakdown`]), wherever it is: it reports
 //! `out_of_service`, stays put for [`FleetConfig::repair`], then drives back to its home plant
@@ -149,6 +151,17 @@ struct Route {
     path: Vec<[f64; 2]>,
 }
 
+impl Route {
+    fn along(path: &[Location]) -> Route {
+        Route {
+            path: path
+                .iter()
+                .map(|p| [round(p.lat, 5), round(p.lon, 5)])
+                .collect(),
+        }
+    }
+}
+
 /// A route message for `vehicle` along `path`, as large as it can get on the wire: with the
 /// largest `seq` and a 13-digit `ts_ms`. `make routes` and the roads' size test measure with it.
 pub fn route_message(vehicle: &str, path: &[Location]) -> serde_json::Result<Vec<u8>> {
@@ -156,12 +169,7 @@ pub fn route_message(vehicle: &str, path: &[Location]) -> serde_json::Result<Vec
         vehicle,
         seq: u64::MAX,
         ts_ms: 9_999_999_999_999,
-        body: Route {
-            path: path
-                .iter()
-                .map(|p| [round(p.lat, 5), round(p.lon, 5)])
-                .collect(),
-        },
+        body: Route::along(path),
     })
 }
 
@@ -431,6 +439,10 @@ impl TruckSim {
         let moving = matches!(motion, Motion::Driving(_));
         if let Motion::Driving(drive) = &motion {
             self.road = Arc::clone(&drive.road);
+            // The road this drive takes, once, after its status and before its first fix, so the
+            // route is never older than the status that starts the drive.
+            let path = drive.road.path(drive.from_km, drive.to_km);
+            self.emit("route", Route::along(&path)).await?;
         }
         let started = Instant::now();
         tokio::pin!(until);
@@ -816,6 +828,63 @@ mod tests {
         (a.lat - b.lat).abs() < 1e-9 && (a.lon - b.lon).abs() < 1e-9
     }
 
+    /// A route message's path.
+    fn path(body: &Value) -> Vec<Location> {
+        body["path"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| Location {
+                lat: p[0].as_f64().unwrap(),
+                lon: p[1].as_f64().unwrap(),
+            })
+            .collect()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn each_drive_starts_with_its_route() {
+        let (world, roads, road) = dog_leg();
+        let (seen, _) = one_trip(world, roads, 0.0).await;
+        let kinds: Vec<&str> = seen
+            .iter()
+            .map(|s| s.topic.rsplit('/').next().unwrap())
+            .collect();
+        let back: Vec<Location> = road.iter().rev().copied().collect();
+        // The route goes out right after the status (and the drum, when it changes), before the
+        // drive's first fix, with the road in the drive's direction.
+        for (status, then, expected) in [
+            (
+                "en_route",
+                ["status", "route", "gps"].as_slice(),
+                road.to_vec(),
+            ),
+            (
+                "returning",
+                ["status", "drum", "route", "gps"].as_slice(),
+                back,
+            ),
+        ] {
+            let i = seen
+                .iter()
+                .position(|s| s.body["status"] == status)
+                .unwrap();
+            assert_eq!(&kinds[i..i + then.len()], then, "after {status}");
+            let route = &seen[i + then.len() - 2];
+            assert_eq!(path(&route.body), expected, "the route after {status}");
+            assert!(
+                route.body["ts_ms"].as_i64().unwrap() >= seen[i].body["ts_ms"].as_i64().unwrap(),
+                "a route is never older than the status it follows"
+            );
+            assert!(route.body.get("status").is_none());
+        }
+        assert_eq!(kinds.iter().filter(|k| **k == "route").count(), 2);
+        let seqs: Vec<u64> = seen
+            .iter()
+            .map(|s| s.body["seq"].as_u64().unwrap())
+            .collect();
+        assert_eq!(seqs, (1..=seqs.len() as u64).collect::<Vec<_>>());
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_truck_drives_along_its_road_and_keeps_its_drive_time() {
         let (world, roads, road) = dog_leg();
@@ -901,10 +970,12 @@ mod tests {
         );
     }
 
-    /// Where a truck broke down and parked, its fixes on the way home, and its first fix there.
+    /// Where a truck broke down and parked, the route it reported and its fixes on the way home,
+    /// and its first fix there.
     struct Breakdown {
         at: Location,
         parked: Location,
+        route_home: Vec<Location>,
         way_home: Vec<Location>,
         home: Location,
     }
@@ -930,7 +1001,8 @@ mod tests {
         let task = tokio::spawn(sim.run());
 
         let mut status = String::new();
-        let (mut at, mut parked, mut way_home) = (None, None, Vec::new());
+        let (mut at, mut parked, mut route_home, mut way_home) =
+            (None, None, Vec::new(), Vec::new());
         let home = loop {
             let msg = rx.recv().await.unwrap();
             if !msg.topic.starts_with("trucks/") {
@@ -939,6 +1011,10 @@ mod tests {
             let body: Value = serde_json::from_slice(&msg.payload).unwrap();
             if let Some(s) = body["status"].as_str() {
                 status = s.to_owned();
+                continue;
+            }
+            if msg.topic.ends_with("/route") && status == "returning" && at.is_some() {
+                route_home = path(&body);
                 continue;
             }
             if !msg.topic.ends_with("/gps") {
@@ -960,6 +1036,7 @@ mod tests {
         Breakdown {
             at: at.unwrap(),
             parked: parked.unwrap(),
+            route_home,
             way_home,
             home,
         }
@@ -975,6 +1052,17 @@ mod tests {
         })
         .await;
         assert!(close(run.parked, run.at), "it parks where it broke down");
+        // Its route home starts where it stands, at 5 decimals against the fix's 6, and runs back
+        // over the corner to the plant.
+        let [from, rest @ ..] = run.route_home.as_slice() else {
+            panic!("no route home");
+        };
+        assert!(
+            (from.lat - run.at.lat).abs() < 1e-5 && (from.lon - run.at.lon).abs() < 1e-5,
+            "the route home starts at {from:?}, the truck stands at {:?}",
+            run.at
+        );
+        assert_eq!(rest, [corner, plant]);
         assert!(run.way_home.len() > 2);
         for fix in &run.way_home {
             assert!(
@@ -993,6 +1081,11 @@ mod tests {
         assert!(
             close(run.parked, site),
             "it parks on site, where its drive ended"
+        );
+        assert_eq!(
+            run.route_home,
+            road.iter().rev().copied().collect::<Vec<_>>(),
+            "its route home is the whole road, reversed"
         );
         assert!(
             run.way_home.len() > 2 && close(run.way_home[0], site),
