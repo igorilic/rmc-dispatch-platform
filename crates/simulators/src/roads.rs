@@ -86,7 +86,11 @@ impl Road {
     /// `from_km`, the road's points strictly between, and the point at `to_km`. It never has more
     /// points than the road, and a drive that goes nowhere is its one point twice.
     pub fn path(&self, from_km: f64, to_km: f64) -> Vec<Location> {
-        let (low, high) = (from_km.min(to_km), from_km.max(to_km));
+        // Kms off the road stop at its ends, as at() does, so the bound on points always holds.
+        let (low, high) = (
+            from_km.min(to_km).max(0.0),
+            from_km.max(to_km).min(self.length()),
+        );
         let mut path = vec![self.at(low)];
         path.extend(
             self.points
@@ -207,12 +211,17 @@ mod tests {
 
     #[test]
     fn a_stretch_of_road_keeps_the_drive_s_direction() {
-        let road = Road::new(vec![A, B, C]).unwrap();
+        // Two points between the ends, so the order of the points in between shows as well.
+        const D: Location = Location {
+            lat: 49.45,
+            lon: 8.80,
+        };
+        let road = Road::new(vec![A, B, C, D]).unwrap();
         let (corner, end) = (A.distance_km(B), road.length());
-        assert_eq!(road.path(0.0, end), [A, B, C], "out: the whole road");
+        assert_eq!(road.path(0.0, end), [A, B, C, D], "out: the whole road");
         assert_eq!(
             road.path(end, 0.0),
-            [C, B, A],
+            [D, C, B, A],
             "back: the same road reversed"
         );
         let halfway = road.at(corner / 2.0);
@@ -223,13 +232,21 @@ mod tests {
         );
         assert_eq!(
             road.path(corner / 2.0, end),
-            [halfway, B, C],
+            [halfway, B, C, D],
             "on from part-way out"
         );
+        let late = end - C.distance_km(D) / 2.0;
+        assert_eq!(
+            road.path(late, 0.0),
+            [road.at(late), C, B, A],
+            "home from near the site"
+        );
         assert_eq!(road.path(0.0, 0.0), [A, A], "standing at the plant");
-        for (from, to) in [(0.0, end), (end, 0.0), (corner / 2.0, 0.0), (0.0, 0.0)] {
-            assert!(road.path(from, to).len() <= road.points.len());
-        }
+        assert_eq!(
+            road.path(-1.0, end + 1.0),
+            [A, B, C, D],
+            "kms off the road stop at its ends"
+        );
     }
 
     #[test]
