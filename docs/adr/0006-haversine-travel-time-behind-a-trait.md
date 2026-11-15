@@ -1,6 +1,6 @@
 # ADR 0006: Haversine travel time behind a trait (and when to switch to OSRM)
 
-- **Status:** Accepted
+- **Status:** Accepted, amended 2026-11-15
 - **Date:** 2026-11-09 (milestone 4)
 
 ## Context
@@ -25,6 +25,17 @@ only implementation, `HaversineTravelTime`, is:
 - ÷ 45 km/h, or 30 km/h when leaving between 07:00–09:00 or 16:00–18:00 Berlin time.
 
 The planner, local search, the checker and the re-dispatch worker see only the trait.
+
+**Amendment (milestone 11):** OSRM now supplies the simulated trucks' roads, offline. `make routes`,
+run by hand, asks a local OSRM for the road from each plant to each site and writes them to
+[`deploy/seed/rhine-neckar.routes.json`](../../deploy/seed/rhine-neckar.routes.json) (ODbL), which
+is checked by hand and committed. The map console draws each drive's road. The plan's travel time
+stays haversine, and each simulated drive still takes the simulators' straight-line time (haversine
+× 1.3 at 40 km/h, ±10 %): a truck's GPS fixes now follow its road and its reported speed varies with
+the road's length, but it arrives when it did before. None of the switch criteria below is met:
+every truck is still simulated. Unlike the fixed matrix rejected below, a missing road breaks
+nothing: that pair drives the straight line, and a test checks that every plant has a road to every
+site in the seed.
 
 ## Consequences
 

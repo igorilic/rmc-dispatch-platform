@@ -37,6 +37,8 @@ truck down, delay a site or cut the plant off.
   the [k3d install script](https://k3d.io) and [Helm's](https://helm.sh/docs/intro/install/).
   Check with `k3d version && kubectl version --client && helm version`.
 - For `make e2e`, also **kind** and **jq**: `brew install kind jq`.
+- Only for `make routes`: **osmium-tool** (`brew install osmium-tool`) and internet access for a
+  741 MB download. Its output is committed, so nothing else needs it.
 
 ## Walkthrough
 
@@ -67,10 +69,11 @@ step links to the section that explains what you see.
    kubectl --context k3d-cloud -n pourline patch customerintegration bauwerk-ag --type merge -p '{"spec":{"paused":false}}'
    ```
    ([Kubernetes](#kubernetes), [The operator](#the-operator))
-7. **Watch the map.** Open the map console at http://localhost:8080/console. Click a truck and
-   press *Break down*: it turns red with an ×, and if it had planned loads, the panel shows the new
-   plan's changes with a reason for each. The *Log* tab links every action to its trace in Jaeger.
-   ([Map console](#map-console))
+7. **Watch the map.** Open the map console at http://localhost:8080/console. A driving truck shows
+   its road, thick ahead and thin behind. Click one: its road stands out, and its popup says where
+   it is heading and how far it has to go. Press *Break down*: it turns red with an ×, and if it
+   had planned loads, the panel shows the new plan's changes with a reason for each. The *Log* tab
+   links every action to its trace in Jaeger. ([Map console](#map-console))
 8. **Cut the plant off.** Press *Make chaos* on the console's Walldorf card, or run `make chaos`.
    Both cut the Walldorf plant off for two minutes. The plant-agent keeps batching, its outbox
    fills, and it drains in order once the link is back. On a fresh cluster the first cut can end
@@ -92,6 +95,7 @@ step links to the section that explains what you see.
 | `make bench` | Runs the planner benchmarks at 50, 200 and 1,000 loads (a few minutes) |
 | `make audit` | Checks the dependencies against the RustSec advisory database |
 | `make sqlx-prepare` | Refreshes `.sqlx/` after a query or migration changes (needs `make up` and `cargo install sqlx-cli --locked`) |
+| `make routes` | Rebuilds the trucks' roads from OpenStreetMap with a local OSRM, after the seed's plants or sites change (needs Docker, osmium-tool and internet; the output is committed): see [Watching the simulators](#watching-the-simulators) |
 | `make k8s` | Runs Pourline in two k3d clusters, `cloud` and `plant-walldorf`, with the [map console](#map-console): see [Kubernetes](#kubernetes) |
 | `make chaos` | Cuts `plant-walldorf` off the cloud for 2 minutes, then reconnects it, and shows its outbox draining (after `make k8s`): see [`make chaos`](#make-chaos) |
 | `make e2e` | Installs the cloud chart and the three customers on a fresh kind cluster, plays the demo, and checks for a plan and an empty DLQ, as CI does: see [`make e2e`](#make-e2e) |
@@ -124,6 +128,16 @@ around Heidelberg and Mannheim. It holds our master data: 3 customers and their 
 postal code's centroid. The world also has 3 plants, 25 trucks and 4 mix designs. The [architecture doc](docs/architecture.md#context)
 shows how it fits together.
 
+The trucks drive OpenStreetMap roads. [`deploy/seed/rhine-neckar.routes.json`](deploy/seed/rhine-neckar.routes.json)
+holds the road from each plant to each site, 120 in all. A truck drives back on the same road, and
+after a breakdown it drives home along it from where it stopped. A drive still takes as long as it
+would on the straight line between its ends, haversine × 1.3 at 40 km/h, ±10 %, so the speed a
+truck reports depends on how roundabout its road is: 29–91 km/h between plant and site, and up to
+about 106 km/h on a drive home after a breakdown. `make routes` builds the file with OSRM's car
+profile from Geofabrik's extracts, and only needs to run after the seed's plants or sites change.
+It downloads 741 MB into `target/routes`, runs OSRM on `127.0.0.1:5005` while it works, and prints
+a summary to check before you commit the file. The file is under the ODbL: see [License](#license).
+
 ```sh
 make logs                                                         # status changes, tickets, orders, SFTP drops
 docker exec pourline-mosquitto-1 mosquitto_sub -t 'trucks/#' -v   # live truck telematics
@@ -133,7 +147,7 @@ docker exec pourline-sftp-1 ls -l /config/rheinbau-gmbh           # rheinbau-gmb
 
 | What | Channel | Notes |
 |---|---|---|
-| Truck telematics | MQTT `trucks/{id}/gps`, `/drum`, `/status` | GPS every 10 s while moving and every 60 s parked. Some messages are duplicated or reordered, and dead zones end in late bursts. `seq` and `ts_ms` let a consumer restore the order. |
+| Truck telematics | MQTT `trucks/{id}/gps`, `/drum`, `/status`, `/route` | GPS every 10 s while moving and every 60 s parked. A route goes out once per drive, as it begins: the road the truck is about to drive, after its status and before its first fix. Some messages are duplicated or reordered, and dead zones end in late bursts. `seq` and `ts_ms` let a consumer restore the order. |
 | Batch tickets | MQTT `plants/{id}/tickets` | `batching`, `loading` and `loaded` for each load. A plant never runs more batches than it has loading bays. |
 | `bauwerk-ag` orders | HTTP POST, JSON | Every change is re-sent as the full document, and 5 % are sent twice. |
 | `neckar-infra` orders | HTTP POST, XML | Schema v1 and v2 are live side by side. |
@@ -163,9 +177,11 @@ To run the simulators outside Docker, stop the container first (`docker compose 
 ## Watching ingest
 
 Ingest turns every order, telematics message and batch ticket into a canonical event on the
-`EVENTS` stream (subjects `events.orders.*`, `events.trucks.*`, `events.plants.*`). Duplicates
-are skipped, and anything it can't map goes to the `DLQ` stream with every error. The [architecture doc](docs/architecture.md#an-orders-path)
-follows an order through the pipeline.
+`EVENTS` stream (subjects `events.orders.*`, `events.trucks.>`, `events.plants.*`). A truck's
+route has a subject of its own, `events.trucks.{id}.route`, and needs at least two points, each a
+coordinate. Duplicates are skipped, and anything it can't map goes to the `DLQ` stream with every
+error. The [architecture doc](docs/architecture.md#an-orders-path) follows an order through the
+pipeline.
 
 ```sh
 make logs                                    # simulators; for ingest: docker logs -f pourline-ingest-1
@@ -379,12 +395,13 @@ carries the delivery's `trace_id`, so http://localhost:16686/trace/{trace_id} fi
 letters show as red spans.
 
 GPS and drum readings aren't traced. At about two a second they would bury every other trace, and
-they never trigger a re-dispatch. Status reports, batch tickets and every dead letter are traced.
-Spans carry ids and counts, never payloads. Jaeger keeps them in memory, so `make down` clears them.
+they never trigger a re-dispatch. Status reports, routes, batch tickets and every dead letter are
+traced. Spans carry ids and counts, never payloads. Jaeger keeps them in memory, so `make down`
+clears them.
 
 The [map console](#map-console) adds its own spans. Each action starts a trace with a
 `console action` span that carries its action and target, and the console's log links that trace.
-Each truck report, batch ticket and plan version the console pushes to its pages is a
+Each truck report, route, batch ticket and plan version the console pushes to its pages is a
 `console push` span in the trace of the event behind it, so GPS and drum pushes stay untraced
 too. A re-plan from the console is one trace, from the click through dispatch and back to the
 console's push:
@@ -441,9 +458,9 @@ inside the cluster: `kubectl --context k3d-cloud -n pourline port-forward svc/pr
 | `pourline_edge_plan_age_seconds{plant}`, `pourline_edge_plan_version{plant}` | The plan the agent works from, and the time since dispatch last confirmed it |
 | `pourline_edge_tickets_total{plant, outcome}` | Tickets `queued` into the outbox and `sent` from it |
 | `pourline_console_clients` | Pages connected to the map console's live stream |
-| `pourline_console_pushed_total{kind}` | Changes the console pushed to its pages: `truck`, `plant`, `plan`, `edge`, `uplink`, `log` |
+| `pourline_console_pushed_total{kind}` | Changes the console pushed to its pages: `truck`, `route`, `plant`, `plan`, `edge`, `uplink`, `log` |
 | `pourline_console_actions_total{action, outcome}` | Actions from the map, such as `replan` or `make_chaos`: `done`, `refused`, `failed` |
-| `pourline_console_event_lag_seconds{kind}` | From ingest receiving a truck report (`truck`) or a batch ticket (`ticket`) to the console pushing it |
+| `pourline_console_event_lag_seconds{kind}` | From ingest receiving a truck report (`truck`), a route (`route`) or a batch ticket (`ticket`) to the console pushing it |
 
 The plan gauges always describe the current version. Dispatch sets them again from the latest
 stored version when it starts. The “Dispatch overview” dashboard lives in the chart, in
@@ -683,7 +700,7 @@ the stack sees it, and acts on it only through dispatch's API, MQTT commands, th
 webhooks and the plant's uplink, so the hard constraints stay with dispatch. It runs in the cloud
 cluster only; `make up` has no console.
 
-![The map console in the dark theme: the Mannheim, Weinheim and Walldorf plants with their sites, trucks as small mixer-truck icons, grouped trucks as badges with a count, the latest plan's changes in the panel, and the Walldorf edge card](docs/console.jpg)
+![The map console in the dark theme: the Mannheim, Weinheim and Walldorf plants with their sites, trucks as small mixer-truck icons, grouped trucks as badges with a count, driving trucks with the road ahead drawn thick and the road driven thin, dashed on the way home, the latest plan's changes in the panel, and the Walldorf edge card](docs/console.jpg)
 
 The map shows the three plants as squares, hollow while offline, and the 40 sites as rings.
 Trucks are small mixer-truck icons in their status colour, facing the way they last moved. Out of
@@ -696,9 +713,17 @@ it. Below zoom 13, trucks whose icons would overlap become one badge with their 
 the share of each status, and with the × if one of them is out of service. Click the badge, or
 press Enter on it, to zoom in until they come apart.
 
+A truck that is en route or returning shows the road of the drive it is on, as it reported it when
+the drive began: from its plant, the site or where it broke down, to the site or its home plant.
+The road ahead of the icon is thick and the road driven thin, in the truck's status colour, dashed
+on the way home, and a legend row explains them. Every road is dimmed except the selected truck's,
+the one whose popup is open, which is drawn at full opacity on top of the others. The road is the
+truck's own drive, not the plan. A drive whose route was lost has no road, never a wrong one.
+
 A plant, a site or a truck opens a popup:
 
-- a truck: its capacity, home plant and last report, and *Break down*;
+- a truck: its capacity, home plant and last report, and *Break down*; while it drives, also where
+  it is heading and how many km it has to go;
 - a plant: its bays, batching rate and last ticket, its next loads in the latest plan, and *Take
   offline* or *Bring online*, plus *Sync now* for Walldorf;
 - a site: its customer, ship-to number and today's orders, and *Delay 30 min*.
@@ -712,10 +737,10 @@ time and its shift, whether the page is live, and links to Grafana, Jaeger and t
 follows your system's light or dark theme until you flip the toggle. The map works from the
 keyboard too: markers take the focus, Enter opens a popup and Escape closes it.
 
-The map shows the trucks' real telematics, and the panel shows the plan. The simulated trucks
-drive random trips rather than the plan (see [Re-dispatch](#re-dispatch)), so the two don't match.
-In the same way, a simulated plant goes on loading trucks after *Take offline*; only the plan
-moves away from it.
+The map shows the trucks' real telematics and roads, and the panel shows the plan. The simulated
+trucks drive random trips rather than the plan (see [Re-dispatch](#re-dispatch)), so the two don't
+match. In the same way, a simulated plant goes on loading trucks after *Take offline*; only the
+plan moves away from it.
 
 ### Actions
 
@@ -757,8 +782,8 @@ keep showing the plant.
 
 The console keeps one copy of the world for every page, and nothing polls dispatch for it:
 
-- Truck telematics and batch tickets: MQTT → ingest → NATS (`events.trucks.>`, `events.plants.>`)
-  → console → server-sent events → page.
+- Truck telematics, routes included, and batch tickets: MQTT → ingest → NATS (`events.trucks.>`,
+  `events.plants.>`) → console → server-sent events → page.
 - Plans: dispatch stores a version and announces it on `plans.updated`, a core NATS subject, with
   the re-dispatch's `traceparent`. The console fetches its diff and pushes it to the pages.
 - The edge card: the console reads the agent's `/status` over the plant's monitoring path, and the
@@ -768,9 +793,13 @@ The console starts from the seed's master data, follows NATS, and reads dispatch
 each truck's status and position with their report times, each plant's status and the latest plan
 version. It reads `/world` again after each plan update and after a NATS reconnect, which catches a
 version that core NATS dropped. Each truck field keeps its newest value by report time, whichever
-way it came. A page gets a snapshot, then every change, and a heartbeat with the world time every
-15 s; ages and fading go by that clock. A page that falls behind, or hears nothing for 45 s,
-reconnects for a new snapshot, and a hidden tab lets go of its stream.
+way it came. The console also keeps each truck's latest route, which `/world` doesn't carry, and
+gives a page the route only while the truck is en route or returning and the route is no older
+than that status, so a route from an earlier drive is never drawn. Routes have subjects of their
+own, so a restarted console reads every truck's latest route back from the stream. A page gets a
+snapshot, then every change, and a heartbeat with the world time every 15 s; ages and fading go by
+that clock. A page that falls behind, or hears nothing for 45 s, reconnects for a new snapshot,
+and a hidden tab lets go of its stream.
 
 There is no login: from outside the cluster, the console is reachable only on `127.0.0.1:8080`.
 Every `POST`, `PUT` and `DELETE` needs the `X-Pourline-Console` header and a `Host` from
@@ -779,14 +808,16 @@ can't send that header without a CORS preflight, which the console never answers
 check stops DNS rebinding. Reads are open, because they serve simulated data. Truck, site and plant
 ids must exist in the seed before they reach an MQTT topic or a dispatch URL. The page sends a
 Content-Security-Policy that lets it load only its own files, Leaflet 1.9.4 from unpkg.com (pinned
-with SRI) and Stadia's tiles, with no inline script or style and no framing.
+with SRI) with its source map for the browser's developer tools, and Stadia's tiles, with no
+inline script or style and no framing.
 
 The basemap is Stadia Maps' Alidade Smooth, and Alidade Smooth Dark in the dark theme (© Stadia
-Maps, © OpenMapTiles, © OpenStreetMap contributors). Stadia serves these tiles without a key only to
-`localhost` and `127.0.0.1`, rate-limited, and free only for non-commercial use: check its terms
-before you serve the console anywhere else. The browser needs internet access for the tiles and for
-Leaflet. If the tiles fail, the map says so and the trucks still update; without Leaflet, the panel
-and its actions still work.
+Maps, © OpenMapTiles, © OpenStreetMap contributors). The trucks' roads are OpenStreetMap data too,
+under the ODbL (see [License](#license)), and the same credit covers them. Stadia serves these
+tiles without a key only to `localhost` and `127.0.0.1`, rate-limited, and free only for
+non-commercial use: check its terms before you serve the console anywhere else. The browser needs
+internet access for the tiles and for Leaflet. If the tiles fail, the map says so and the trucks
+still update; without Leaflet, the panel and its actions still work.
 
 | Variable | Default | Effect |
 |---|---|---|

@@ -24,7 +24,7 @@ does it. The [ADRs](adr/) record why.
 ```mermaid
 flowchart LR
     contractors["Contractors' systems<br/>JSON webhook, CSV over SFTP, XML webhook"]
-    trucks["Trucks<br/>GPS, drum, status over MQTT"]
+    trucks["Trucks<br/>GPS, drum, status, route over MQTT"]
     plants["Batching plants<br/>a plant-agent each"]
     dispatcher["Dispatcher<br/>map console, REST API, Grafana, Jaeger"]
     pourline(["Pourline"])
@@ -37,6 +37,8 @@ flowchart LR
 
 Everything outside Pourline is simulated (`crates/simulators`): 25 trucks, three plants and three
 contractors in the Rhine-Neckar area, from [`deploy/seed/rhine-neckar.json`](../deploy/seed/rhine-neckar.json).
+The trucks drive OpenStreetMap roads from [`deploy/seed/rhine-neckar.routes.json`](../deploy/seed/rhine-neckar.routes.json)
+(ODbL), which `make routes` builds with OSRM, and report each drive's road as it begins.
 Customers, ship-tos, plants, trucks and mix designs are Pourline's own master data. Customers never
 send them: an order names our customer number and ship-to number.
 
@@ -55,7 +57,7 @@ flowchart LR
     ingest["ingest<br/>mappings, validation, dedup"]
 
     subgraph nats["NATS JetStream"]
-        events[("EVENTS<br/>events.orders.*, events.trucks.*, events.plants.*")]
+        events[("EVENTS<br/>events.orders.*, events.trucks.>, events.plants.*")]
         dlq[("DLQ<br/>dlq.* per integration")]
         kv[("KV buckets<br/>ingest-dedup, ingest-status")]
     end
@@ -80,7 +82,7 @@ flowchart LR
     agent -- "GET /plants/{id}/plan" --> dispatch
     cli <--> dlq
     operator -. "dead letters, last ingest" .-> nats
-    events -- "trucks, tickets" --> console
+    events -- "trucks, routes, tickets" --> console
     dispatch -- "plans.updated" --> console
     console -- "GET /world, diffs, actions" --> dispatch
     mqtt -- "breakdown and sync<br/>commands from the console" --- console
@@ -96,7 +98,7 @@ flowchart LR
 | [`operator`](../crates/operator) | Runs each `CustomerIntegration` resource as its own ingest workload, and reports its status |
 | [`console`](../crates/console) | The map console, in Kubernetes: the live fleet, the latest plan and its diff, the plant's edge, and actions that change the world |
 | [`telemetry`](../crates/telemetry) | Shared tracing, OTLP export and the Prometheus listener |
-| [`simulators`](../crates/simulators) | The fake world: trucks, plants, contractors, plus the `demo` scenario |
+| [`simulators`](../crates/simulators) | The fake world: trucks on OpenStreetMap roads, plants, contractors, plus the `demo` scenario and `routes`, which builds the roads for `make routes` |
 
 Each service reads its configuration from environment variables with defaults; the README lists
 them per service, and [`.env.example`](../.env.example) collects the ones worth overriding.
@@ -237,7 +239,7 @@ flowchart TB
     trucks -- telematics --> mqtt
     agent -- "tickets, through the uplink" --> mqtt
     mqtt --> ingest
-    ingest -- "events.trucks.*,<br/>events.plants.*" --> nats
+    ingest -- "events.trucks.>,<br/>events.plants.*" --> nats
     dispatch -- "plans.updated" --> nats
     nats --> console
     agent -. "/status every 2 s,<br/>past the uplink" .-> console
@@ -251,11 +253,14 @@ flowchart TB
 
 - **The live path.** Truck telematics and batch tickets reach the console as canonical events, on
   an ordered consumer that starts at each subject's last message, so every truck and plant has its
-  latest event at once. Dispatch announces each version it stores on `plans.updated`, a core NATS
-  subject outside the EVENTS stream, and the console fetches its diff. `GET /world` gives the
-  starting truck and plant state and the latest version. The console reads it again after each
-  announcement and after a NATS reconnect, which catches a version core NATS dropped. Each truck
-  field keeps its newest value by report time, whichever way it came.
+  latest event at once. A truck's route, the road of the drive it begins, has a subject of its own
+  (`events.trucks.{id}.route`), so every truck's latest route comes along too; the console shows it
+  while the truck is en route or returning and the route is no older than that status. Dispatch
+  announces each version it stores on `plans.updated`, a core NATS subject outside the EVENTS
+  stream, and the console fetches its diff. `GET /world` gives the starting truck and plant state
+  and the latest version. The console reads it again after each announcement and after a NATS
+  reconnect, which catches a version core NATS dropped. Each truck field keeps its newest value by
+  report time, whichever way it came.
 - **Pages** get a snapshot, then each change as a server-sent event, and a heartbeat with the world
   time every 15 s. A page that falls behind is dropped, and its browser reconnects for a new
   snapshot. A page talks only to the console. Apart from its actions, only a plant's or a site's

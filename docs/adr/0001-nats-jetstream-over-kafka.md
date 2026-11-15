@@ -1,6 +1,6 @@
 # ADR 0001: NATS JetStream over Kafka
 
-- **Status:** Accepted
+- **Status:** Accepted, amended 2026-11-15
 - **Date:** 2026-11-09 (milestone 1)
 
 ## Context
@@ -38,6 +38,12 @@ NATS with JetStream is the event backbone ([`crates/ingest/src/nats.rs`](../../c
 
 One NATS server runs everywhere: in compose, in the cloud chart, and in the tests through
 testcontainers.
+
+**Amendment (milestone 11):** a truck's route, the road of the drive it begins, is an event of its
+own on `events.trucks.<truck>.route`, beside the truck's other reports on `events.trucks.<truck>`.
+On a subject of its own, the latest route outlives the reports that follow it, so the map
+console's consumer, which starts at each subject's last message, gets every truck's route back
+after a restart. Dispatch reads `events.trucks.>`, acks each route and changes nothing.
 
 ## Consequences
 
