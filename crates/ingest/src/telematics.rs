@@ -340,6 +340,13 @@ mod tests {
             json!({"vehicle": "truck-07", "seq": 624, "ts_ms": 1, "path": [[49.4875, 8.466], [49.4875, 8.466]]}),
         );
         assert!(standing.is_ok(), "{standing:?}");
+
+        // Any coordinate is one, however far from the Rhine: longitudes reach 180.
+        let far = event(
+            "trucks/truck-07/route",
+            json!({"vehicle": "truck-07", "seq": 625, "ts_ms": 1, "path": [[49.4875, 8.466], [-89.9, 179.9]]}),
+        );
+        assert!(far.is_ok(), "{far:?}");
     }
 
     #[test]
@@ -470,6 +477,14 @@ mod tests {
         assert_eq!(
             off_the_globe.unwrap_err(),
             ["route point 1 is not a coordinate: 94, 8.5"]
+        );
+        let off_the_map = event(
+            "trucks/truck-07/route",
+            json!({"vehicle": "truck-07", "seq": 1, "ts_ms": 1, "path": [[49.4875, 8.466], [49.5, 180.5]]}),
+        );
+        assert_eq!(
+            off_the_map.unwrap_err(),
+            ["route point 1 is not a coordinate: 49.5, 180.5"]
         );
 
         let unknown_topic = event("trucks/truck-07/horn", json!({}));
