@@ -13,7 +13,7 @@ DAYTIME_OFFSET = $(shell h=$$((1$$(TZ=Europe/Berlin date +%H) - 100)); \
 	if [ $$h -ge 6 ] && [ $$h -lt 16 ]; then echo 0; else echo $$((10 - h)); fi)
 demo k8s: export CLOCK_OFFSET_HOURS ?= $(DAYTIME_OFFSET)
 
-.PHONY: up down demo logs k8s chaos e2e test bench audit sqlx-prepare
+.PHONY: up down demo logs k8s chaos e2e test bench audit sqlx-prepare routes
 
 up: ## Build and start the local stack, and wait until it is up
 	$(COMPOSE) up -d --wait --build
@@ -75,3 +75,6 @@ DATABASE_URL ?= postgres://pourline:pourline@localhost:5432/pourline
 sqlx-prepare: ## Refresh .sqlx/ after changing a query or migration (needs make up and sqlx-cli)
 	sqlx migrate run --source crates/dispatch/migrations --database-url $(DATABASE_URL)
 	DATABASE_URL=$(DATABASE_URL) SQLX_OFFLINE=false cargo sqlx prepare --workspace -- --all-targets
+
+routes: ## Rebuild the trucks' roads from OpenStreetMap (needs Docker, osmium-tool and internet; the output is committed)
+	deploy/seed/routes.sh

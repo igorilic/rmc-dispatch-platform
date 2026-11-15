@@ -1,7 +1,7 @@
 //! Fake trucks, plants and customers, so Pourline runs locally with no real data (SPEC §2, M2).
 //!
 //! The `simulators` binary runs all of them; the `demo` binary reuses the customers' formats to
-//! play `make demo`'s scenario.
+//! play `make demo`'s scenario, and `routes` builds the trucks' roads for `make routes`.
 
 pub mod customers;
 pub mod fleet;

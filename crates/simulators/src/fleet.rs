@@ -139,6 +139,28 @@ struct Status {
     status: TruckStatus,
 }
 
+/// The road a drive is about to take, as `[lat, lon]` pairs at 5 decimals, about a metre.
+#[derive(Serialize)]
+struct Route {
+    path: Vec<[f64; 2]>,
+}
+
+/// A route message for `vehicle` along `path`, as large as it can get on the wire: with the
+/// largest `seq` and a 13-digit `ts_ms`. `make routes` and the roads' size test measure with it.
+pub fn route_message(vehicle: &str, path: &[Location]) -> serde_json::Result<Vec<u8>> {
+    serde_json::to_vec(&Envelope {
+        vehicle,
+        seq: u64::MAX,
+        ts_ms: 9_999_999_999_999,
+        body: Route {
+            path: path
+                .iter()
+                .map(|p| [round(p.lat, 5), round(p.lon, 5)])
+                .collect(),
+        },
+    })
+}
+
 pub struct TruckSim {
     truck: Truck,
     home: Arc<PlantSim>,
@@ -495,6 +517,7 @@ fn round(x: f64, decimals: i32) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::roads::metres_off;
     use chrono::{TimeZone, Utc};
     use domain::{PlantId, SiteId};
     use serde_json::Value;
@@ -736,6 +759,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_route_message_is_measured_at_its_largest_seq_and_time() {
+        let path = [
+            Location {
+                lat: 49.487_512_34,
+                lon: 8.466,
+            },
+            Location {
+                lat: 49.551_2,
+                lon: 8.658_94,
+            },
+        ];
+        let message = route_message("truck-07", &path).unwrap();
+        assert_eq!(
+            String::from_utf8(message).unwrap(),
+            r#"{"vehicle":"truck-07","seq":18446744073709551615,"ts_ms":9999999999999,"path":[[49.48751,8.466],[49.5512,8.65894]]}"#
+        );
+    }
+
     const SITE: &str = "50001001";
 
     /// The seed with one site, north-east of truck-01's home plant, and an L-shaped road to it:
@@ -770,31 +812,6 @@ mod tests {
         (a.lat - b.lat).abs() < 1e-9 && (a.lon - b.lon).abs() < 1e-9
     }
 
-    /// Metres from `p` to the nearest point of `line`, on a flat projection around `p`.
-    fn off_m(p: Location, line: &[Location]) -> f64 {
-        const M_PER_DEGREE: f64 = 111_195.0;
-        let k = p.lat.to_radians().cos();
-        let xy = |l: Location| {
-            (
-                (l.lon - p.lon) * k * M_PER_DEGREE,
-                (l.lat - p.lat) * M_PER_DEGREE,
-            )
-        };
-        line.windows(2)
-            .map(|w| {
-                let ((ax, ay), (bx, by)) = (xy(w[0]), xy(w[1]));
-                let (dx, dy) = (bx - ax, by - ay);
-                let len2 = dx * dx + dy * dy;
-                let t = if len2 > 0.0 {
-                    (-(ax * dx + ay * dy) / len2).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                (ax + t * dx).hypot(ay + t * dy)
-            })
-            .fold(f64::INFINITY, f64::min)
-    }
-
     #[tokio::test(start_paused = true)]
     async fn a_truck_drives_along_its_road_and_keeps_its_drive_time() {
         let (world, roads, road) = dog_leg();
@@ -817,12 +834,12 @@ mod tests {
         assert!(fixes.len() > 2);
         for fix in &fixes {
             let at = loc(&fix.body);
-            assert!(off_m(at, &road) < 1.0, "{at:?} is off the road");
+            assert!(metres_off(at, &road) < 1.0, "{at:?} is off the road");
         }
         assert!(
             fixes
                 .iter()
-                .any(|f| off_m(loc(&f.body), &[plant, site]) > 100.0),
+                .any(|f| metres_off(loc(&f.body), &[plant, site]) > 100.0),
             "the truck drove the straight line"
         );
 
@@ -868,7 +885,7 @@ mod tests {
             "the way back starts on site"
         );
         for at in &back {
-            assert!(off_m(*at, &road) < 1.0, "{at:?} is off the road back");
+            assert!(metres_off(*at, &road) < 1.0, "{at:?} is off the road back");
         }
 
         // The same seed on the straight line takes exactly as long: the time comes from the ends.
@@ -957,7 +974,7 @@ mod tests {
         assert!(run.way_home.len() > 2);
         for fix in &run.way_home {
             assert!(
-                off_m(*fix, &[run.at, corner, plant]) < 1.0,
+                metres_off(*fix, &[run.at, corner, plant]) < 1.0,
                 "{fix:?} is off the road home"
             );
         }
@@ -978,7 +995,10 @@ mod tests {
             "it sets off from the site"
         );
         for fix in &run.way_home {
-            assert!(off_m(*fix, &road) < 1.0, "{fix:?} is off the road home");
+            assert!(
+                metres_off(*fix, &road) < 1.0,
+                "{fix:?} is off the road home"
+            );
         }
         assert!(close(run.home, plant), "the first fix at home is the plant");
     }

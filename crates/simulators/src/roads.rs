@@ -100,6 +100,32 @@ impl Roads {
     }
 }
 
+/// Metres from `p` to the nearest point of `line`, which needs at least two points. It measures on a
+/// flat projection around `p`, which is close enough within a few kilometres.
+pub fn metres_off(p: Location, line: &[Location]) -> f64 {
+    const M_PER_DEGREE: f64 = 111_195.0;
+    let k = p.lat.to_radians().cos();
+    let xy = |l: Location| {
+        (
+            (l.lon - p.lon) * k * M_PER_DEGREE,
+            (l.lat - p.lat) * M_PER_DEGREE,
+        )
+    };
+    line.windows(2)
+        .map(|w| {
+            let ((ax, ay), (bx, by)) = (xy(w[0]), xy(w[1]));
+            let (dx, dy) = (bx - ax, by - ay);
+            let len2 = dx * dx + dy * dy;
+            let t = if len2 > 0.0 {
+                (-(ax * dx + ay * dy) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            (ax + t * dx).hypot(ay + t * dy)
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
 impl FromIterator<(PlantId, SiteId, Road)> for Roads {
     fn from_iter<I: IntoIterator<Item = (PlantId, SiteId, Road)>>(roads: I) -> Self {
         Roads(
