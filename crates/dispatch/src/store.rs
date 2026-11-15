@@ -424,7 +424,8 @@ impl Store {
         })
     }
 
-    /// Inserts or replaces an order, unless what is stored is newer.
+    /// Inserts or replaces an order, unless what is stored is newer and no later than
+    /// [`domain::clock::trusted_until`].
     pub async fn upsert_order(
         &self,
         order: &Order,
@@ -451,7 +452,7 @@ impl Store {
                  requested_start = EXCLUDED.requested_start, pour_rate_m3_per_h = EXCLUDED.pour_rate_m3_per_h,
                  max_gap_minutes = EXCLUDED.max_gap_minutes, status = EXCLUDED.status,
                  occurred_at = EXCLUDED.occurred_at, source_revision = EXCLUDED.source_revision
-             WHERE orders.occurred_at <= EXCLUDED.occurred_at",
+             WHERE orders.occurred_at <= EXCLUDED.occurred_at OR orders.occurred_at > $12",
             order.id.0,
             order.customer.0,
             order.site.0,
@@ -463,6 +464,7 @@ impl Store {
             text(&order.status),
             occurred_at,
             source_revision,
+            domain::clock::trusted_until(),
         )
         .execute(&mut *tx)
         .await?;
@@ -544,8 +546,8 @@ impl Store {
         Ok(found.map(|d| d.map(|d| d.0)))
     }
 
-    /// Records a truck's reported status, unless a newer report is stored. Returns the status it
-    /// replaced, if it applied.
+    /// Records a truck's reported status, unless a newer report is stored and no later than
+    /// [`domain::clock::trusted_until`]. Returns the status it replaced, if it applied.
     pub async fn report_truck_status(
         &self,
         truck: &TruckId,
@@ -555,18 +557,21 @@ impl Store {
         let previous = sqlx::query_scalar!(
             r#"WITH before AS (SELECT id, status FROM trucks WHERE id = $1 FOR UPDATE)
                UPDATE trucks SET status = $2, status_at = $3 FROM before
-               WHERE trucks.id = before.id AND (trucks.status_at IS NULL OR trucks.status_at < $3)
+               WHERE trucks.id = before.id
+                 AND (trucks.status_at IS NULL OR trucks.status_at < $3 OR trucks.status_at > $4)
                RETURNING before.status AS "previous!""#,
             truck.0,
             text(&status),
             at,
+            domain::clock::trusted_until(),
         )
         .fetch_optional(&self.pool)
         .await?;
         previous.as_deref().map(parse).transpose()
     }
 
-    /// Records a truck's reported position, unless a newer one is stored.
+    /// Records a truck's reported position, unless a newer one is stored and no later than
+    /// [`domain::clock::trusted_until`].
     pub async fn report_truck_position(
         &self,
         truck: &TruckId,
@@ -575,11 +580,12 @@ impl Store {
     ) -> Result<bool, StoreError> {
         let result = sqlx::query!(
             "UPDATE trucks SET lat = $2, lon = $3, position_at = $4
-             WHERE id = $1 AND (position_at IS NULL OR position_at < $4)",
+             WHERE id = $1 AND (position_at IS NULL OR position_at < $4 OR position_at > $5)",
             truck.0,
             at_location.lat,
             at_location.lon,
             at,
+            domain::clock::trusted_until(),
         )
         .execute(&self.pool)
         .await?;
@@ -634,16 +640,19 @@ impl Store {
         .collect()
     }
 
-    /// Cancels an order, unless what is stored is newer. An unknown order has nothing to cancel.
+    /// Cancels an order, unless what is stored is newer and no later than
+    /// [`domain::clock::trusted_until`]. An unknown order has nothing to cancel.
     pub async fn cancel_order(
         &self,
         id: &str,
         occurred_at: DateTime<Utc>,
     ) -> Result<bool, StoreError> {
         let result = sqlx::query!(
-            "UPDATE orders SET status = 'cancelled', occurred_at = $2 WHERE id = $1 AND occurred_at <= $2",
+            "UPDATE orders SET status = 'cancelled', occurred_at = $2
+             WHERE id = $1 AND (occurred_at <= $2 OR occurred_at > $3)",
             id,
             occurred_at,
+            domain::clock::trusted_until(),
         )
         .execute(&self.pool)
         .await?;

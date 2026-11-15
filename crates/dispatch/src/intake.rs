@@ -14,8 +14,9 @@
 //! causes joins the same trace (SPEC §8).
 //!
 //! Each consumer applies its events one at a time, in stream order (`max_ack_pending = 1`), so a
-//! cancellation can't overtake the order it cancels. A redelivered or stale event changes nothing.
-//! An event that can never apply (unreadable, or naming something we don't have) is logged and
+//! cancellation can't overtake the order it cancels. A redelivered or stale event changes nothing,
+//! unless what it would replace is from later than [`domain::clock::trusted_until`], stored before
+//! the world's clock moved back. An event that can never apply (unreadable, or naming something we don't have) is logged and
 //! acked, so it doesn't block the ones behind it. Any other failure, such as Postgres being down,
 //! is retried after [`RETRY`].
 

@@ -5,6 +5,11 @@
 //! Only the world moves: orders, plans, batch tickets and telematics. Times that describe the
 //! system itself, such as traces, metrics and an integration's last ingest, keep the real clock
 //! (`Utc::now`).
+//!
+//! The shift can change between runs while the stored world stays, as when `make k8s` runs again
+//! in the evening. Moved back, the clock would leave every stored report newer than anything that
+//! comes in, and the newest-report rules would ignore the world until the clock caught up. So a
+//! report held from later than [`trusted_until`] gives way to the next one.
 
 use std::sync::OnceLock;
 
@@ -47,6 +52,17 @@ pub fn now() -> DateTime<Utc> {
 
 fn shifted(wall: DateTime<Utc>, offset: TimeDelta) -> DateTime<Utc> {
     wall + offset
+}
+
+/// How far ahead of the world's clock a report may be stamped and still outrank a later arrival.
+/// Clocks in step stay well inside it, and the shift moves in whole hours.
+pub const AHEAD: TimeDelta = TimeDelta::minutes(5);
+
+/// The latest time a held report may carry and still keep an older arrival out: [`now`] plus
+/// [`AHEAD`]. A report held from later than this was stamped before the clock moved back, so the
+/// next report replaces it, whatever its time.
+pub fn trusted_until() -> DateTime<Utc> {
+    now() + AHEAD
 }
 
 #[cfg(test)]

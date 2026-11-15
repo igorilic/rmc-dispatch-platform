@@ -485,6 +485,51 @@ async fn an_order_with_a_delivery_is_in_progress() {
     assert!(pending.is_empty());
 }
 
+#[tokio::test]
+async fn a_delivery_from_before_the_clock_moved_back_books_nothing() {
+    // The world batched `moved` 6 hours after its clock says now, before the clock moved back;
+    // `recent` was batched half an hour before the planning time.
+    let moved = order("BW-moved", 18.0, at(13, 0));
+    let recent = order("BW-recent", 18.0, at(7, 0));
+    let s = setup(&[moved.clone(), recent.clone()]).await;
+    let before_the_move = domain::clock::now() + TimeDelta::hours(6);
+    for (o, truck, at) in [
+        (&moved, "truck-07", before_the_move),
+        (&recent, "truck-08", at(5, 30)),
+    ] {
+        let load = LoadRef {
+            order: o.id.clone(),
+            sequence: 1,
+        };
+        let ticket = Ticket {
+            load: &load,
+            plant: &domain::PlantId("plant-walldorf".into()),
+            truck: &domain::TruckId(truck.into()),
+            volume_m3: 9.0,
+            ticket_no: "WAL-000001",
+            event: DeliveryStatus::Batching,
+            at,
+        };
+        s.store.record_ticket(&ticket).await.unwrap();
+    }
+
+    let plan: VersionedPlan = call(&s.router, "POST", "/plans").await.json();
+    let loads = |o: &Order| -> Vec<(u32, bool)> {
+        plan.plan
+            .loads
+            .iter()
+            .filter(|l| l.order == o.id)
+            .map(|l| (l.sequence, l.frozen))
+            .collect()
+    };
+    assert_eq!(
+        loads(&moved),
+        [],
+        "waits for the clock, missing rather than wrong"
+    );
+    assert_eq!(loads(&recent)[0], (1, true), "still a fact");
+}
+
 /// `child` belongs to `parent`'s trace, right under it.
 fn under(child: &SpanData, parent: &SpanData) {
     assert_eq!(

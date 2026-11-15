@@ -174,16 +174,27 @@ async fn once(
         }
         also.sort_unstable();
         also.dedup();
-        let orders = store
+        let mut orders = store
             .planning_orders(now - TimeDelta::hours(1), now + settings.horizon, &also)
             .await?;
-        let frozen: Vec<Load> = deliveries
+        let mut frozen: Vec<Load> = deliveries
             .iter()
             .filter_map(|d| {
                 let order = orders.iter().find(|o| o.id == d.order)?;
                 delivered_load(d, order, &world, &travel)
             })
             .collect();
+        // Batched later than domain::clock::trusted_until: before the world's clock moved back.
+        // Such a load books no bay or truck hours ahead, and its order waits until the clock
+        // catches up, so the plan misses it rather than planning it again from its first load.
+        let until = domain::clock::trusted_until();
+        let moved: Vec<_> = frozen
+            .iter()
+            .filter(|l| l.planned_batch_at > until)
+            .map(|l| l.order.clone())
+            .collect();
+        frozen.retain(|l| !moved.contains(&l.order));
+        orders.retain(|o| !moved.contains(&o.id));
         let span = Span::current();
         span.record("orders", orders.len());
         span.record("frozen", frozen.len());

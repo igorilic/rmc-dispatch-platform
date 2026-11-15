@@ -4,7 +4,9 @@
 //!
 //! The merge rules keep the copy right whatever arrives first:
 //! - a truck field keeps its newest value by report time, so a `/world` read while dispatch is
-//!   still behind never undoes a newer event, and an event that arrives late changes nothing;
+//!   still behind never undoes a newer event, and an event that arrives late changes nothing.
+//!   A value from before the world's clock moved back gives way to the next report
+//!   ([`domain::clock::trusted_until`]);
 //! - a truck's route shows only while the truck is en route or returning and the route is no
 //!   older than that status, so a route from an earlier drive, stale or replayed, is never drawn:
 //!   a line can be missing, never wrong;
@@ -234,10 +236,11 @@ fn plant_name(id: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Whether a report at `at` is newer than the one stored at `stored`.
+/// Whether a report at `at` replaces the one stored at `stored`: it is newer, or the stored one is
+/// from later than [`domain::clock::trusted_until`], before the world's clock moved back.
 fn newer(at: Option<DateTime<Utc>>, stored: Option<DateTime<Utc>>) -> bool {
     match (at, stored) {
-        (Some(at), Some(stored)) => at > stored,
+        (Some(at), Some(stored)) => at > stored || stored > domain::clock::trusted_until(),
         (Some(_), None) => true,
         (None, _) => false,
     }
@@ -323,7 +326,22 @@ impl State {
         }
         truck.status = status;
         truck.status_at = Some(at);
-        Some(truck.clone())
+        let view = truck.clone();
+        self.forget_route_from_before_the_move(id);
+        Some(view)
+    }
+
+    /// A drive's route goes out right after its status, so once a status is taken, a held route
+    /// stamped later than the world's now belongs to no drive since the clock moved back. It goes,
+    /// so the next drive's route is taken and nothing older stands in for it meanwhile.
+    fn forget_route_from_before_the_move(&mut self, id: &str) {
+        if self
+            .routes
+            .get(id)
+            .is_some_and(|r| r.at > domain::clock::now())
+        {
+            self.routes.remove(id);
+        }
     }
 
     /// A GPS fix, unless the stored one is newer. Returns the truck when it changed.
@@ -384,7 +402,8 @@ impl State {
     /// goes out right after the status that starts its drive, so it is never older than that
     /// status; one that is older belongs to an earlier drive, and any later status means the
     /// drive is over. So a report from an earlier drive, or a lost one, leaves no line, never a
-    /// wrong one.
+    /// wrong one. A route from later than [`domain::clock::trusted_until`] comes from before the
+    /// world's clock moved back, so it would look no older than any status since: it never shows.
     fn shows(&self, id: &str) -> Option<&Route> {
         let truck = self.trucks.get(id)?;
         let route = self.routes.get(id)?;
@@ -392,7 +411,8 @@ impl State {
         (driving
             && truck
                 .status_at
-                .is_some_and(|status_at| route.at >= status_at))
+                .is_some_and(|status_at| route.at >= status_at)
+            && route.at <= domain::clock::trusted_until())
         .then_some(route)
     }
 
@@ -430,7 +450,8 @@ impl State {
                 continue;
             };
             let before = truck.clone();
-            if newer(reported.status_at, truck.status_at) {
+            let status_taken = newer(reported.status_at, truck.status_at);
+            if status_taken {
                 truck.status = reported.status;
                 truck.status_at = reported.status_at;
             }
@@ -440,6 +461,9 @@ impl State {
             }
             if *truck != before {
                 trucks.push(truck.clone());
+            }
+            if status_taken {
+                self.forget_route_from_before_the_move(&reported.id);
             }
         }
         (plants, trucks)
@@ -595,6 +619,105 @@ mod tests {
         assert_eq!(changed.len(), 1);
         assert_eq!(changed[0].status, TruckStatus::EnRoute);
         assert_eq!(changed[0].position_at, Some(at(3)));
+    }
+
+    #[test]
+    fn a_report_from_before_the_clock_moved_back_gives_way() {
+        // Held from before CLOCK_OFFSET_HOURS moved the world's clock 6 hours back.
+        let now = domain::clock::now();
+        let earlier_world = now + TimeDelta::hours(6);
+        let here = Location {
+            lat: 49.4,
+            lon: 8.6,
+        };
+        let ticket = |at| Ticket {
+            ticket_no: "WAL-000001".into(),
+            truck: "truck-18".into(),
+            event: DeliveryStatus::Batching,
+            volume_m3: 8.0,
+            order: None,
+            load: None,
+            at,
+        };
+        let mut s = state();
+        s.world(&world(WorldTruck {
+            id: "truck-07".into(),
+            status: TruckStatus::Returning,
+            status_at: Some(earlier_world),
+            position: Some(here),
+            position_at: Some(earlier_world),
+        }));
+        s.truck_route("truck-07", road(), earlier_world);
+        s.ticket("plant-walldorf", ticket(earlier_world));
+
+        s.truck_route("truck-07", road(), now);
+        assert_eq!(s.routes["truck-07"].at, now);
+        assert!(
+            s.truck_status("truck-07", TruckStatus::Available, now)
+                .is_some()
+        );
+        assert!(s.truck_position("truck-07", here, now).is_some());
+        assert!(s.ticket("plant-walldorf", ticket(now)).is_some());
+
+        let mut s = state();
+        s.truck_status("truck-07", TruckStatus::EnRoute, earlier_world);
+        let (_, changed) = s.world(&world(WorldTruck {
+            id: "truck-07".into(),
+            status: TruckStatus::Loading,
+            status_at: Some(now),
+            position: None,
+            position_at: None,
+        }));
+        assert_eq!(changed[0].status, TruckStatus::Loading, "/world too");
+
+        // A route from before the move is never drawn, not even for the next drive before that
+        // drive's own route comes.
+        let mut s = state();
+        s.truck_status("truck-07", TruckStatus::EnRoute, earlier_world);
+        s.truck_route("truck-07", road(), earlier_world);
+        s.truck_status("truck-07", TruckStatus::EnRoute, now);
+        s.route_shown("truck-07");
+        assert_eq!(snapshot(&s).routes, BTreeMap::new());
+
+        // Within 5 minutes of the time a route from before the move carries, it is trusted again;
+        // still, the next drive never shows it, and that drive's own route is taken. The same
+        // when the status comes by /world.
+        let other: Vec<Location> = road().into_iter().rev().collect();
+        for by_world in [false, true] {
+            let mut s = state();
+            s.truck_route("truck-07", road(), now + TimeDelta::minutes(3));
+            if by_world {
+                s.world(&world(WorldTruck {
+                    id: "truck-07".into(),
+                    status: TruckStatus::EnRoute,
+                    status_at: Some(now),
+                    position: None,
+                    position_at: None,
+                }));
+            } else {
+                s.truck_status("truck-07", TruckStatus::EnRoute, now);
+            }
+            assert_eq!(
+                snapshot(&s).routes,
+                BTreeMap::new(),
+                "by /world: {by_world}"
+            );
+            s.truck_route("truck-07", other.clone(), now);
+            assert_eq!(
+                snapshot(&s).routes,
+                BTreeMap::from([("truck-07".to_owned(), other.clone())]),
+                "by /world: {by_world}"
+            );
+        }
+
+        // A clock a minute fast still orders reports.
+        let mut s = state();
+        let fast = now + TimeDelta::minutes(1);
+        s.truck_status("truck-07", TruckStatus::OutOfService, fast);
+        assert!(
+            s.truck_status("truck-07", TruckStatus::Available, now)
+                .is_none()
+        );
     }
 
     fn road() -> Vec<Location> {

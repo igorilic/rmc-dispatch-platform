@@ -1327,16 +1327,14 @@ function setUplink(next) {
   else if (!wasCut || !cutTotal) cutTotal = cutLeft();
 }
 
-const newer = (time, held) => !!time && (!held || at(time) > at(held));
-
-/** A truck event: each field keeps its newest report. */
+/**
+ * A truck event: the console's view of the truck, taken as sent. The console keeps each field's
+ * newest report and sends its changes in order after the snapshot, so the page has no rule of its
+ * own: one would hold the trucks still after the world's clock moved back.
+ */
 function truckEvent(view) {
   const t = trucks.get(view.id);
-  if (!t) return;
-  const next = { ...t.view };
-  if (newer(view.status_at, next.status_at)) Object.assign(next, { status: view.status, status_at: view.status_at });
-  if (newer(view.position_at, next.position_at)) Object.assign(next, { position: view.position, position_at: view.position_at });
-  setTruck(t, next);
+  if (t) setTruck(t, view);
 }
 
 /** A truck's road: drawn, replaced, or taken away when its path is null. */

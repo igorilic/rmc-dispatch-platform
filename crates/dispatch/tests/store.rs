@@ -277,6 +277,74 @@ async fn truck_reports_keep_the_newest_and_reach_the_planner() {
 }
 
 #[tokio::test]
+async fn a_report_from_before_the_clock_moved_back_gives_way() {
+    // Stored from before CLOCK_OFFSET_HOURS moved the world's clock 6 hours back.
+    let (_pg, store) = seeded().await;
+    let now = domain::clock::now();
+    let earlier_world = now + TimeDelta::hours(6);
+    let truck = TruckId("truck-07".into());
+    let here = Location {
+        lat: 49.41,
+        lon: 8.69,
+    };
+    store
+        .report_truck_status(&truck, TruckStatus::OutOfService, earlier_world)
+        .await
+        .unwrap();
+    store
+        .report_truck_position(&truck, here, earlier_world)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .report_truck_status(&truck, TruckStatus::Available, now)
+            .await
+            .unwrap(),
+        Some(TruckStatus::OutOfService)
+    );
+    assert!(
+        store
+            .report_truck_position(&truck, here, now)
+            .await
+            .unwrap()
+    );
+
+    let changed = order("BW-1", 42.5, at(9, 0));
+    store
+        .upsert_order(&changed, earlier_world, None)
+        .await
+        .unwrap();
+    let bigger = domain::Order {
+        total_volume_m3: 50.0,
+        ..changed.clone()
+    };
+    assert_eq!(
+        store.upsert_order(&bigger, now, Some("2")).await.unwrap(),
+        Upsert::Changed(changed)
+    );
+    let cancelled = order("BW-2", 10.0, at(9, 0));
+    store
+        .upsert_order(&cancelled, earlier_world, None)
+        .await
+        .unwrap();
+    assert!(store.cancel_order(&cancelled.id.0, now).await.unwrap());
+
+    // A clock a minute fast still orders reports.
+    let fast = now + TimeDelta::minutes(1);
+    store
+        .report_truck_status(&truck, TruckStatus::OutOfService, fast)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .report_truck_status(&truck, TruckStatus::Available, now)
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
 async fn tickets_make_deliveries_whose_orders_are_always_planned() {
     let (_pg, store) = seeded().await;
     let o = order("BW-1", 18.0, at(9, 0));

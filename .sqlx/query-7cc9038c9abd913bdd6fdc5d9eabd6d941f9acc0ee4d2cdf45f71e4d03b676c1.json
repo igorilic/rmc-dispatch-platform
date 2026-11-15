@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE orders SET status = 'cancelled', occurred_at = $2\n             WHERE id = $1 AND (occurred_at <= $2 OR occurred_at > $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7cc9038c9abd913bdd6fdc5d9eabd6d941f9acc0ee4d2cdf45f71e4d03b676c1"
+}

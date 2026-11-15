@@ -12,6 +12,8 @@
 //! - A load more than [`GRACE`] overdue is left to dispatch. That only happens after the agent
 //!   itself was down: while the cloud link is down, the agent keeps batching on time.
 //! - At startup, loads cut short by a restart finish first, with their tickets' original times.
+//!   If the restart moved the world's clock back (`CLOCK_OFFSET_HOURS`), those times are hours
+//!   ahead, where dispatch holds the load: its tickets go out at once instead of holding the bay.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -136,12 +138,17 @@ async fn finish(
     _bay: OwnedSemaphorePermit,
     mut started: Started,
 ) -> Result<(), StoreError> {
+    // Started before the world's clock moved back: its tickets are due hours from now, where
+    // dispatch holds the load. Waiting would hold the bay that long, so they go out at once.
+    let moved = started.started_at > agent.clock.now() + domain::clock::AHEAD;
     for stage in [DeliveryStatus::Loading, DeliveryStatus::Loaded] {
         if stage <= started.stage {
             continue;
         }
-        let due = started.started_at + offset(&agent.plant, started.volume_m3, stage);
-        sleep((due - agent.clock.now()).to_std().unwrap_or_default()).await;
+        if !moved {
+            let due = started.started_at + offset(&agent.plant, started.volume_m3, stage);
+            sleep((due - agent.clock.now()).to_std().unwrap_or_default()).await;
+        }
         started.stage = stage;
         issue(&agent, &started)?;
     }
@@ -369,6 +376,36 @@ mod tests {
         let computer = tokio::spawn(run(Arc::clone(&second)));
         sleep(Duration::from_secs(20 * 60)).await;
         assert_eq!(of(&drain(&second), "a"), lifecycle(1.0)[1..]);
+        computer.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_load_resumed_after_the_clock_moved_back_finishes_at_once() {
+        let file = TempFile::new("moved-back");
+        let first = agent(&file, Clock::start(t0()));
+        first
+            .plan
+            .send_replace(plan(1, vec![load("a", minutes(1.0))]));
+        let computer = tokio::spawn(run(Arc::clone(&first)));
+        sleep(Duration::from_secs(2 * 60)).await;
+        computer.abort();
+        let _ = computer.await;
+        assert_eq!(of(&drain(&first), "a"), lifecycle(1.0)[..1]);
+
+        // The restart moved the world's clock 6 hours back. The load's tickets keep their times,
+        // where dispatch holds it, and go out at once instead of holding the bay for 6 hours:
+        // both bays take new loads right away.
+        let back = first.clock.now() - TimeDelta::hours(6);
+        let second = agent(&file, Clock::start(back));
+        second
+            .plan
+            .send_replace(plan(2, vec![load("b", back), load("c", back)]));
+        let computer = tokio::spawn(run(Arc::clone(&second)));
+        sleep(Duration::from_secs(1)).await;
+        let tickets = drain(&second);
+        assert_eq!(of(&tickets, "a"), lifecycle(1.0)[1..]);
+        assert_eq!(of(&tickets, "b"), [(DeliveryStatus::Batching, back)]);
+        assert_eq!(of(&tickets, "c"), [(DeliveryStatus::Batching, back)]);
         computer.abort();
     }
 

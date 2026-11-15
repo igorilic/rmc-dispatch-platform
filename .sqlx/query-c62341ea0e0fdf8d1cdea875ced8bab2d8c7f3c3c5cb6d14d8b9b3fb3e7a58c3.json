@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE trucks SET lat = $2, lon = $3, position_at = $4\n             WHERE id = $1 AND (position_at IS NULL OR position_at < $4 OR position_at > $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Float8",
+        "Float8",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c62341ea0e0fdf8d1cdea875ced8bab2d8c7f3c3c5cb6d14d8b9b3fb3e7a58c3"
+}
