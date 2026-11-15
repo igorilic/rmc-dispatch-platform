@@ -1,7 +1,8 @@
 //! The telematics vendor's MQTT payloads → canonical events.
 //!
 //! There is one vendor with one fixed format, so this is plain Rust. YAML mappings are for
-//! customer integrations, whose formats vary.
+//! customer integrations, whose formats vary. A truck sends `gps`, `drum` and `status`, and once
+//! per drive its `route`: at least two `[lat, lon]` points, each a coordinate.
 //!
 //! Message ids: trucks use `{truck}:{seq}:{ts_ms}` and tickets `{ticket}:{event}:{ts_ms}`. A
 //! duplicate is the same message sent twice, so it has the same id. Adding the timestamp keeps a
@@ -38,6 +39,34 @@ struct Drum {
 #[derive(Deserialize)]
 struct Status {
     status: TruckStatus,
+}
+
+/// The road a truck is about to drive, sent once per drive.
+#[derive(Deserialize)]
+struct Route {
+    /// `[lat, lon]` pairs.
+    path: Vec<[f64; 2]>,
+}
+
+/// A route's points: at least two, and every one a coordinate.
+fn route_path(pairs: Vec<[f64; 2]>) -> Result<Vec<Location>, Vec<String>> {
+    let mut errors = Vec::new();
+    if pairs.len() < 2 {
+        errors.push("a route needs at least two points".to_owned());
+    }
+    for (i, [lat, lon]) in pairs.iter().enumerate() {
+        if !(-90.0..=90.0).contains(lat) || !(-180.0..=180.0).contains(lon) {
+            errors.push(format!("route point {i} is not a coordinate: {lat}, {lon}"));
+        }
+    }
+    if errors.is_empty() {
+        Ok(pairs
+            .into_iter()
+            .map(|[lat, lon]| Location { lat, lon })
+            .collect())
+    } else {
+        Err(errors)
+    }
 }
 
 #[derive(Deserialize)]
@@ -81,7 +110,11 @@ pub fn map(
         reference: topic.into(),
     };
     match parts.as_slice() {
-        ["trucks", truck, kind @ ("gps" | "drum" | "status")] => {
+        [
+            "trucks",
+            truck,
+            kind @ ("gps" | "drum" | "status" | "route"),
+        ] => {
             let header: Header = parse(payload)?;
             let mut errors = Vec::new();
             if header.vehicle != *truck {
@@ -116,6 +149,10 @@ pub fn map(
                         rpm: drum.rpm,
                     }
                 }
+                "route" => Event::TruckRouteReported {
+                    truck,
+                    path: route_path(parse::<Route>(payload)?.path)?,
+                },
                 _ => Event::TruckStatusReported {
                     truck,
                     status: parse::<Status>(payload)?.status,
@@ -273,6 +310,39 @@ mod tests {
     }
 
     #[test]
+    fn routes_become_route_events() {
+        let route = event(
+            "trucks/truck-07/route",
+            json!({"vehicle": "truck-07", "seq": 623, "ts_ms": 1794236511059_i64,
+                   "path": [[49.4875, 8.466], [49.48701, 8.46554], [49.5512, 8.6589]]}),
+        )
+        .unwrap();
+        assert_eq!(route.id, "truck-07:623:1794236511059");
+        assert_eq!(route.occurred_at.timestamp_millis(), 1794236511059);
+        assert_eq!(route.subject(), "events.trucks.truck-07.route");
+        assert_eq!(route.source.reference, "trucks/truck-07/route");
+        let at = |lat, lon| Location { lat, lon };
+        assert_eq!(
+            route.event,
+            Event::TruckRouteReported {
+                truck: TruckId("truck-07".into()),
+                path: vec![
+                    at(49.4875, 8.466),
+                    at(49.48701, 8.46554),
+                    at(49.5512, 8.6589)
+                ]
+            }
+        );
+
+        // A truck that breaks down at its plant drives nowhere: its road is the plant, twice.
+        let standing = event(
+            "trucks/truck-07/route",
+            json!({"vehicle": "truck-07", "seq": 624, "ts_ms": 1, "path": [[49.4875, 8.466], [49.4875, 8.466]]}),
+        );
+        assert!(standing.is_ok(), "{standing:?}");
+    }
+
+    #[test]
     fn tickets_become_batch_ticket_events() {
         let ticket = event(
             "plants/plant-walldorf/tickets",
@@ -383,6 +453,23 @@ mod tests {
                 "a ticket can only be batching, loading or loaded, not unloaded",
                 "unknown mix C99/99"
             ]
+        );
+
+        let one_point = event(
+            "trucks/truck-07/route",
+            json!({"vehicle": "truck-07", "seq": 1, "ts_ms": 1, "path": [[49.4875, 8.466]]}),
+        );
+        assert_eq!(
+            one_point.unwrap_err(),
+            ["a route needs at least two points"]
+        );
+        let off_the_globe = event(
+            "trucks/truck-07/route",
+            json!({"vehicle": "truck-07", "seq": 1, "ts_ms": 1, "path": [[49.4875, 8.466], [94.0, 8.5]]}),
+        );
+        assert_eq!(
+            off_the_globe.unwrap_err(),
+            ["route point 1 is not a coordinate: 94, 8.5"]
         );
 
         let unknown_topic = event("trucks/truck-07/horn", json!({}));
