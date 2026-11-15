@@ -43,12 +43,14 @@ const JS: &str = include_str!("../web/app.js");
 
 /// What the page may load: its own files, Leaflet from unpkg and Stadia's tiles. With no inline
 /// script or style allowed, an order reference that reached the markup still couldn't run.
+/// connect-src names Leaflet's source map, exactly, because the browser's developer tools fetch
+/// it under this policy and would log the block as an error.
 const POLICY: &str = "default-src 'self'; \
     script-src 'self' https://unpkg.com/leaflet@1.9.4/; \
     style-src 'self' https://unpkg.com/leaflet@1.9.4/; \
     img-src 'self' data: https://tiles.stadiamaps.com; \
-    connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; \
-    frame-ancestors 'none'";
+    connect-src 'self' https://unpkg.com/leaflet@1.9.4/dist/leaflet.js.map; object-src 'none'; \
+    base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 pub fn router(console: Arc<Console>) -> Router {
     let hosts = Arc::new(allowed_hosts(&console.settings.public_url));
@@ -420,7 +422,7 @@ mod tests {
             "script-src 'self' https://unpkg.com/leaflet@1.9.4/",
             "style-src 'self' https://unpkg.com/leaflet@1.9.4/",
             "img-src 'self' data: https://tiles.stadiamaps.com",
-            "connect-src 'self'",
+            "connect-src 'self' https://unpkg.com/leaflet@1.9.4/dist/leaflet.js.map",
             "object-src 'none'",
             "base-uri 'none'",
             "form-action 'none'",
