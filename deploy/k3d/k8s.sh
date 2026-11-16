@@ -69,6 +69,15 @@ done
 # Helm installs crds/ once and never upgrades it, so this script owns the CRD: it applies it first,
 # server-side, and Helm skips it. A plain `helm install` of the chart still installs it.
 kubectl --context k3d-cloud apply --server-side --force-conflicts -f deploy/helm/pourline/crds/
+# Dispatch and the simulators rolled out with RollingUpdate before they were Recreate. Helm applies
+# server-side, which keeps the rollingUpdate settings Kubernetes filled in for them, and Recreate
+# forbids those, so they go first. Changing only the strategy rolls nothing out.
+for deployment in dispatch simulators; do
+  if kubectl --context k3d-cloud -n pourline get deployment "$deployment" >/dev/null 2>&1; then
+    kubectl --context k3d-cloud -n pourline patch deployment "$deployment" --type merge \
+      -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}' >/dev/null
+  fi
+done
 helm upgrade --install pourline deploy/helm/pourline --skip-crds --kube-context k3d-cloud \
   --namespace pourline --create-namespace --wait --timeout 5m \
   "${images[@]}" --set simulators.agentPlants=plant-walldorf --set "edge.plantAddress=$plant_ip" \

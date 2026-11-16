@@ -59,8 +59,10 @@ fn shifted(wall: DateTime<Utc>, offset: TimeDelta) -> DateTime<Utc> {
 pub const AHEAD: TimeDelta = TimeDelta::minutes(5);
 
 /// The latest time a held report may carry and still keep an older arrival out: [`now`] plus
-/// [`AHEAD`]. A report held from later than this was stamped before the clock moved back, so the
-/// next report replaces it, whatever its time.
+/// [`AHEAD`]. A truck report or order revision held from later than this was stamped before the
+/// clock moved back, so the next one replaces it, whatever its time. A plant may stamp a batch
+/// ahead, on schedule, as the demo does: dispatch judges a delivery by when it recorded it, and the
+/// console ranks such a ticket below any report since.
 pub fn trusted_until() -> DateTime<Utc> {
     now() + AHEAD
 }

@@ -6,6 +6,10 @@
 #
 # Every pod has enableServiceLinks off: Kubernetes would otherwise set variables such as
 # SFTP_PORT=tcp://10.43.0.12:2222 for each Service, which clash with the services' own settings.
+#
+# Dispatch and the simulators are replaced rather than rolled. A run of make k8s can move the
+# world's clock (clockOffsetHours), and a pod still on the old clock must not report into, or
+# judge, the world of the new one: dispatch's old pod would drop the new reports as stale.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -38,6 +42,7 @@ kind: Deployment
 metadata:
   name: dispatch
 spec:
+  strategy: { type: Recreate }
   selector: { matchLabels: { app: dispatch } }
   template:
     metadata: { labels: { app: dispatch } }
@@ -70,6 +75,7 @@ kind: Deployment
 metadata:
   name: simulators
 spec:
+  strategy: { type: Recreate }
   selector: { matchLabels: { app: simulators } }
   template:
     metadata: { labels: { app: simulators } }

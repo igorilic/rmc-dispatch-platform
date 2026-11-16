@@ -184,15 +184,11 @@ async fn once(
                 delivered_load(d, order, &world, &travel)
             })
             .collect();
-        // Batched later than domain::clock::trusted_until: before the world's clock moved back.
-        // Such a load books no bay or truck hours ahead, and its order waits until the clock
-        // catches up, so the plan misses it rather than planning it again from its first load.
-        let until = domain::clock::trusted_until();
-        let moved: Vec<_> = frozen
-            .iter()
-            .filter(|l| l.planned_batch_at > until)
-            .map(|l| l.order.clone())
-            .collect();
+        // A delivery recorded before the world's clock moved back books no bay or truck hours
+        // ahead, and its order waits until the clock catches up, so the plan misses it rather than
+        // planning it again from its first load. One recorded since is a fact, however far ahead
+        // its plant reported it: the demo's batches on schedule, the next morning's at night.
+        let moved = store.orders_recorded_before_the_move().await?;
         frozen.retain(|l| !moved.contains(&l.order));
         orders.retain(|o| !moved.contains(&o.id));
         let span = Span::current();

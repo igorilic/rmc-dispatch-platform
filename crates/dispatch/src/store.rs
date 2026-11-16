@@ -90,6 +90,8 @@ pub struct Ticket<'a> {
     pub ticket_no: &'a str,
     pub event: DeliveryStatus,
     pub at: DateTime<Utc>,
+    /// When dispatch received it, on the world's clock. A delivery keeps its first ticket's.
+    pub recorded_at: DateTime<Utc>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -593,11 +595,12 @@ impl Store {
     }
 
     /// Creates or advances the delivery for a ticket's load. The first report of each status
-    /// wins, so duplicates and late arrivals change nothing. Returns whether the delivery is new.
+    /// wins, so duplicates and late arrivals change nothing, and the delivery keeps the time its
+    /// first ticket was recorded. Returns whether the delivery is new.
     pub async fn record_ticket(&self, t: &Ticket<'_>) -> Result<bool, StoreError> {
         let inserted = sqlx::query_scalar!(
-            r#"INSERT INTO deliveries (order_id, sequence, plant_id, truck_id, volume_m3, ticket_no, started_at, events)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, jsonb_build_object($8::text, $7::timestamptz))
+            r#"INSERT INTO deliveries (order_id, sequence, plant_id, truck_id, volume_m3, ticket_no, started_at, events, recorded_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, jsonb_build_object($8::text, $7::timestamptz), $9)
                ON CONFLICT (order_id, sequence) DO UPDATE SET
                    started_at = LEAST(deliveries.started_at, EXCLUDED.started_at),
                    events = EXCLUDED.events || deliveries.events
@@ -610,10 +613,23 @@ impl Store {
             t.ticket_no,
             t.at,
             text(&t.event),
+            t.recorded_at,
         )
         .fetch_one(&self.pool)
         .await?;
         Ok(inserted)
+    }
+
+    /// Orders with a delivery recorded later than [`domain::clock::trusted_until`], so before the
+    /// world's clock moved back, whatever time its tickets carry.
+    pub async fn orders_recorded_before_the_move(&self) -> Result<Vec<OrderId>, StoreError> {
+        let ids = sqlx::query_scalar!(
+            "SELECT DISTINCT order_id FROM deliveries WHERE recorded_at > $1",
+            domain::clock::trusted_until(),
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(ids.into_iter().map(OrderId).collect())
     }
 
     /// Deliveries whose batching started at or after `since`.

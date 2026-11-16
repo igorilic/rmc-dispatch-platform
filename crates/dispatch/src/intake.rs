@@ -211,6 +211,7 @@ async fn apply(store: &Store, payload: &[u8]) -> Result<Option<Trigger>, IntakeE
                 ticket_no: &ticket_no,
                 event,
                 at,
+                recorded_at: domain::clock::now(),
             };
             if store.record_ticket(&ticket).await? {
                 info!(order = %load.order.0, sequence = load.sequence, %ticket_no, "batching started, load frozen");

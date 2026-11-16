@@ -400,9 +400,15 @@ deliveries, up to `loaded`. Nothing reports the later stages per delivery yet, s
   never overtakes the order it cancels. The plant-agent sends one ticket at a time, oldest first.
   Dispatch and the console keep the newest report or revision by its time, except one stamped more
   than 5 minutes ahead of the world's clock: only a run that moved `CLOCK_OFFSET_HOURS` back
-  leaves those, so the next report replaces it instead of waiting for the clock to catch up. For
-  the same reason dispatch leaves an order batched that far ahead out of the plan until the clock
-  catches up, and the plant-agent finishes such a load at once instead of holding its bay.
+  leaves truck reports and order revisions that far ahead, so the next report replaces it instead
+  of waiting for the clock to catch up. The console also never lets such a report replace one
+  from since, however a `/world` read races. For the same reason dispatch leaves an order out of
+  the plan until the clock catches up if it recorded one of its deliveries before the move, the
+  plant-agent finishes a load started before the move at once instead of holding its bay, and
+  dispatch and the simulators are replaced rather than rolled, so no pod on the old clock judges
+  the new one's reports. A plant may report a batch ahead, as the demo's does on schedule:
+  dispatch freezes its load all the same, and the console ranks its ticket as one from before a
+  move.
 - **Failure.** NATS calls retry with exponential backoff (0.1 s doubling, 6 attempts). An event that
   can never apply is logged and acknowledged, so it doesn't block the ones behind it.
 - **Telemetry.** One trace per delivery, from ingest through NATS into the re-dispatch, and one per

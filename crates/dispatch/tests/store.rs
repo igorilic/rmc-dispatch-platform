@@ -362,6 +362,7 @@ async fn tickets_make_deliveries_whose_orders_are_always_planned() {
         ticket_no: "WAL-000001",
         event,
         at,
+        recorded_at: domain::clock::now(),
     };
     assert!(
         store
@@ -395,6 +396,32 @@ async fn tickets_make_deliveries_whose_orders_are_always_planned() {
         .into()
     );
     assert!(store.deliveries(at(9, 0)).await.unwrap().is_empty());
+
+    // Recorded before the world's clock moved back 6 hours: the delivery keeps that time, so a
+    // ticket recorded since doesn't make it one of the new clock's.
+    assert_eq!(store.orders_recorded_before_the_move().await.unwrap(), []);
+    let moved = order("BW-2", 18.0, at(9, 0));
+    store.upsert_order(&moved, at(5, 0), None).await.unwrap();
+    let moved_load = LoadRef {
+        order: moved.id.clone(),
+        sequence: 1,
+    };
+    let before_the_move = domain::clock::now() + TimeDelta::hours(6);
+    for (event, recorded_at) in [
+        (DeliveryStatus::Batching, before_the_move),
+        (DeliveryStatus::Loading, domain::clock::now()),
+    ] {
+        let t = Ticket {
+            load: &moved_load,
+            recorded_at,
+            ..ticket(event, before_the_move)
+        };
+        store.record_ticket(&t).await.unwrap();
+    }
+    assert_eq!(
+        store.orders_recorded_before_the_move().await.unwrap(),
+        std::slice::from_ref(&moved.id)
+    );
 
     // Outside the planning window, an order with a delivery is still listed when asked for.
     let late = at(12, 0);

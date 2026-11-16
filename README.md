@@ -568,10 +568,11 @@ Like `make demo`, `make k8s` shifts the world's clock when it's outside the plan
 upgrades both releases, so every service whose image changed rolls out. The infrastructure keeps
 its data, so a run after 16:00 can move the world's clock back behind what is stored. What is
 stored more than 5 minutes ahead of the clock then gives way: the next report replaces a truck's
-report or an order, an order batched before the move stays out of the plan until the clock catches
-up, and a load the plant-agent was batching finishes at once. So the world carries on within
-minutes instead of waiting hours. `SKIP_BUILD=1 make k8s` reuses the images built last, for a
-change to the charts only.
+report or an order, an order with a delivery recorded before the move stays out of the plan until
+the clock catches up, and a load the plant-agent was batching finishes at once. Dispatch and the
+simulators are replaced rather than rolled, so no pod on the old clock judges the new one's
+reports. So the world carries on within minutes instead of waiting hours. `SKIP_BUILD=1 make k8s`
+reuses the images built last, for a change to the charts only.
 Clusters created before milestone 8 hold plain manifests that Helm won't take over: `make k8s`
 says so, and one `make down` fixes it.
 
@@ -799,14 +800,14 @@ The console starts from the seed's master data, follows NATS, and reads dispatch
 each truck's status and position with their report times, each plant's status and the latest plan
 version. It reads `/world` again after each plan update and after a NATS reconnect, which catches a
 version that core NATS dropped. Each truck field keeps its newest value by report time, whichever
-way it came, unless the value held is from before the world's clock moved back (see
-[Kubernetes](#kubernetes)). The console also keeps each truck's latest route, which `/world` doesn't carry, and
-gives a page the route only while the truck is en route or returning and the route is no older
-than that status, so a route from an earlier drive is never drawn. Routes have subjects of their
-own, so a restarted console reads every truck's latest route back from the stream. A page gets a
-snapshot, then every change, and a heartbeat with the world time every 15 s; ages and fading go by
-that clock. A page that falls behind, or hears nothing for 45 s, reconnects for a new snapshot,
-and a hidden tab lets go of its stream.
+way it came. A value from before the world's clock moved back gives way to any report since, and
+never replaces one (see [Kubernetes](#kubernetes)). The console also keeps each truck's latest
+route, which `/world` doesn't carry, and gives a page the route only while the truck is en route or
+returning and the route is no older than that status, so a route from an earlier drive is never
+drawn. Routes have subjects of their own, so a restarted console reads every truck's latest route
+back from the stream. A page gets a snapshot, then every change, and a heartbeat with the world
+time every 15 s; ages and fading go by that clock. A page that falls behind, or hears nothing for
+45 s, reconnects for a new snapshot, and a hidden tab lets go of its stream.
 
 There is no login: from outside the cluster, the console is reachable only on `127.0.0.1:8080`.
 Every `POST`, `PUT` and `DELETE` needs the `X-Pourline-Console` header and a `Host` from

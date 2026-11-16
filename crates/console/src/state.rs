@@ -5,12 +5,12 @@
 //! The merge rules keep the copy right whatever arrives first:
 //! - a truck field keeps its newest value by report time, so a `/world` read while dispatch is
 //!   still behind never undoes a newer event, and an event that arrives late changes nothing.
-//!   A value from before the world's clock moved back gives way to the next report
-//!   ([`domain::clock::trusted_until`]);
+//!   A value from before the world's clock moved back gives way to any report since, and never
+//!   replaces one ([`domain::clock::trusted_until`]);
 //! - a truck's route shows only while the truck is en route or returning and the route is no
 //!   older than that status, so a route from an earlier drive, stale or replayed, is never drawn:
 //!   a line can be missing, never wrong;
-//! - a plant keeps its newest ticket;
+//! - a plant keeps its newest ticket, by the same rule;
 //! - plan versions only move forward, so a version announced twice is pushed once.
 
 use std::collections::{BTreeMap, VecDeque};
@@ -236,11 +236,16 @@ fn plant_name(id: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Whether a report at `at` replaces the one stored at `stored`: it is newer, or the stored one is
-/// from later than [`domain::clock::trusted_until`], before the world's clock moved back.
+/// Whether a report at `at` replaces the one stored at `stored`. A time no later than
+/// [`domain::clock::trusted_until`] outranks a later one, which comes from before the world's clock
+/// moved back, or is a batch the demo's plant reports on schedule; between two of a kind, the newer
+/// wins. So a report from before the move gives way to any report since, and never takes one's
+/// place, however a `/world` read or a late event races.
 fn newer(at: Option<DateTime<Utc>>, stored: Option<DateTime<Utc>>) -> bool {
+    let trusted_until = domain::clock::trusted_until();
+    let rank = |time: DateTime<Utc>| (time <= trusted_until, time);
     match (at, stored) {
-        (Some(at), Some(stored)) => at > stored || stored > domain::clock::trusted_until(),
+        (Some(at), Some(stored)) => rank(at) > rank(stored),
         (Some(_), None) => true,
         (None, _) => false,
     }
@@ -619,6 +624,46 @@ mod tests {
         assert_eq!(changed.len(), 1);
         assert_eq!(changed[0].status, TruckStatus::EnRoute);
         assert_eq!(changed[0].position_at, Some(at(3)));
+    }
+
+    #[test]
+    fn a_report_from_before_the_clock_moved_back_never_replaces_one_since() {
+        // After the console has a report from the new clock, dispatch's /world or a late event
+        // can still carry the old world's later-looking time.
+        let now = domain::clock::now();
+        let earlier_world = now + TimeDelta::hours(12);
+        let here = Location {
+            lat: 49.4,
+            lon: 8.6,
+        };
+        let mut s = state();
+        s.truck_status("truck-20", TruckStatus::Available, now);
+        s.truck_position("truck-20", here, now);
+        let (_, changed) = s.world(&world(WorldTruck {
+            id: "truck-20".into(),
+            status: TruckStatus::Returning,
+            status_at: Some(earlier_world),
+            position: Some(Location {
+                lat: 49.3,
+                lon: 8.7,
+            }),
+            position_at: Some(earlier_world),
+        }));
+        assert_eq!(changed, []);
+        assert!(
+            s.truck_status("truck-20", TruckStatus::Returning, earlier_world)
+                .is_none()
+        );
+        assert_eq!(s.trucks["truck-20"].status, TruckStatus::Available);
+
+        // Between two reports from before the move, the later one still wins.
+        let mut s = state();
+        s.truck_status("truck-20", TruckStatus::EnRoute, earlier_world);
+        let later = earlier_world + TimeDelta::minutes(1);
+        assert!(
+            s.truck_status("truck-20", TruckStatus::Returning, later)
+                .is_some()
+        );
     }
 
     #[test]
