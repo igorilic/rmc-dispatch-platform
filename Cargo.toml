@@ -12,7 +12,7 @@ license = "MIT"
 # Always the latest stable releases; Dependabot proposes bumps, `make audit` checks RustSec.
 [workspace.dependencies]
 anyhow = "1.0.104"
-async-nats = "0.52.0"
+async-nats = "0.53.0"
 axum = "0.8.9"
 chrono = { version = "0.4.45", features = ["serde"] }
 chrono-tz = "0.10.4"
